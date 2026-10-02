@@ -1,9 +1,11 @@
 import type { Db } from "../db/index.js";
 import { AppError, NotFoundError } from "../lib/errors.js";
 import { seoulDate, seoulDateOf, seoulIso } from "../lib/time.js";
-import type { TextGenerator } from "../llm/generator.js";
+import type { GenerateRequest, TextGenerator } from "../llm/generator.js";
 import { renderTemplate, type PromptName, type PromptStore } from "../llm/prompts.js";
 import type { AnalysisSnapshot, DataCollector } from "./collector.js";
+import { verifyReport, type ReportVerification } from "./reportVerification.js";
+import { ReportTiming, type ReportLog } from "./reportTiming.js";
 
 export type AnalysisKind = "company" | "value" | "technical";
 
@@ -29,6 +31,7 @@ export interface Analysis {
   model: string;
   createdAt: string;
   cached: boolean;
+  verification?: ReportVerification;
 }
 
 export interface AnalysisRequestState {
@@ -52,6 +55,7 @@ export interface AnalysisServiceDeps {
   /** 등록 종목·종목 마스터에 없을 때 이름·시장 찾기 (StockService.preview: 외부 검색으로 대신 찾는다 — 신규 상장 등). 모르면 null */
   lookup?: (code: string) => Promise<{ code: string; name: string; market: string } | null>;
   now?: () => Date;
+  log?: ReportLog;
 }
 
 /** 종목 상세 탭(회사 소개 / 가치투자 / 기술적 분석) 생성 + 캐시 */
@@ -110,45 +114,57 @@ export class AnalysisService {
   }
 
   private async generate(code: string, kind: AnalysisKind): Promise<Analysis> {
-    const stock =
-      (await this.deps.db.selectFrom("registered_stocks").select(["code", "name", "market"]).where("code", "=", code).executeTakeFirst()) ??
-      (await this.deps.db.selectFrom("listed_stocks").select(["code", "name", "market"]).where("code", "=", code).executeTakeFirst()) ??
-      // 마스터를 받은 뒤 상장한 종목도 상세 화면·뉴스 탭처럼 찾는다 (코드가 정확히 같은 종목만)
-      (await this.lookup(code));
-    if (!stock) throw new NotFoundError(`종목 ${code} 을 찾을 수 없습니다`);
+    const timing = new ReportTiming({ report: "분석", kind }, this.deps.log);
+    let success = false;
+    try {
+      const stock =
+        (await this.deps.db.selectFrom("registered_stocks").select(["code", "name", "market"]).where("code", "=", code).executeTakeFirst()) ??
+        (await this.deps.db.selectFrom("listed_stocks").select(["code", "name", "market"]).where("code", "=", code).executeTakeFirst()) ??
+        // 마스터를 받은 뒤 상장한 종목도 상세 화면·뉴스 탭처럼 찾는다 (코드가 정확히 같은 종목만)
+        (await this.lookup(code));
+      if (!stock) throw new NotFoundError(`종목 ${code} 을 찾을 수 없습니다`);
 
-    const snapshot = await this.deps.collector.collectAnalysis(stock, kind);
-    const prompt = await this.deps.prompts.load(PROMPT_FOR[kind]);
-    const result = await this.deps.generator.generate({
-      system: prompt.system,
-      user: renderTemplate(prompt.userTemplate, {
-        stock_name: stock.name,
-        stock_code: stock.code,
-        date: seoulDate(this.now()),
-        missing_list: snapshot.missing.length ? snapshot.missing.join(", ") : "없음",
-        notes_list: snapshot.notes?.length ? snapshot.notes.join(" / ") : "없음",
-        market_state: snapshot.marketState?.label ?? "확인 안 됨",
-        data_json: JSON.stringify(snapshotForPrompt(snapshot, kind), null, 1),
-      }),
-      maxTokens: 4096,
-      effort: kind === "technical" ? "medium" : "high",
-      label: `${PROMPT_FOR[kind]}:${code}`,
-    });
-    const createdAt = seoulIso(this.now());
-    const inserted = await this.deps.db
-      .insertInto("analyses")
-      .values({
-        code,
-        kind,
-        content: result.text,
-        data_snapshot: JSON.stringify(snapshot),
-        missing_data: JSON.stringify(snapshot.missing),
-        model: result.model,
-        created_at: createdAt,
-      })
-      .returning("id")
-      .executeTakeFirstOrThrow();
-    return { id: inserted.id, code, kind, content: result.text, missing: snapshot.missing, model: result.model, createdAt, cached: false };
+      const snapshot = await this.deps.collector.collectAnalysis(stock, kind);
+      timing.next("프롬프트");
+      const prompt = await this.deps.prompts.load(PROMPT_FOR[kind]);
+      const request: GenerateRequest = {
+        system: prompt.system,
+        user: renderTemplate(prompt.userTemplate, {
+          stock_name: stock.name,
+          stock_code: stock.code,
+          date: seoulDate(this.now()),
+          missing_list: snapshot.missing.length ? snapshot.missing.join(", ") : "없음",
+          notes_list: snapshot.notes?.length ? snapshot.notes.join(" / ") : "없음",
+          market_state: snapshot.marketState?.label ?? "확인 안 됨",
+          data_json: JSON.stringify(snapshotForPrompt(snapshot, kind), null, 1),
+        }),
+        maxTokens: 4096,
+        effort: kind === "technical" ? "medium" : "high",
+        label: `${PROMPT_FOR[kind]}:${code}`,
+      };
+      timing.next("모델 생성");
+      const result = await this.deps.generator.generate(request);
+      timing.next("저장");
+      const createdAt = seoulIso(this.now());
+      const inserted = await this.deps.db
+        .insertInto("analyses")
+        .values({
+          code,
+          kind,
+          content: result.text,
+          data_snapshot: JSON.stringify(snapshot),
+          missing_data: JSON.stringify(snapshot.missing),
+          model: result.model,
+          created_at: createdAt,
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow();
+      const analysis: Analysis = { id: inserted.id, code, kind, content: result.text, missing: snapshot.missing, model: result.model, createdAt, cached: false, verification: verifyReport(result.text, snapshot) };
+      success = true;
+      return analysis;
+    } finally {
+      timing.finish(success);
+    }
   }
 
   private async lookup(code: string): Promise<{ code: string; name: string; market: string } | null> {
@@ -173,7 +189,9 @@ export class AnalysisService {
     } catch {
       /* ignore */
     }
-    return { id: r.id, code: r.code, kind: r.kind as AnalysisKind, content: r.content, missing, model: r.model, createdAt: r.created_at, cached: true };
+    let snapshot: unknown = null;
+    try { snapshot = JSON.parse(r.data_snapshot); } catch { /* 예전 본문은 보존하고 자료 확인 불가로 표시한다. */ }
+    return { id: r.id, code: r.code, kind: r.kind as AnalysisKind, content: r.content, missing, model: r.model, createdAt: r.created_at, cached: true, verification: verifyReport(r.content, snapshot) };
   }
 
   /** 저장된 결과와 이 서버의 진행 여부만 확인한다. 자료 수집·AI 생성은 시작하지 않는다. */

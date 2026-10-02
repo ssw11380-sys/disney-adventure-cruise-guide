@@ -1,7 +1,7 @@
 import { levInvOf, type LevInv, type ProductFacts } from "../analysis/leveraged.js";
 import type { Db } from "../db/index.js";
 import { isKrCode } from "../lib/codes.js";
-import { NotFoundError } from "../lib/errors.js";
+import { AppError, NotFoundError } from "../lib/errors.js";
 import { seoulIso } from "../lib/time.js";
 import { GenerationError, type TextGenerator } from "../llm/generator.js";
 import { renderTemplate, type PromptStore } from "../llm/prompts.js";
@@ -435,9 +435,17 @@ export class AccountBriefingService {
     await this.deps.db
       .insertInto("account_briefings")
       .values(values)
-      .onConflict((oc) => oc.columns(["briefing_date", "session"]).doUpdateSet(values))
+      .onConflict((oc) => {
+        const update = oc.columns(["briefing_date", "session"]).doUpdateSet(values);
+        // 다시 만들기 실패가 같은 회차의 성공 본문을 지우지 않게 한다.
+        return v.status === "ok" ? update : update.where("account_briefings.status", "<>", "ok");
+      })
       .execute();
     const saved = await this.find(date, session);
+    // 남겨 둔 이전 본문을 이번에 새로 만든 성공으로 알리거나 알림에 넣지 않는다.
+    if (v.status === "failed" && saved?.status === "ok") {
+      throw new AppError(503, "ACCOUNT_DATA_UNAVAILABLE", "시세를 받지 못해 다시 만들지 못했습니다. 이전 계좌 브리핑은 그대로 둡니다.");
+    }
     this.deps.log?.info({ date, session, status: v.status, model: v.model }, "계좌 브리핑 저장");
     return saved!;
   }

@@ -461,6 +461,34 @@ describe("켬: 접은 화면 475×751 · 폰 360×752", () => {
   });
 });
 
+describe("계정 A단계: 주인 아닌 계정", () => {
+  it("늦음·실패 안내를 그리지 않고 상태도 묻지 않는다 (주인 브리핑 실행 상태 — 서버도 403) · 켬·끔 모두, 맨 위 차분한 안내만. 주인은 그대로", async () => {
+    const { resetSessionForTests, saveSession } = await import("@/lib/session");
+    const { MEMBER_NOTICE } = await import("@/lib/account");
+    // 서버가 주인 아닌 계정에게 주는 모습: 개인 목록은 빈 값, /health 는 공유 모습(실행 기록 없음 — 모델 설정만)
+    h.latest = [];
+    h.health = { llmConfigured: false };
+    await saveSession({ apiUrl: "https://prod.test", token: "gzs1_m", remember: true, user: { id: 7, loginId: "newbie", email: null, isOwner: false, usingInitialPassword: false } });
+    try {
+      for (const on of [true, false]) {
+        h.flags = { accounts: true, briefingStatus: on };
+        h.statusCalls = 0;
+        const r = await tab();
+        expect(bannerOf(r), `briefingStatus ${on}`).toBeNull();
+        expect(r.text()).not.toContain("브리핑 모델이 설정되지 않았습니다");
+        expect(r.text()).toContain(MEMBER_NOTICE);
+        expect(h.statusCalls).toBe(0);
+      }
+      // 주인(세션 없음 — 계정 전과 같음)은 예전 안내 그대로
+      resetSessionForTests();
+      h.flags = { briefingStatus: false };
+      expect((await tab()).text()).toContain("브리핑 모델이 설정되지 않았습니다");
+    } finally {
+      resetSessionForTests();
+    }
+  });
+});
+
 describe("켬: 넓은 창", () => {
   beforeEach(() => {
     h.flags.briefingStatus = true;

@@ -1,7 +1,7 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { Stack, router, useLocalSearchParams } from "expo-router";
 import React, { useRef, useState } from "react";
-import { Pressable, StyleSheet, Text, View, useWindowDimensions, type LayoutChangeEvent } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions, type LayoutChangeEvent } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCandles, useFeature, useStock } from "@/api/hooks";
 import type { CandlePeriod } from "@/api/types";
@@ -102,7 +102,7 @@ export default function FullscreenChartScreen() {
           }
         }
       : null;
-  // 남는 높이에서 도구 모음 높이를 뺀 만큼만 차트로 → 하단 토글이 화면 밖으로 잘리지 않는다
+  // 남는 높이에서 도구 높이를 뺀다. 그림의 최소 높이도 안 들어가는 낮은 창은 아래 스크롤로 끝 도구까지 보여 준다.
   const layoutKey = `${landscape ? "L" : "P"}:${Math.round(chartW)}`;
   const chromeH = chrome.key === layoutKey ? chrome.h : 170;
   const chartH = Math.max(160, availH - headerH - chromeH - space.sm);
@@ -179,6 +179,8 @@ export default function FullscreenChartScreen() {
           </View>
         )}
       </View>
+      {/* 닫기는 머리에 남기고, 큰 글씨·낮은 가로 창에서 넘친 도구와 오류 안내는 스크롤로 읽는다. */}
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: space.sm }}>
       <View
         onLayout={(e) => {
           // 도구 모음 높이 = 전체 높이 − 차트 높이. 새 배치면 그대로, 같은 배치면 1px 넘게 늘었을 때만(무한 반복·흔들림 방지)
@@ -204,6 +206,7 @@ export default function FullscreenChartScreen() {
       />
       </View>
       <ChartNotice query={candles} />
+      </ScrollView>
     </View>
   );
 

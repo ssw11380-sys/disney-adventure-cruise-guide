@@ -9,6 +9,10 @@ import React, { useEffect, useRef } from "react";
 import { AppState, Platform, type AppStateStatus } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+// 계정 A단계: 로그인 세션 저장소(AsyncStorage)를 가장 먼저 끼우고 읽기 시작한다 (첫 요청부터 세션을 붙이게)
+import "@/lib/sessionStorage";
+import { AuthBridge } from "@/components/AuthBridge";
+import { InitialPasswordSheet } from "@/components/auth/InitialPasswordSheet";
 import { NotificationBridge, useSplashHold } from "@/components/NotificationBridge";
 import { PriceAlertProvider } from "@/components/PriceAlertProvider";
 import { ConnectionWordingBridge, FirstRunGate, GuideMarksProvider, HapticsBridge, UxFlagsProvider } from "@/components/UxBridge";
@@ -17,11 +21,17 @@ import { ensureBackgroundTaskRegistered } from "@/lib/backgroundBriefings";
 import { installErrorHandlers, setCurrentScreen } from "@/lib/errorReport";
 import { installHaptics, type HapticEngine } from "@/lib/haptics";
 import { LiveStreamProvider } from "@/lib/liveStream";
-import { postPriceAlert } from "@/lib/notifications";
+import { useAccountView } from "@/lib/account";
+import { useAuthGate } from "@/lib/authGate";
+import { setBeforeLogout, setPushRebind } from "@/lib/logout";
+import { detachPush, postPriceAlert, rebindPush } from "@/lib/notifications";
+import { onAccountChange, persistsPersonal } from "@/lib/session";
+import { resetWidgetsForAccountChange } from "@/widgets/redraw";
 import { installPriceAlertNotifier } from "@/lib/priceAlerts";
 import { PERSIST_BUSTER, PERSIST_MAX_AGE_MS, queryPersister, shouldPersist } from "@/lib/queryPersist";
 import { SettingsProvider, useSettings } from "@/lib/settings";
 import { font, useTheme } from "@/theme";
+import { authColors } from "@/tokens";
 
 // 가장 먼저: 이후 어디서 난 JS 오류든 서버로 보고한다 (토큰·금액은 지운 뒤)
 installErrorHandlers();
@@ -29,6 +39,13 @@ installErrorHandlers();
 installHaptics(Haptics as unknown as HapticEngine, Platform.OS);
 // 가격 알림(3-29)을 휴대폰 알림 목록에 올리는 함수 (권한이 이미 있을 때만, 소리 없이). 울릴지는 PriceAlertProvider 가 플래그로 정한다
 installPriceAlertNotifier(postPriceAlert);
+// 주인 계정이 로그아웃하면 이 기기의 알림 등록을 먼저 서버에서 뺀다 (로그아웃한 폰으로 브리핑 알림이 가지 않게, 계정 A단계).
+// 기기에 적어 둔 알림 토큰은 남겨, 주인으로 다시 로그인하면(또는 비밀번호를 바꾸면) 새 세션으로 다시 등록한다
+setBeforeLogout((api) => detachPush(api));
+setPushRebind((api) => rebindPush(api));
+// 계정이 바뀌면(로그아웃·세션 끊김·다른 사람 로그인) 위젯이 적어 둔 앞 사람의 잔고·브리핑을 지우고 '로그인 필요' 빈 위젯으로 다시 그린다.
+// 새 계정의 잔고를 받으면 WidgetBridge 가 다시 채운다 (react-query 캐시 비우기는 AuthBridge 가 같은 자리에서)
+onAccountChange(resetWidgetsForAccountChange);
 
 // 저장된 설정(라이트/다크)과 마지막 잔고를 읽을 때까지 스플래시를 둔다 → 라이트 모드에서 어두운 첫 화면이 번쩍이지 않게.
 // 읽기가 늦어도 1.5초 뒤에는 연다
@@ -63,16 +80,36 @@ function ThemedStatusBar() {
   return <StatusBar style={t.dark ? "light" : "dark"} />;
 }
 
-/** 설정·저장된 캐시를 다 읽으면 스플래시를 내린다 */
+/** 설정·저장된 캐시·로그인 세션을 다 읽으면 스플래시를 내린다 */
 function SplashGate() {
   const { ready } = useSettings();
   const restoring = useIsRestoring();
-  // 브리핑 3차 1: 앱이 꺼진 채 누른 알림으로 옮겨 가는 동안은 스플래시를 둔다 (잔고 탭이 잠깐 보였다 넘어가지 않게 · 최대 1.5초 한도는 그대로)
+  const gate = useAuthGate();
+  // 브리핑 3차 1: 앱이 꺼진 채 누른 알림으로 옮겨 가는 동안은 스플래시를 둔다 (잔고 탭이 잠깐 보였다 넘어가지 않게 · 최대 1.5초 한도는 그대로).
+  // 로그인이 필요하면 알림 이동은 로그인 뒤로 미루고 바로 놓는다 (NotificationBridge — 로그인 화면이 스플래시 뒤에 묶이지 않게)
   const hold = useSplashHold();
   useEffect(() => {
-    if (ready && !restoring && !hold) hideSplash();
-  }, [ready, restoring, hold]);
+    if (ready && !restoring && gate.ready && !hold) hideSplash();
+  }, [ready, restoring, gate.ready, hold]);
   return null;
+}
+
+/**
+ * 알림을 누른 이동에 로그인 상태를 건넨다 (계정 A단계 + 브리핑 3차 1). 로그인이 필요하면 이동을 로그인 뒤로 미루고(로그인 화면 먼저 → 그다음 그 브리핑),
+ * 주인 아닌 계정이면 주인의 브리핑 상세 대신 브리핑 탭(맨 위 차분한 안내)으로만 — components/NotificationBridge
+ */
+function NotificationBridgeWithAuth() {
+  const gate = useAuthGate();
+  const { member } = useAccountView();
+  return <NotificationBridge auth={{ ready: gate.ready, needsLogin: gate.needsLogin, member }} />;
+}
+
+/** 첫 실행 안내(3-24)는 로그인한 뒤에만, 주인 아닌 계정에는 띄우지 않는다 (위젯·알림·토스 이야기라 — 계정 A단계) */
+function FirstRunAfterLogin() {
+  const gate = useAuthGate();
+  const { member } = useAccountView();
+  if (gate.needsLogin || member) return null;
+  return <FirstRunGate />;
 }
 
 /**
@@ -86,9 +123,10 @@ function CredentialWatcher() {
   useEffect(() => {
     if (!ready) return;
     if (prev.current !== null && prev.current !== apiToken) {
-      // 이전 토큰으로 받은 캐시를 비우고(기기에 저장된 것도) 보고 있는 화면은 새 토큰으로 다시 받는다
+      // 이전 토큰으로 받은 캐시를 비우고(기기에 저장된 것도) 보고 있는 화면은 새 토큰으로 다시 받는다.
+      // 다시 받기는 이번 그리기의 효과가 모두 끝난 뒤에 — 화면의 쿼리가 새 토큰의 요청 함수를 받기 전에 다시 받으면 옛 토큰으로 묻는다 (검증 지적)
       void queryPersister.removeClient();
-      void qc.resetQueries();
+      setTimeout(() => void qc.resetQueries(), 0);
     }
     prev.current = apiToken;
   }, [apiToken, ready, qc]);
@@ -102,8 +140,13 @@ function ScreenTracker() {
   return null;
 }
 
+/**
+ * 화면 목록. 계정 A단계(플래그 accounts): 로그인이 필요하면(세션 없음 + 계정 모드) 앱 화면을 닫고 로그인·회원가입만 연다 (Stack.Protected —
+ * 로그인하면 저절로 앱으로). '서버 설정'은 로그인 없이도 열린다. 플래그가 꺼져 있거나 예전 서버면 로그인 화면이 없다 (지금과 같음)
+ */
 function Navigator() {
   const t = useTheme();
+  const gate = useAuthGate();
   return (
     <Stack
       screenOptions={{
@@ -116,6 +159,7 @@ function Navigator() {
         headerBackTitle: "뒤로",
       }}
     >
+      <Stack.Protected guard={!gate.needsLogin}>
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen name="stocks/add" options={{ title: "종목 검색", presentation: "modal" }} />
       <Stack.Screen name="stocks/[code]/index" options={{ title: "종목" }} />
@@ -131,6 +175,15 @@ function Navigator() {
       <Stack.Screen name="chart-lines" options={{ title: "이동평균선", presentation: "modal" }} />
       {/* 첫 실행 안내 (3-24, 플래그 firstRun): 머리 없이 한 화면, 뒤로 가기·'시작하기'로 닫힌다 */}
       <Stack.Screen name="welcome" options={{ headerShown: false, presentation: "fullScreenModal", animation: "fade" }} />
+      {/* 비밀번호 바꾸기 (설정 > 계정) */}
+      <Stack.Screen name="account/password" options={{ title: "비밀번호 바꾸기" }} />
+      </Stack.Protected>
+      <Stack.Protected guard={gate.needsLogin}>
+        {/* 로그인·회원가입: 늘 어두운 고급 화면, 머리 없음 */}
+        <Stack.Screen name="login" options={{ headerShown: false, animation: "fade", contentStyle: { backgroundColor: authColors.bgBottom } }} />
+        <Stack.Screen name="signup" options={{ headerShown: false, contentStyle: { backgroundColor: authColors.bgBottom } }} />
+      </Stack.Protected>
+      <Stack.Screen name="server" options={{ title: "서버 설정" }} />
     </Stack>
   );
 }
@@ -152,11 +205,12 @@ export default function RootLayout() {
               persister: queryPersister,
               maxAge: PERSIST_MAX_AGE_MS,
               buster: PERSIST_BUSTER,
-              dehydrateOptions: { shouldDehydrateQuery: (q) => shouldPersist(q.queryKey, q.state, Date.now()), shouldDehydrateMutation: () => false },
+              dehydrateOptions: { shouldDehydrateQuery: (q) => shouldPersist(q.queryKey, q.state, Date.now(), persistsPersonal), shouldDehydrateMutation: () => false },
             }}
           >
             <SplashGate />
             <CredentialWatcher />
+            <AuthBridge />
             <LiveStreamProvider>
               {/* 3-24 플래그(oneHand·firstRun·emptyGuide)를 한 번 받아 아래 화면에 내려 준다 */}
               <UxFlagsProvider>
@@ -164,13 +218,14 @@ export default function RootLayout() {
                   {/* 가격 알림 (3-29, 플래그 priceAlerts): 조건 목록·확인 엔진·화면 위 알림 카드·알림 시트. 꺼져 있으면 아래를 그대로 그리기만 한다 */}
                   <PriceAlertProvider>
                     <ThemedStatusBar />
-                    <NotificationBridge />
+                    <NotificationBridgeWithAuth />
                     <WidgetBridge />
                     <ScreenTracker />
                     <HapticsBridge />
                     <ConnectionWordingBridge />
                     <Navigator />
-                    <FirstRunGate />
+                    <FirstRunAfterLogin />
+                    <InitialPasswordSheet />
                   </PriceAlertProvider>
                 </GuideMarksProvider>
               </UxFlagsProvider>
