@@ -26,8 +26,7 @@ import { useAuthGate } from "@/lib/authGate";
 import { setBeforeLogout, setPushRebind } from "@/lib/logout";
 import { detachPush, postPriceAlert, rebindPush } from "@/lib/notifications";
 import { onAccountChange, persistsPersonal } from "@/lib/session";
-import { clearWidgetAccountData, signedOutWidgetData } from "@/widgets/data";
-import { redrawAllWidgets } from "@/widgets/redraw";
+import { resetWidgetsForAccountChange } from "@/widgets/redraw";
 import { installPriceAlertNotifier } from "@/lib/priceAlerts";
 import { PERSIST_BUSTER, PERSIST_MAX_AGE_MS, queryPersister, shouldPersist } from "@/lib/queryPersist";
 import { SettingsProvider, useSettings } from "@/lib/settings";
@@ -46,7 +45,7 @@ setBeforeLogout((api) => detachPush(api));
 setPushRebind((api) => rebindPush(api));
 // 계정이 바뀌면(로그아웃·세션 끊김·다른 사람 로그인) 위젯이 적어 둔 앞 사람의 잔고·브리핑을 지우고 '로그인 필요' 빈 위젯으로 다시 그린다.
 // 새 계정의 잔고를 받으면 WidgetBridge 가 다시 채운다 (react-query 캐시 비우기는 AuthBridge 가 같은 자리에서)
-onAccountChange(() => void clearWidgetAccountData().then(() => redrawAllWidgets(signedOutWidgetData())));
+onAccountChange(resetWidgetsForAccountChange);
 
 // 저장된 설정(라이트/다크)과 마지막 잔고를 읽을 때까지 스플래시를 둔다 → 라이트 모드에서 어두운 첫 화면이 번쩍이지 않게.
 // 읽기가 늦어도 1.5초 뒤에는 연다

@@ -108,6 +108,12 @@ export class SessionReadError extends Error {
   }
 }
 
+/** 비동기 작업이 시작한 로그인 경계. 사용자 정보 갱신은 유지하고 로그인·로그아웃·저장소 교체만 바뀐다. */
+export function sessionIdentityVersion(): number { return identityVersion; }
+export function assertSessionIdentity(version: number): void {
+  if (version !== identityVersion) throw new SessionReadError("SESSION_CHANGED", "로그인 정보가 바뀌었습니다. 다시 시도해 주세요.");
+}
+
 function invalidateSessionRead() {
   identityVersion++;
   const previous = loading;
@@ -285,6 +291,20 @@ async function write(fn: (s: KeyValueStorage) => Promise<void>): Promise<void> {
   }
 }
 
+// 로그인 값의 늦은 쓰기가 로그아웃 삭제나 다음 로그인보다 나중에 남지 않게 같은 저장소 안에서만 순서를 지킨다.
+// 메모리 상태·화면 전환은 이미 끝난 뒤이며, 혼자 쓰는 정상 경로는 바로 시작한다. 다른 설정 쓰기는 기다리지 않는다.
+const sessionWrites = new WeakMap<KeyValueStorage, Promise<void>>();
+async function writeSession(fn: (s: KeyValueStorage) => Promise<void>): Promise<void> {
+  const s = storage;
+  if (!s) return;
+  const execute = async () => { try { await fn(s); } catch { /* 저장 실패해도 메모리의 현재 세션은 보존한다. */ } };
+  const previous = sessionWrites.get(s);
+  const pending = previous ? previous.then(execute, execute) : execute();
+  sessionWrites.set(s, pending);
+  void pending.then(() => { if (sessionWrites.get(s) === pending) sessionWrites.delete(s); });
+  await pending;
+}
+
 /** 로그인·가입 성공: 자동 로그인 켬이면 기기에 저장, 끔이면 메모리에만 (전에 저장한 세션은 지운다) */
 export async function saveSession(s: Omit<StoredSession, "savedAt"> & { savedAt?: number }): Promise<void> {
   invalidateSessionRead();
@@ -299,11 +319,14 @@ export async function saveSession(s: Omit<StoredSession, "savedAt"> & { savedAt?
   seen = { apiUrl: clean(s.apiUrl), on: true };
   emit();
   const saved = current;
-  await write(async (st) => {
+  await writeSession(async (st) => {
     if (saved.remember) await st.setItem(SESSION_KEY, JSON.stringify(saved));
     else await st.removeItem(SESSION_KEY);
-    await st.setItem(DEVICE_KEY, JSON.stringify({ apiUrl: saved.apiUrl, accountsSeen: true }));
   });
+  // 기기 표시는 인증값이 아니므로 이 쓰기를 기다리느라 다음 로그아웃의 세션 삭제가 밀리지 않게 한다.
+  if (current?.token === saved.token && sameServer(current.apiUrl, saved.apiUrl)) {
+    await write((st) => st.setItem(DEVICE_KEY, JSON.stringify({ apiUrl: saved.apiUrl, accountsSeen: true })));
+  }
 }
 
 /** 서버가 준 새 사용자 정보(이메일·처음 비밀번호 표시)로 바꾼다 — 토큰은 그대로 */
@@ -313,7 +336,7 @@ export async function updateSessionUser(apiUrl: string, user: AccountUser): Prom
   current = { ...s, user };
   emit();
   const saved = current;
-  if (saved.remember) await write((st) => st.setItem(SESSION_KEY, JSON.stringify(saved)));
+  if (saved.remember) await writeSession((st) => st.setItem(SESSION_KEY, JSON.stringify(saved)));
 }
 
 /** 세션을 지운다 (직접 로그아웃·세션 끊김). 기기 표시(계정 모드를 봄)는 남긴다 — 다음에 로그인 화면이 나오게 */
@@ -328,7 +351,7 @@ export async function clearSession(reason: EndReason): Promise<void> {
   ended = reason;
   accountChanged(prev, null);
   emit();
-  await write((st) => st.removeItem(SESSION_KEY));
+  await writeSession((st) => st.removeItem(SESSION_KEY));
 }
 
 /**

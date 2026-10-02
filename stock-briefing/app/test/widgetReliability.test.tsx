@@ -1,6 +1,8 @@
 import React from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { holding, quote } from "./helpers";
+import { installSessionStorage, resetSessionForTests } from "@/lib/session";
 
 /**
  * 위젯 리뷰 5·6번과 1·2번의 연결 부분을 라이브러리의 실제 트리 빌더로 그려 본다 (고치기 전에 실패하는 재현 테스트).
@@ -120,6 +122,9 @@ const APP_CHIP = { ...KR_OPEN, nextChangeAt: "2026-09-24T11:00:00.001Z" };
 
 beforeEach(() => {
   store.clear();
+  // 앞 사례의 session_required 판정도 디스크와 함께 초기화한다 (뒤 무계정 서버 사례에 남기지 않게).
+  resetSessionForTests();
+  installSessionStorage(AsyncStorage);
   shared.widgets = {};
   shared.updates = [];
   vi.useFakeTimers();

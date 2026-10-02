@@ -26,7 +26,7 @@ import { DEFAULT_PREFS, type NotifyPrefs } from "@/lib/briefingDigest";
 import { logWidgetRefresh } from "@/lib/widgetRefreshLog";
 // 계정 A단계: 위젯·백그라운드 작업(앱과 다른 JS 로 켜질 수 있다)도 기기에 저장한 로그인 세션으로 묻는다
 import "@/lib/sessionStorage";
-import { backgroundSessionFor, handleSessionInvalid, markAccountsSeen, SessionReadError } from "@/lib/session";
+import { accountsSeenFor, assertSessionIdentity, backgroundSessionFor, handleSessionInvalid, markAccountsSeen, sessionFor, sessionIdentityVersion, SessionReadError } from "@/lib/session";
 
 /**
  * 로그인 세션 머리글 (계정 A단계). **기기에 저장한 세션(자동 로그인 켬)만** 보낸다 (검증 4차 M1).
@@ -63,10 +63,12 @@ export class LoginNeededError extends Error {
  */
 async function noteAuth(res: Response, apiUrl: string, sent: string | null): Promise<"login" | "personal" | null> {
   if (res.status !== 401 && res.status !== 403) return null;
+  const identity = sessionIdentityVersion();
   try {
     const b = (await res.clone().json()) as { code?: unknown };
+    assertSessionIdentity(identity);
     if (res.status === 401 && b.code === "session_invalid") {
-      handleSessionInvalid(apiUrl, sent);
+      if (handleSessionInvalid(apiUrl, sent)) await clearWidgetAccountData();
       return "login";
     }
     if (res.status === 403 && b.code === "session_required") {
@@ -74,7 +76,8 @@ async function noteAuth(res: Response, apiUrl: string, sent: string | null): Pro
       return "login";
     }
     return res.status === 403 && b.code === "personal_data_not_ready" ? "personal" : null;
-  } catch {
+  } catch (e) {
+    if (e instanceof SessionReadError) throw e;
     /* 본문이 JSON 이 아님 */
     return null;
   }
@@ -144,23 +147,62 @@ export interface WidgetData {
 
 const LAST_KEY = "widget.lastStocks";
 
+/** 개인 저장만 같은 순서로 끝낸다. 진행 중 쓰기는 취소할 수 없어 로그아웃 지우기가 그 뒤에 와야 한다. */
+let personalChain: Promise<unknown> | null = null;
+let personalClears = 0;
+/** 삭제에 실패한 디스크 값은 같은 실행에서 다시 읽지 않는다. 새 정상 쓰기나 삭제가 되면 해제한다. */
+const invalidPersonalKeys = new Set<string>();
+/** 토큰은 저장하지 않는다. 같은 서버·사용자의 새 로그인은 같은 캐시를 쓸 수 있다. */
+const personalOwner = (apiUrl: string) => sessionFor(apiUrl)?.user.id ?? null;
+function ownsPersonalCache(value: { accountUserId?: unknown }, apiUrl: string): boolean {
+  const session = sessionFor(apiUrl);
+  if (session) return session.remember && value.accountUserId === session.user.id;
+  // 소유자 없는 옛 캐시는 계정을 쓰지 않는 서버에서만 유지한다. 지금 로그인한 사람 것으로 승격하지 않는다.
+  return !accountsSeenFor(apiUrl) && (value.accountUserId === undefined || value.accountUserId === null);
+}
+async function removePersonal(key: string): Promise<void> {
+  try { await AsyncStorage.removeItem(key); invalidPersonalKeys.delete(key); }
+  catch { invalidPersonalKeys.add(key); }
+}
+function personalSerial<T>(fn: () => Promise<T>): Promise<T> {
+  // 혼자 쓰는 정상 경로는 바로 시작한다. 보고서 생성·로그아웃의 완료는 이 큐를 기다리지 않는다.
+  const run = personalChain ? personalChain.then(fn, fn) : fn();
+  const tail = run.catch(() => undefined);
+  personalChain = tail;
+  void tail.then(() => { if (personalChain === tail) personalChain = null; });
+  return run;
+}
+function writePersonal(key: string, value: string, identity = sessionIdentityVersion()): Promise<void> {
+  return personalSerial(async () => {
+    assertSessionIdentity(identity);
+    await AsyncStorage.setItem(key, value);
+    // 쓰는 중 계정이 바뀌면 뒤에 줄 선 새 계정 쓰기보다 먼저 옛 값을 지운다.
+    if (identity !== sessionIdentityVersion()) await removePersonal(key);
+    assertSessionIdentity(identity);
+    invalidPersonalKeys.delete(key);
+  });
+}
+
 /**
  * 마지막으로 받은 잔고 (위젯이 조회에 실패해도 숫자를 지우지 않게). 앱이 받은 데이터도 여기에 적는다.
  * 서버 주소와 함께 적고, 주소가 바뀌면 쓰지 않는다 (다른 서버·계좌의 잔고가 보이지 않게).
  */
-export async function saveLastStocks(stocks: RegisteredWithQuote[], at: number, apiUrl: string): Promise<void> {
+export async function saveLastStocks(stocks: RegisteredWithQuote[], at: number, apiUrl: string, identity = sessionIdentityVersion()): Promise<void> {
   try {
-    await AsyncStorage.setItem(LAST_KEY, JSON.stringify({ at, apiUrl, stocks }));
+    await writePersonal(LAST_KEY, JSON.stringify({ at, apiUrl, accountUserId: personalOwner(apiUrl), stocks }), identity);
   } catch {
     /* 저장 실패는 무시 */
   }
 }
 
 export async function readLastStocks(apiUrl: string): Promise<{ at: number; stocks: RegisteredWithQuote[] } | null> {
+  const identity = sessionIdentityVersion();
+  if (personalClears || invalidPersonalKeys.has(LAST_KEY)) return null;
   try {
-    const raw = await AsyncStorage.getItem(LAST_KEY);
-    const v = raw ? (JSON.parse(raw) as { at?: unknown; apiUrl?: unknown; stocks?: unknown }) : null;
-    if (!v || typeof v.at !== "number" || !Array.isArray(v.stocks) || v.apiUrl !== apiUrl) return null;
+    const [raw] = await Promise.all([AsyncStorage.getItem(LAST_KEY), backgroundSessionFor(apiUrl)]);
+    if (personalClears || invalidPersonalKeys.has(LAST_KEY) || identity !== sessionIdentityVersion()) return null;
+    const v = raw ? (JSON.parse(raw) as { at?: unknown; apiUrl?: unknown; accountUserId?: unknown; stocks?: unknown }) : null;
+    if (!v || typeof v.at !== "number" || !Array.isArray(v.stocks) || v.apiUrl !== apiUrl || !ownsPersonalCache(v, apiUrl)) return null;
     return { at: v.at, stocks: v.stocks as RegisteredWithQuote[] };
   } catch {
     return null;
@@ -173,10 +215,13 @@ export async function readLastStocks(apiUrl: string): Promise<{ at: number; stoc
  * 덮지 않는다 — 조회가 실패했을 때 더 옛 숫자로 되돌아가지 않게 (통합 검증 지적)
  */
 export async function withLastGood(stocks: RegisteredWithQuote[], at: number): Promise<{ stocks: RegisteredWithQuote[]; filled: string[] }> {
+  const identity = sessionIdentityVersion();
   const { apiUrl } = await readSettings();
   const last = await readLastStocks(apiUrl);
   const f = fillFromLast(stocks, last?.stocks ?? null, at);
-  if (!(last && last.at > at)) await saveLastStocks(f.stocks, at, apiUrl);
+  assertSessionIdentity(identity);
+  if (!(last && last.at > at)) await saveLastStocks(f.stocks, at, apiUrl, identity);
+  assertSessionIdentity(identity);
   return f;
 }
 
@@ -243,7 +288,10 @@ const PNL_KEY = "widget.pnlMode";
  * 손익 보기(누적·당일)는 표시 설정이라 남긴다
  */
 export async function clearWidgetAccountData(): Promise<void> {
-  await Promise.all([LAST_KEY, PAYLOAD_KEY, VIEW_KEY, RETRY_KEY].map((k) => AsyncStorage.removeItem(k).catch(() => undefined)));
+  personalClears++;
+  try {
+    await personalSerial(() => Promise.all([LAST_KEY, PAYLOAD_KEY, VIEW_KEY, RETRY_KEY].map(removePersonal)));
+  } finally { personalClears--; }
 }
 
 /** 로그인이 필요할 때 그리는 빈 위젯 데이터 ('로그인하면 보여요', 숫자 없음) */
@@ -276,16 +324,11 @@ export async function pendingRetry(apiUrl?: string): Promise<number | null> {
  * 예전에는 옛 표시를 보고 새 표시까지 지워 그 위젯의 '갱신 실패'가 다시 묻기 없이(휴장이면 최대 2시간) 남았다.
  * 이제 읽고 지우는 동안 다른 적기는 기다렸다가 그 뒤에 적는다 (앱·위젯 태스크·백그라운드 작업은 한 JS 안에서 돈다)
  */
-let retryChain: Promise<unknown> = Promise.resolve();
-function retrySerial<T>(fn: () => Promise<T>): Promise<T> {
-  const run = retryChain.then(fn, fn);
-  retryChain = run.catch(() => undefined);
-  return run;
-}
+const retrySerial = personalSerial;
 
 /** 실패 표시를 적는다 (실패 시각 at — 부른 순간). 지우기와 한 줄로 */
-async function markRetry(apiUrl: string, at: number): Promise<void> {
-  await retrySerial(() => AsyncStorage.setItem(RETRY_KEY, JSON.stringify({ at, apiUrl }))).catch(() => undefined);
+async function markRetry(apiUrl: string, at: number, identity = sessionIdentityVersion()): Promise<void> {
+  await writePersonal(RETRY_KEY, JSON.stringify({ at, apiUrl }), identity).catch(() => undefined);
 }
 
 /** 실패 표시 시각이 지금보다 이만큼 넘게 뒤면 기기 시계가 앞서 있을 때 적힌 깨진 표시로 본다 (clearRetry) */
@@ -298,9 +341,11 @@ export const RETRY_SKEW_MS = 5 * 60_000;
  * 지날 때까지 어떤 성공도 지우지 못해 휴장에도 약 15분마다 묻고 다른 위젯의 '갱신 실패'도 남는다. 실패는 실제로 있었으므로 true (다른 위젯도 다시 그림).
  * 읽기와 지우기 사이에 다른 적기가 끼어들지 않게 한 줄로 (retrySerial)
  */
-function clearRetry(apiUrl: string, started: number): Promise<boolean> {
+function clearRetry(apiUrl: string, started: number, identity = sessionIdentityVersion()): Promise<boolean> {
   return retrySerial(async () => {
+    assertSessionIdentity(identity);
     const v = JSON.parse((await AsyncStorage.getItem(RETRY_KEY)) ?? "null") as { at?: unknown; apiUrl?: unknown } | null;
+    assertSessionIdentity(identity);
     if (!v) return false;
     const at = typeof v.at === "number" && Number.isFinite(v.at) ? v.at : null;
     const skewed = at !== null && at > Date.now() + RETRY_SKEW_MS;
@@ -322,22 +367,30 @@ function slimBriefings(list: LatestBriefing[]): LatestBriefing[] {
     .map((b) => ({ ...b, latest: b.latest ? { ...b.latest, detail: "" } : null }));
 }
 
-export async function saveWidgetView(data: WidgetData, apiUrl: string): Promise<void> {
+export async function saveWidgetView(data: WidgetData, apiUrl: string, identity = sessionIdentityVersion()): Promise<void> {
   const { showKrw: _k, afterCost: _a, rowKrw: _r, asked: _q, recovered: _v, boardFresh: _f, ...rest } = data;
   const view: StoredView = { ...rest, briefings: slimBriefings(data.briefings) };
   try {
-    await AsyncStorage.setItem(VIEW_KEY, JSON.stringify({ apiUrl, view }));
+    await writePersonal(VIEW_KEY, JSON.stringify({ apiUrl, accountUserId: personalOwner(apiUrl), view }), identity);
   } catch {
     /* 저장 실패는 무시 */
   }
 }
 
 async function readWidgetView(apiUrl: string): Promise<StoredView | null> {
+  const identity = sessionIdentityVersion();
+  if (personalClears || invalidPersonalKeys.has(VIEW_KEY)) return null;
   try {
-    const raw = await AsyncStorage.getItem(VIEW_KEY);
-    const v = raw ? (JSON.parse(raw) as { apiUrl?: unknown; view?: Partial<StoredView> }) : null;
+    const [raw] = await Promise.all([AsyncStorage.getItem(VIEW_KEY), backgroundSessionFor(apiUrl)]);
+    if (personalClears || invalidPersonalKeys.has(VIEW_KEY) || identity !== sessionIdentityVersion()) return null;
+    const v = raw ? (JSON.parse(raw) as { apiUrl?: unknown; accountUserId?: unknown; view?: Partial<StoredView> }) : null;
     const d = v?.view;
     if (!v || v.apiUrl !== apiUrl || !d || typeof d.fetchedAt !== "number" || !Array.isArray(d.stocks)) return null;
+    if (!ownsPersonalCache(v, apiUrl)) {
+      // 로그인 안내가 이미 그려졌다는 사실만 보존한다. 디스크의 개인 필드는 한 개도 되돌리지 않는다.
+      if (!sessionFor(apiUrl)?.remember && d.error === LOGIN_NEEDED) return signedOutWidgetData(d.fetchedAt);
+      return null;
+    }
     return {
       stocks: d.stocks,
       briefings: Array.isArray(d.briefings) ? d.briefings : [],
@@ -392,10 +445,16 @@ export async function togglePnlMode(): Promise<PnlMode> {
  * 아직 적어 둔 것이 없으면(업데이트 직후) 마지막 잔고·마지막 /api/widget 응답으로 만든다
  */
 export async function loadCachedWidgetData(): Promise<WidgetData> {
+  const identity = sessionIdentityVersion();
+  if (personalClears) return signedOutWidgetData();
   const { apiUrl, showKrw, afterCost, rowKrw } = await readSettings();
+  try { await backgroundSessionFor(apiUrl); assertSessionIdentity(identity); }
+  catch { return signedOutWidgetData(); }
   const view = await readWidgetView(apiUrl);
+  if (personalClears || identity !== sessionIdentityVersion()) return signedOutWidgetData();
   if (view) return { ...view, showKrw, afterCost, rowKrw };
   const [last, cached] = await Promise.all([readLastStocks(apiUrl), readCachedPayload(apiUrl)]);
+  if (personalClears || identity !== sessionIdentityVersion()) return signedOutWidgetData();
   const p = cached ? fromPayload(cached.body) : null;
   return {
     stocks: last?.stocks ?? p?.stocks ?? [],
@@ -454,16 +513,20 @@ export async function pushWidgetData(o: {
   /** 종목 줄 손익을 원화로 (앱 설정 값). 주지 않으면(백그라운드 작업) 저장된 설정 */
   rowKrw?: boolean;
 }): Promise<WidgetData> {
+  const identity = sessionIdentityVersion();
   const now = Date.now();
   const { apiUrl, rowKrw } = await readSettings();
   // 자동 로그인을 끈 세션(메모리에만)이면 앱이 받은 잔고라도 위젯에 적지 않는다 — '로그인하면 보여요' (검증 4차 M1: 앱을 닫으면 사라져야 할 세션)
   if ((await backgroundSessionFor(apiUrl)).kind === "memory") {
+    assertSessionIdentity(identity);
     await clearWidgetAccountData();
     const out = signedOutWidgetData(now);
-    await saveWidgetView(out, apiUrl);
+    await saveWidgetView(out, apiUrl, identity);
+    assertSessionIdentity(identity);
     return out;
   }
   const [prev, cached] = await Promise.all([readWidgetView(apiUrl), readCachedPayload(apiUrl)]);
+  assertSessionIdentity(identity);
   const p = cached ? fromPayload(cached.body) : null;
   const idx = newest([
     o.indices,
@@ -508,7 +571,8 @@ export async function pushWidgetData(o: {
   };
   // 마지막으로 그린 잔고가 더 새 데이터면 그 잔고·칩·기준 시각 (그 칩의 연장 세션 표시는 고른 플래그로 다시 거른다)
   if (takeFresherStocks(data, prev)) data.market = gateExtended(data.market, features);
-  await saveWidgetView(data, apiUrl);
+  await saveWidgetView(data, apiUrl, identity);
+  assertSessionIdentity(identity);
   // 자동 갱신 기록 (위젯 리뷰 2): 앱이 바로 그린 것만 app 으로 — 앱(WidgetBridge)은 늘 rowKrw 를 넘기고, 백그라운드 작업은 넘기지 않는다
   // (refresh.tsx 의 약속. 백그라운드 작업은 lib/backgroundBriefings 가 background 로 따로 적는다). 시각은 넘긴 때
   if (o.rowKrw !== undefined) await logWidgetRefresh("app", "ok", { at: now });
@@ -526,11 +590,14 @@ function boardOf(v: Pick<WidgetData, "board" | "boardAt" | "fetchedAt"> | null):
  * 다시 쓰면 앱이 바로 그린 세션 칩("미국 주간거래")과 위젯이 스스로 갱신할 때의 옛 칩("한국 휴장")이 최대 2시간 번갈아 보인다
  */
 export async function readCachedPayload(apiUrl?: string): Promise<{ at: number; etag: string | null; body: WidgetPayload; briefingsAt?: number } | null> {
+  const identity = sessionIdentityVersion();
+  if (personalClears || invalidPersonalKeys.has(PAYLOAD_KEY)) return null;
   try {
     const url = apiUrl ?? (await readSettings()).apiUrl;
-    const raw = await AsyncStorage.getItem(PAYLOAD_KEY);
-    const v = raw ? (JSON.parse(raw) as { at?: unknown; apiUrl?: unknown; path?: unknown; etag?: unknown; body?: unknown; briefingsAt?: unknown }) : null;
-    if (!v || typeof v.at !== "number" || v.apiUrl !== url || v.path !== WIDGET_PATH || !v.body) return null;
+    const [raw] = await Promise.all([AsyncStorage.getItem(PAYLOAD_KEY), backgroundSessionFor(url)]);
+    if (personalClears || invalidPersonalKeys.has(PAYLOAD_KEY) || identity !== sessionIdentityVersion()) return null;
+    const v = raw ? (JSON.parse(raw) as { at?: unknown; apiUrl?: unknown; accountUserId?: unknown; path?: unknown; etag?: unknown; body?: unknown; briefingsAt?: unknown }) : null;
+    if (!v || typeof v.at !== "number" || v.apiUrl !== url || v.path !== WIDGET_PATH || !v.body || !ownsPersonalCache(v, url)) return null;
     return { at: v.at, etag: typeof v.etag === "string" ? v.etag : null, body: v.body as WidgetPayload, ...(typeof v.briefingsAt === "number" ? { briefingsAt: v.briefingsAt } : {}) };
   } catch {
     return null;
@@ -547,17 +614,18 @@ export async function readCachedPayload(apiUrl?: string): Promise<{ at: number; 
  * 응답이 앱 목록보다 늦게 받은 것이거나, 고르는 동안 위젯·백그라운드 작업이 새 응답을 적었으면(받은 시각이 다름) 건드리지 않는다. 실패해도 그린 것은 그대로다
  */
 export async function carryBriefingsIntoPayload(picked: readonly LatestBriefing[], appAt: number): Promise<void> {
+  const identity = sessionIdentityVersion();
   try {
     const { apiUrl } = await readSettings();
     const cached = await readCachedPayload(apiUrl);
     if (!cached || cached.at > appAt) return;
     const raw = await AsyncStorage.getItem(PAYLOAD_KEY);
-    const v = raw ? (JSON.parse(raw) as { at?: unknown; body?: WidgetPayload }) : null;
-    if (!v?.body || v.at !== cached.at) return;
+    const v = raw ? (JSON.parse(raw) as { at?: unknown; apiUrl?: unknown; accountUserId?: unknown; body?: WidgetPayload }) : null;
+    if (!v?.body || v.at !== cached.at || v.apiUrl !== apiUrl || !ownsPersonalCache(v, apiUrl)) return;
     const briefings = picked.flatMap((b): WidgetBriefing[] =>
       b.latest ? [{ id: b.latest.id, code: b.code, name: b.name, session: b.latest.session, date: b.latest.date, summary: b.latest.summary, createdAt: b.latest.createdAt }] : [],
     );
-    await AsyncStorage.setItem(PAYLOAD_KEY, JSON.stringify({ ...v, briefingsAt: appAt, body: { ...v.body, briefings } }));
+    await writePersonal(PAYLOAD_KEY, JSON.stringify({ ...v, briefingsAt: appAt, body: { ...v.body, briefings } }), identity);
   } catch {
     /* 적지 못하면 다음 서버 응답까지 위젯이 스스로 갱신할 때 옛 브리핑이 보일 수 있다 (예전과 같음) */
   }
@@ -641,6 +709,7 @@ const BOARD_QUERY = "&board=1";
  * HTML(와이파이 로그인 페이지·프록시)이나 JSON 이 아닌 본문은 연결 오류로 던진다 — 예전 서버로 보지 않는다 (위젯 리뷰 6)
  */
 async function fetchPayload(apiUrl: string, token: string, now: number, board = false): Promise<WidgetPayload | null> {
+  const identity = sessionIdentityVersion();
   const until = await legacyUntil(apiUrl);
   // 예전 앱이 적은 6시간짜리 기록(지금 규칙보다 긴 것)은 쓰지 않는다 — OTA 직후 바로 다시 묻게
   if (now < until && until - now <= LEGACY_RECHECK_MS) return null;
@@ -650,6 +719,7 @@ async function fetchPayload(apiUrl: string, token: string, now: number, board = 
   };
   const cached = await readCachedPayload(apiUrl);
   const session = await withSession(apiUrl);
+  assertSessionIdentity(identity);
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 12_000);
   try {
@@ -657,6 +727,7 @@ async function fetchPayload(apiUrl: string, token: string, now: number, board = 
       headers: { accept: "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...session.headers, ...(cached?.etag ? { "if-none-match": cached.etag } : {}) },
       signal: ctrl.signal,
     });
+    assertSessionIdentity(identity);
     const denied = await noteAuth(res, apiUrl, session.sent);
     if (denied) throw new LoginNeededError(denied);
     if (res.status === 404) {
@@ -669,9 +740,11 @@ async function fetchPayload(apiUrl: string, token: string, now: number, board = 
     else if (res.ok) body = await jsonBody<WidgetPayload | null>(res); // 프록시의 HTML 대체 페이지 등은 연결 오류
     else if (await isPortalPage(res)) throw new Error(NOT_JSON); // 와이파이 로그인 511·프록시 403/407 HTML
     else throw new HttpError(res.status);
+    assertSessionIdentity(identity);
     // 모양이 다르면(예전·다른 서버) 예전 API 로
     if (!body || body.v !== 1 || !Array.isArray(body.stocks)) return legacy();
-    await AsyncStorage.setItem(PAYLOAD_KEY, JSON.stringify({ at: now, apiUrl, path: WIDGET_PATH, etag: res.headers.get("etag"), body })).catch(() => undefined);
+    await writePersonal(PAYLOAD_KEY, JSON.stringify({ at: now, apiUrl, accountUserId: personalOwner(apiUrl), path: WIDGET_PATH, etag: res.headers.get("etag"), body }), identity).catch(() => undefined);
+    assertSessionIdentity(identity);
     return body;
   } finally {
     clearTimeout(timer);
@@ -724,17 +797,22 @@ export async function loadAccountBriefings(): Promise<AccountBriefing[] | null> 
 }
 
 async function getJson<T>(url: string, token: string, timeoutMs = 12_000): Promise<T> {
+  const identity = sessionIdentityVersion();
   // 서버 주소 = 주소의 '/api/' 앞 (세션은 그 서버 것만)
   const apiUrl = url.slice(0, Math.max(0, url.indexOf("/api/")));
   const session = await withSession(apiUrl);
+  assertSessionIdentity(identity);
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(url, { headers: { accept: "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...session.headers }, signal: ctrl.signal });
+    assertSessionIdentity(identity);
     const denied = await noteAuth(res, apiUrl, session.sent);
     if (denied) throw new LoginNeededError(denied);
     if (!res.ok) throw new Error((await isPortalPage(res)) ? NOT_JSON : `HTTP ${res.status}`);
-    return await jsonBody<T>(res);
+    const body = await jsonBody<T>(res);
+    assertSessionIdentity(identity);
+    return body;
   } finally {
     clearTimeout(timer);
   }
@@ -757,8 +835,16 @@ function boardReusable(body: WidgetPayload, prevBoardAt: number | undefined, now
  *  - board: 지수·환율 위젯 판도 묻는다 (&board=1). 판은 받지 못해도(실패·묻지 않음) 마지막으로 받은 것을 둔다
  */
 export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boolean; reuse?: boolean; board?: boolean } = { stocks: true, briefings: true }): Promise<WidgetData> {
+  const identity = sessionIdentityVersion();
   const { apiUrl, apiToken, showKrw, afterCost, rowKrw } = await readSettings();
   const out: WidgetData = { stocks: [], briefings: [], showKrw, afterCost, rowKrw, brief: null, fetchedAt: Date.now(), error: null, filled: [], market: null, indices: null, board: null, features: NO_FEATURES };
+  let memoryOnly: boolean;
+  try {
+    memoryOnly = (await backgroundSessionFor(apiUrl)).kind === "memory";
+    assertSessionIdentity(identity);
+  } catch (e) {
+    return { ...out, error: e instanceof Error ? e.message : String(e) };
+  }
   const last = await readLastStocks(apiUrl);
   // 판은 이번에 못 받아도 마지막 것을 둔다 (조회 전에 읽어 둔다 — 아래에서 이번 결과를 적으므로)
   const prevView = await readWidgetView(apiUrl);
@@ -770,8 +856,9 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
   /** 조회가 끝까지 성공했는지 (예전 API 포함) */
   let ok = false;
   try {
+    assertSessionIdentity(identity);
     // 자동 로그인을 끈 세션(메모리에만)이면 받아 둔 응답도 쓰지 않는다 — 개인 데이터 없이 '로그인하면 보여요' (검증 4차 M1)
-    if ((await backgroundSessionFor(apiUrl)).kind === "memory") throw new LoginNeededError("login");
+    if (memoryOnly) throw new LoginNeededError("login");
     // 위젯이 스스로 갱신할 때는 백그라운드 작업이 받아 둔 응답을 다시 쓴다 (위젯마다 서버를 부르지 않게)
     const reused = opts.reuse ? await readCachedPayload(apiUrl) : null;
     // 칩은 플래그로 거른 것 (연장 세션 ext 는 widgetExtended 가 켜져 있을 때만 장중처럼 15분)
@@ -781,6 +868,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
     // 자동 갱신 기록: 받아 둔 응답을 다시 쓰면 서버를 부르지 않은 것 (예전 서버 모드 10분도 예전 API 로 서버에 묻는다)
     out.asked = !reuse;
     const payload = reuse ? reuse.body : await fetchPayload(apiUrl, apiToken, out.fetchedAt, opts.board === true);
+    assertSessionIdentity(identity);
     let stocks: RegisteredWithQuote[];
     if (payload) {
       const p = fromPayload(payload);
@@ -804,6 +892,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
         opts.stocks ? getJson<RegisteredWithQuote[]>(`${apiUrl}/api/stocks?quotes=1`, apiToken) : Promise.resolve([]),
         opts.briefings ? getJson<LatestBriefing[]>(`${apiUrl}/api/briefings/latest`, apiToken) : Promise.resolve([]),
       ]);
+      assertSessionIdentity(identity);
       // 예전 서버는 등록 순서라 최신 순으로 (위젯은 앞의 3개를 보여 준다)
       out.briefings = [...out.briefings].sort((a, b) => ((a.latest?.createdAt ?? "") < (b.latest?.createdAt ?? "") ? 1 : -1));
       // 예전 API 로 받는 동안에도 마지막 플래그는 그대로 (위젯 리뷰 6 — 배포 중 404 한 번에 지수·환율 위젯이 '표시할 수 없습니다'로,
@@ -818,9 +907,12 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
     out.filled = f.filled;
     // 채운 결과를 적는다: 채운 종목은 옛 시세 시각을 그대로 갖고 있어 7일이 지나면 더는 쓰이지 않는다.
     // 마지막 잔고가 이 응답보다 늦게 받은 것이면(앱 즉시 갱신 뒤 받아 둔 옛 응답을 다시 씀) 덮지 않는다 — 다음 조회가 실패했을 때 옛 숫자로 되돌아가지 않게 (위젯 리뷰 5)
-    if ((stocks.length || payload) && !(last && last.at > out.fetchedAt)) await saveLastStocks(f.stocks, out.fetchedAt, apiUrl);
+    if ((stocks.length || payload) && !(last && last.at > out.fetchedAt)) await saveLastStocks(f.stocks, out.fetchedAt, apiUrl, identity);
+    assertSessionIdentity(identity);
     ok = true;
   } catch (e) {
+    // 앞 계정의 늦은 성공·오류는 새 계정의 저장값을 지우거나 예전 캐시로 대신 그리지 않는다.
+    if (identity !== sessionIdentityVersion()) return signedOutWidgetData(out.fetchedAt);
     out.error = e instanceof Error ? e.message : String(e);
     // 누구의 세션인지 읽지 못했을 때는 개인 캐시로 대신 그리거나 지우지 않는다. 다음 갱신에서 다시 읽는다.
     if (e instanceof SessionReadError) { keepBoard(out, prevView); return out; }
@@ -837,8 +929,8 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       // 지수·환율 위젯이 '개인 종목 기능은 준비 중'만 보였다). 로그인 전(세션 없음)은 공유 경로도 403 이라 묻지 않는다
       if (e.reason === "personal" && opts.board) await sharedBoard(out, apiUrl, apiToken);
       keepBoard(out, prevView);
-      await saveWidgetView(out, apiUrl);
-      return out;
+      await saveWidgetView(out, apiUrl, identity);
+      return identity === sessionIdentityVersion() ? out : signedOutWidgetData(out.fetchedAt);
     }
     const cached = await readCachedPayload(apiUrl);
     // 칩: 받아 둔 응답의 것(플래그로 거름), 없으면(업데이트 직후 등) 마지막으로 그린 것 — 실패했다고 칩이 사라지지 않게
@@ -877,12 +969,14 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
   if (full && !fresh) await keepNewer(out, apiUrl);
   keepBoard(out, prevView);
   const view = full ? out : await mergeLegacy(out, apiUrl, opts);
-  await saveWidgetView(view, apiUrl);
+  if (identity !== sessionIdentityVersion()) return signedOutWidgetData(out.fetchedAt);
+  await saveWidgetView(view, apiUrl, identity);
+  if (identity !== sessionIdentityVersion()) return signedOutWidgetData(out.fetchedAt);
   if (!ok) {
     // 실패 표시: 다음 백그라운드 작업이 장 상태와 상관없이 다시 묻게. 그릴 값(오류 포함)을 적은 뒤에 적는다 — 함께 돌던 조회가 성공해
     // 표시를 지운 뒤에 이 조회의 '갱신 실패'가 그려져도, 표시가 남아 다음 작업이 다시 묻고 지운다
-    await markRetry(apiUrl, Date.now());
-  } else if (out.asked && (await clearRetry(apiUrl, started))) {
+    await markRetry(apiUrl, Date.now(), identity);
+  } else if (out.asked && (await clearRetry(apiUrl, started, identity))) {
     // 실패 뒤 서버에서 받는 데 성공: 부른 쪽이 이 값으로 다른 위젯의 '갱신 실패'도 지우게 알린다 (표시를 지운 조회 하나만).
     // 예전 API 로 받았으면 묻지 않은 반쪽(잔고 또는 브리핑)은 이 조회가 적은 값(mergeLegacy — 마지막으로 그린 것)으로 채운다: 다른 위젯이 빈 목록으로 그려지지 않게
     out.recovered = true;
@@ -892,7 +986,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       out.briefings = view.briefings;
     }
   }
-  return out;
+  return identity === sessionIdentityVersion() ? out : signedOutWidgetData(out.fetchedAt);
 }
 
 /**

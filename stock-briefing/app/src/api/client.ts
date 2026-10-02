@@ -42,7 +42,7 @@ import type { AppErrorSummary, Evaluation,
   ReconcileBadgeBody,
 } from "./types";
 import { authMessage, NOT_JSON, SESSION_INVALID, SESSION_REQUIRED } from "@/lib/connectionError";
-import { handleSessionInvalid, markAccountsSeen, sessionFor, sessionTokenFor, SessionReadError, type AccountUser } from "@/lib/session";
+import { assertSessionIdentity, handleSessionInvalid, markAccountsSeen, sessionFor, sessionIdentityVersion, sessionTokenFor, SessionReadError, type AccountUser } from "@/lib/session";
 
 import { condDrop, condGet, condHeaders, condKey, condNote, condPut, isDelta, rebuild } from "./condCache";
 
@@ -68,6 +68,7 @@ export class ApiRequestError extends Error {
  * 계정 A단계: 이 서버 주소의 로그인 세션이 있으면 X-Session-Token 을 붙인다 (로그인·가입 요청은 withSession=false)
  */
 async function exchange(baseUrl: string, token: string, path: string, init: RequestInit, timeoutMs: number, withSession = true): Promise<{ res: Response; text: string; session: string | null }> {
+  const identity = sessionIdentityVersion();
   const ctrl = new AbortController();
   let readingSession = withSession;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -98,6 +99,8 @@ async function exchange(baseUrl: string, token: string, path: string, init: Requ
       });
       // 헤더만 오고 본문이 멈추는 경우도 제한 시간에 끊는다: 본문을 다 읽은 뒤 타이머를 푼다 (NET-01)
       const text = res.status === 204 || res.status === 304 ? "" : await res.text();
+      // 캐시를 비운 뒤 도착한 옛 성공도 버린다. 조회 취소와 별개로 mutation·조건부 본문이 다시 저장되는 것을 막는다.
+      if (withSession) assertSessionIdentity(identity);
       return { res, text, session };
     })(), expired]);
   } catch (e) {
