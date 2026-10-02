@@ -51,7 +51,7 @@ describe("분석 대기 화면", () => {
 
   it("미등록 종목을 다시 열어도 이미 진행 중이면 만들기 안내로 덮지 않는다", () => {
     h.data = undefined;
-    h.wait = { phase: "recovering", startedAt: 880_000, baselineId: null };
+    h.wait = { phase: "recovering", startedAt: 880_000, requestId: "screen-test-request" };
     const r = render(<AnalysisTab code="005930" kind="company" requested={false} onRequest={h.request} />);
     expect(r.all().some((n) => n.type === "Loading")).toBe(true);
     expect(r.all().some((n) => n.props.title === "AI 분석 만들기")).toBe(false);

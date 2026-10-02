@@ -6,13 +6,17 @@ import { featureOn } from "@/lib/features";
 export interface AnalysisWait {
   phase: "idle" | "checking" | "generating" | "recovering" | "unknown";
   startedAt: number;
-  baselineId?: number | null;
+  requestId?: string;
   message?: string;
   requestError?: string;
 }
 const IDLE: AnalysisWait = { phase: "idle", startedAt: 0 };
 const POLL_MS = 5_000;
 const RECOVERY_MS = 10 * 60_000;
+// 인증값이 아닌 요청 식별자. 앱 실행마다 임의 접두사, 같은 실행에서는 증가하는 번호를 쓴다.
+const REQUEST_SESSION = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+let requestSequence = 0;
+const nextRequestId = () => `a-${REQUEST_SESSION}-${(++requestSequence).toString(36)}`;
 export const analysisBusy = (s: AnalysisWait) => s.phase === "checking" || s.phase === "generating" || s.phase === "recovering";
 
 /** 화면을 나갔다 돌아와도 같은 작업을 기다린다. 결과 확인은 생성 API를 다시 부르지 않는다. */
@@ -53,7 +57,7 @@ export class AnalysisRecovery {
     this.waits.clear();
   }
 
-  /** 기능을 다시 켤 때 중단했던 기준 ID를 이어받아 새 생성 없이 확인한다. */
+  /** 기능을 다시 켤 때 중단했던 요청 ID를 이어받아 새 생성 없이 확인한다. */
   restore(previous: AnalysisRecovery) {
     for (const [key, state] of previous.states) {
       if (state.phase === "idle") continue;
@@ -77,7 +81,7 @@ export class AnalysisRecovery {
     if (existing) return existing;
     if (!this.active()) return Promise.resolve();
     const before = this.snapshot(code, kind);
-    const state: AnalysisWait = { phase: "checking", startedAt: Date.now(), ...(checkOnly ? { baselineId: before.baselineId, requestError: before.requestError } : {}) };
+    const state: AnalysisWait = { phase: checkOnly ? "checking" : "generating", startedAt: Date.now(), requestId: checkOnly ? before.requestId : nextRequestId(), ...(checkOnly ? { requestError: before.requestError } : {}) };
     this.update(code, kind, state);
     // 다음 마이크로태스크에서 실행해 동시 화면 두 개도 같은 Promise를 받게 한다.
     const job = Promise.resolve().then(() => this.run(code, kind, refresh, checkOnly, state)).finally(() => this.jobs.delete(key));
@@ -88,28 +92,38 @@ export class AnalysisRecovery {
   private async run(code: string, kind: AnalysisKind, refresh: boolean, checkOnly: boolean, state: AnalysisWait) {
     try {
       if (!this.active()) return;
-      const first = await this.api.analysisState(code, kind);
-      if (!this.active()) return;
-      if (first.latest) this.save(first.latest);
-      if (checkOnly && state.baselineId !== undefined && first.latest && first.latest.id !== state.baselineId) {
-        this.update(code, kind, IDLE);
-        return;
-      }
-      if (!checkOnly || state.baselineId === undefined) state = { ...state, baselineId: first.latest?.id ?? null };
-      if (checkOnly && !first.running) {
+      if (!state.requestId) {
         this.unknown(code, kind, state);
         return;
       }
-      if (!first.running && !checkOnly) {
-        state = { ...state, phase: "generating" };
-        this.update(code, kind, state);
+      if (!checkOnly) {
+        // 생성은 즉시 시작한다. 이전 본문 조회가 느리거나 실패해도 생성과 정상 응답은 기다리지 않는다.
+        const request = this.api.getAnalysis(code, kind, refresh, state.requestId);
+        let requestSettled = false;
+        const completedPeek = new Promise<Analysis>((resolve) => {
+          void this.api.analysisState(code, kind, state.requestId).then((peek) => {
+            if (requestSettled || !this.active() || this.snapshot(code, kind).requestId !== state.requestId) return;
+            const tracked = peek.request;
+            if (tracked && tracked.id === state.requestId && tracked.status === "completed" && tracked.result?.code === code && tracked.result.kind === kind) {
+              resolve(tracked.result);
+              return;
+            }
+            if (!peek.latest) return;
+            const shown = this.qc.getQueryData<Analysis>(this.key(code, kind));
+            // 늦게 도착한 보조 응답으로 더 최근의 본문을 되돌리지 않는다. ID 비교는 본문 보전에만 쓴다.
+            if (!shown || peek.latest.id > shown.id) this.save(peek.latest);
+          }).catch(() => undefined);
+        });
         try {
-          const result = await this.api.getAnalysis(code, kind, refresh);
+          // 본 응답이 늦어도 같은 요청의 완료가 확인되면 먼저 받은 결과를 바로 보여 준다.
+          const result = await Promise.race([request, completedPeek]);
+          requestSettled = true;
           if (!this.active()) return;
           this.save(result);
           this.update(code, kind, IDLE);
           return;
         } catch (error) {
+          requestSettled = true;
           state = { ...state, requestError: error instanceof Error ? error.message : "분석 요청에 실패했습니다" };
           // 응답이 끊겨도 서버는 계속 처리할 수 있다. 새 요청 대신 저장된 결과만 확인한다.
         }
@@ -120,15 +134,18 @@ export class AnalysisRecovery {
       let errors = 0;
       while (this.active() && Date.now() < deadline) {
         try {
-          const next = await this.api.analysisState(code, kind);
+          const next = await this.api.analysisState(code, kind, state.requestId);
           if (!this.active()) return;
           errors = 0;
-          if (next.latest && next.latest.id !== state.baselineId) {
-            this.save(next.latest);
+          const tracked = next.request;
+          if (!tracked || tracked.id !== state.requestId) break;
+          if (tracked.status === "completed" && tracked.result?.code === code && tracked.result.kind === kind) {
+            this.save(tracked.result);
             this.update(code, kind, IDLE);
             return;
           }
-          if (!next.running) break;
+          if (tracked.status === "failed") state = { ...state, requestError: state.requestError ?? "서버에서 분석 요청을 완료하지 못했습니다" };
+          if (tracked.status !== "pending") break;
         } catch (error) {
           state = { ...state, requestError: state.requestError ?? (error instanceof Error ? error.message : "서버 상태를 확인하지 못했습니다") };
           if (++errors >= 3) break;

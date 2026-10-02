@@ -1,5 +1,5 @@
 import type { Db } from "../db/index.js";
-import { NotFoundError } from "../lib/errors.js";
+import { AppError, NotFoundError } from "../lib/errors.js";
 import { seoulDate, seoulDateOf, seoulIso } from "../lib/time.js";
 import type { TextGenerator } from "../llm/generator.js";
 import { renderTemplate, type PromptName, type PromptStore } from "../llm/prompts.js";
@@ -31,6 +31,19 @@ export interface Analysis {
   cached: boolean;
 }
 
+export interface AnalysisRequestState {
+  id: string;
+  status: "pending" | "completed" | "failed" | "unknown";
+  result: Analysis | null;
+}
+
+interface TrackedAnalysisRequest extends AnalysisRequestState {
+  promise: Promise<Analysis>;
+  settledAt: number | null;
+}
+const REQUEST_LIMIT = 256;
+const REQUEST_TTL_MS = 30 * 60_000;
+
 export interface AnalysisServiceDeps {
   db: Db;
   collector: DataCollector;
@@ -45,6 +58,7 @@ export interface AnalysisServiceDeps {
 export class AnalysisService {
   private readonly now: () => Date;
   private readonly inflight = new Map<string, Promise<Analysis>>();
+  private readonly requests = new Map<string, TrackedAnalysisRequest>();
 
   constructor(private readonly deps: AnalysisServiceDeps) {
     this.now = deps.now ?? (() => new Date());
@@ -61,6 +75,38 @@ export class AnalysisService {
     const p = this.generate(code, kind).finally(() => this.inflight.delete(key));
     this.inflight.set(key, p);
     return p;
+  }
+
+  /** 생성 요청을 즉시 시작한다. 같은 요청은 재생성하지 않고, 진행 중인 같은 종목 분석에도 합류한다. */
+  getTracked(code: string, kind: AnalysisKind, requestId: string, opts: { refresh?: boolean } = {}): Promise<Analysis> {
+    this.pruneRequests();
+    const key = `${code}:${kind}:${requestId}`;
+    const existing = this.requests.get(key);
+    if (existing) return existing.promise;
+    // 진행 중이거나 아직 회수할 수 있는 기록을 지우면 같은 요청이 AI를 다시 부를 수 있다.
+    if (this.requests.size >= REQUEST_LIMIT) throw new AppError(429, "ANALYSIS_TRACKING_BUSY", "분석 결과 확인 요청이 많습니다. 잠시 뒤 다시 시도해 주세요.");
+    // 다른 화면이 갱신 중이면 유효한 예전 캐시보다 그 진행 결과를 먼저 기다린다.
+    const work = this.inflight.get(`${code}:${kind}`) ?? this.get(code, kind, opts);
+    const tracked: TrackedAnalysisRequest = { id: requestId, status: "pending", result: null, settledAt: null, promise: work };
+    tracked.promise = work.then((result) => {
+      tracked.status = "completed";
+      tracked.result = result;
+      tracked.settledAt = this.now().getTime();
+      return result;
+    }, (error: unknown) => {
+      tracked.status = "failed";
+      tracked.settledAt = this.now().getTime();
+      throw error;
+    });
+    this.requests.set(key, tracked);
+    return tracked.promise;
+  }
+
+  private pruneRequests(): void {
+    const now = this.now().getTime();
+    for (const [key, request] of this.requests) {
+      if (request.settledAt !== null && now - request.settledAt >= REQUEST_TTL_MS) this.requests.delete(key);
+    }
   }
 
   private async generate(code: string, kind: AnalysisKind): Promise<Analysis> {
@@ -131,9 +177,18 @@ export class AnalysisService {
   }
 
   /** 저장된 결과와 이 서버의 진행 여부만 확인한다. 자료 수집·AI 생성은 시작하지 않는다. */
-  async state(code: string, kind: AnalysisKind): Promise<{ latest: Analysis | null; running: boolean }> {
+  async state(code: string, kind: AnalysisKind, requestId?: string): Promise<{ latest: Analysis | null; running: boolean; request?: AnalysisRequestState }> {
     const latest = await this.latest(code, kind);
-    return { latest, running: this.inflight.has(`${code}:${kind}`) };
+    const running = this.inflight.has(`${code}:${kind}`);
+    if (requestId === undefined) return { latest, running };
+    this.pruneRequests();
+    const tracked = this.requests.get(`${code}:${kind}:${requestId}`);
+    return {
+      latest, running,
+      request: tracked
+        ? { id: requestId, status: tracked.status, result: tracked.result }
+        : { id: requestId, status: "unknown", result: null },
+    };
   }
 }
 

@@ -675,6 +675,15 @@ export interface Analysis {
 export interface AnalysisState {
   latest: Analysis | null;
   running: boolean;
+  /** 요청 ID를 보낸 경우에만 제공. 예전 서버에는 없다. */
+  request?: AnalysisRequestState;
+}
+
+export interface AnalysisRequestState {
+  id: string;
+  status: "pending" | "completed" | "failed" | "unknown";
+  /** 완료된 해당 요청의 결과. 다른 요청이 저장한 최신 결과와 구별한다. */
+  result: Analysis | null;
 }
 
 export interface NewsItem {

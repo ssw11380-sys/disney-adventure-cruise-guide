@@ -208,9 +208,11 @@ export function createApi(baseUrl: string, token = "", opts: ApiOptions = {}) {
     removeStock: (code: string) => send<void>("DELETE", stockPath(code)),
     getQuote: (code: string, fresh = false) => get<Quote>(`${stockPath(code)}/quote${fresh ? "?fresh=1" : ""}`),
     getCandles: (code: string, period: CandlePeriod, count: number) => get<CandleSeries>(`${stockPath(code)}/candles?period=${period}&count=${count}`),
-    getAnalysis: (code: string, kind: AnalysisKind, refresh = false) =>
-      get<Analysis>(`${stockPath(code)}/analysis/${kind}${refresh ? "?refresh=1" : ""}`, 180_000),
-    analysisState: (code: string, kind: AnalysisKind) => get<AnalysisState>(`${stockPath(code)}/analysis/${kind}/state`, 10_000),
+    getAnalysis: (code: string, kind: AnalysisKind, refresh = false, requestId?: string) => {
+      const query = [refresh ? "refresh=1" : "", requestId ? `requestId=${encodeURIComponent(requestId)}` : ""].filter(Boolean).join("&");
+      return get<Analysis>(`${stockPath(code)}/analysis/${kind}${query ? `?${query}` : ""}`, 180_000);
+    },
+    analysisState: (code: string, kind: AnalysisKind, requestId?: string) => get<AnalysisState>(`${stockPath(code)}/analysis/${kind}/state${requestId ? `?requestId=${encodeURIComponent(requestId)}` : ""}`, 10_000),
     getStockNews: (code: string) => get<StockNews>(`${stockPath(code)}/news`),
     /** 지표 점수 (3-44, 플래그 indicatorScores). 플래그가 꺼져 있거나 예전 서버·모르는 종목이면 404 → 부르는 쪽이 "없음"으로 본다 */
     indicatorScores: (code: string) => get<IndicatorScores>(`/api/scores/${encodeURIComponent(code)}`, 20_000),
