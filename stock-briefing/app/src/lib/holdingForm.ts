@@ -27,7 +27,7 @@ const BAD_NUMBER = "수량과 평균 단가는 0보다 큰 숫자여야 합니�
 export function holdingInput(quantity: string, avgPrice: string): { quantity: number | null; avgPrice: number | null; noAvg: boolean } | { error: string } {
   const qty = parseNum(quantity);
   const avg = parseNum(avgPrice);
-  if ((qty !== null && !(qty > 0)) || (avg !== null && !(avg > 0))) return { error: BAD_NUMBER };
+  if ((qty !== null && !(qty > 0 && Number.isFinite(qty))) || (avg !== null && !(avg > 0 && Number.isFinite(avg)))) return { error: BAD_NUMBER };
   return { quantity: qty, avgPrice: avg, noAvg: qty !== null && avg === null };
 }
 
@@ -42,7 +42,7 @@ export function holdingPatch(
   const out: { quantity?: number | null; avgPrice?: number | null } = {};
   if (now.quantity.trim() !== initial.quantity.trim()) out.quantity = parseNum(now.quantity);
   if (now.avgPrice.trim() !== initial.avgPrice.trim()) out.avgPrice = parseNum(now.avgPrice);
-  for (const v of [out.quantity, out.avgPrice]) if (v !== undefined && v !== null && !(v > 0)) return { error: BAD_NUMBER };
+  for (const v of [out.quantity, out.avgPrice]) if (v !== undefined && v !== null && !(v > 0 && Number.isFinite(v))) return { error: BAD_NUMBER };
   return out;
 }
 
@@ -75,11 +75,13 @@ export interface Draft {
   stale: boolean;
 }
 
-/** 같은 값인지 볼 때의 모양: 숫자 칸은 쉼표·단위를 뺀 숫자("1,350,000" = "1350000"), 메모는 앞뒤 공백 제외 (저장할 때와 같게) */
+/** 같은 값인지 볼 때의 모양: 숫자 칸은 저장과 같이 쉼표만 제거하고, 잘못된 값과 부호는 보존한다. 메모는 앞뒤 공백 제외 */
 export type Norm = (s: string) => string;
 export const normNum: Norm = (s) => {
-  const t = s.replace(/[^0-9.]/g, "");
-  return t ? String(Number(t)) : "";
+  const t = s.trim().replace(/,/g, "");
+  if (!t) return "";
+  const value = Number(t);
+  return Number.isFinite(value) ? String(value) : `invalid:${t}`;
 };
 export const normText: Norm = (s) => s.trim();
 
