@@ -43,14 +43,18 @@ export const DEVICE_KEY = "auth.device.v1";
  */
 export const PENDING_LOGOUT_KEY = "auth.pendingLogout.v1";
 const PENDING_MAX = 5;
+/** API가 없는 부팅·위젯 읽기도 끝나야 한다. 앱의 건강 확인 요청과 같은 8초 상한이다. */
+const SESSION_READ_TIMEOUT_MS = 8_000;
 
 export type EndReason = "invalid" | "logout";
 
 let storage: KeyValueStorage | null = null;
 let current: StoredSession | null = null;
 let seen: { apiUrl: string; on: boolean } | null = null;
-let loading: Promise<void> | null = null;
+let loading: { promise: Promise<void>; cancel: (error: SessionReadError) => void } | null = null;
 let loaded = false;
+let loadFailed = false;
+let identityVersion = 0;
 let ended: EndReason | null = null;
 /** 로그인·가입이 404(예전 서버·플래그 꺼짐)였던 서버 주소 — 이번 실행 동안 로그인 없이 지금처럼 (fail-open) */
 let failOpen: string | null = null;
@@ -96,11 +100,27 @@ function emit(): void {
   for (const l of [...listeners]) l();
 }
 
+/** 저장소 오류를 서버 연결 오류나 로그인 해제로 바꾸지 않는다. 내부 저장값·오류 내용은 싣지 않는다. */
+export class SessionReadError extends Error {
+  constructor(public readonly code: "SESSION_STORAGE" | "SESSION_CHANGED" = "SESSION_STORAGE", message = "저장된 로그인 정보를 읽지 못했습니다. 잠시 뒤 다시 시도해 주세요.") {
+    super(message);
+    this.name = "SessionReadError";
+  }
+}
+
+function invalidateSessionRead() {
+  identityVersion++;
+  const previous = loading;
+  loading = null;
+  previous?.cancel(new SessionReadError("SESSION_CHANGED", "로그인 정보가 바뀌었습니다. 다시 시도해 주세요."));
+}
+
 /** 저장소를 끼운다 (앱 시작·위젯 작업). 다시 끼우면 다시 읽는다 */
 export function installSessionStorage(s: KeyValueStorage | null): void {
+  invalidateSessionRead();
   storage = s;
-  loading = null;
   loaded = false;
+  loadFailed = false;
 }
 
 function isUser(u: unknown): u is AccountUser {
@@ -127,45 +147,75 @@ function parseSession(raw: string | null): StoredSession | null {
 
 /**
  * 저장된 세션·기기 표시·못 알린 로그아웃을 한 번 읽는다 (여러 번 불러도 한 번). 저장소가 없으면(테스트) 바로 끝.
- * 읽기가 실패해도 저장된 값을 지우지 않는다 (다음 실행에 다시 읽는다)
+ * 시작 화면용 호출은 오류를 던지지 않는다. API 요청은 readSession으로 오류를 받고 다음 요청에서 다시 읽는다.
  */
-export function loadSession(): Promise<void> {
-  if (loaded) return Promise.resolve();
+export async function loadSession(): Promise<void> {
+  await readSession().catch(() => undefined);
+}
+
+/** 같은 읽기를 공유하되 기한이 지나면 버린다. 기기 읽기 자체는 취소할 수 없어 늦은 결과의 적용을 막는다. */
+function readSession(signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new SessionReadError());
+  if (loaded && !loadFailed) return Promise.resolve();
   if (!storage) {
     loaded = true;
     return Promise.resolve();
   }
   const s = storage;
-  loading ??= (async () => {
-    try {
-      const [rawSession, rawDevice, rawPending] = await Promise.all([s.getItem(SESSION_KEY), s.getItem(DEVICE_KEY), s.getItem(PENDING_LOGOUT_KEY)]);
+  if (!loading) {
+    let resolve!: () => void;
+    let reject!: (error: SessionReadError) => void;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+    const attempt = { promise, cancel: (error: SessionReadError) => finish(error) };
+    const finish = (error?: SessionReadError) => {
+      clearTimeout(timer);
+      if (loading === attempt) {
+        loading = null;
+        loaded = true;
+        loadFailed = !!error;
+        emit();
+      }
+      if (error) reject(error);
+      else resolve();
+    };
+    loading = attempt;
+    timer = setTimeout(() => finish(new SessionReadError("SESSION_STORAGE", "저장된 로그인 정보를 읽는 시간이 초과됐습니다. 다시 시도해 주세요.")), SESSION_READ_TIMEOUT_MS);
+    void Promise.resolve().then(async () => {
       try {
-        const list = JSON.parse(rawPending ?? "[]") as unknown;
-        if (Array.isArray(list)) {
-          const read = list.filter((x): x is { apiUrl: string; token: string } => !!x && typeof x.apiUrl === "string" && typeof x.token === "string" && !!x.token);
-          pendingLogouts = [...pendingLogouts, ...read.filter((x) => !pendingLogouts.some((p) => p.token === x.token))].slice(-PENDING_MAX);
-        }
-      } catch {
-        /* 깨진 값은 무시 */
-      }
-      // 읽는 사이 로그인했으면 그 세션을 둔다
-      current ??= parseSession(rawSession);
-      if (!seen && rawDevice) {
+        const [rawSession, rawDevice, rawPending] = await Promise.all([s.getItem(SESSION_KEY), s.getItem(DEVICE_KEY), s.getItem(PENDING_LOGOUT_KEY)]);
+        if (loading !== attempt) return;
         try {
-          const d = JSON.parse(rawDevice) as { apiUrl?: unknown; accountsSeen?: unknown };
-          if (typeof d.apiUrl === "string") seen = { apiUrl: d.apiUrl, on: d.accountsSeen === true };
+          const list = JSON.parse(rawPending ?? "[]") as unknown;
+          if (Array.isArray(list)) {
+            const read = list.filter((x): x is { apiUrl: string; token: string } => !!x && typeof x.apiUrl === "string" && typeof x.token === "string" && !!x.token);
+            pendingLogouts = [...pendingLogouts, ...read.filter((x) => !pendingLogouts.some((p) => p.token === x.token))].slice(-PENDING_MAX);
+          }
         } catch {
-          /* 무시 */
+          /* 깨진 값은 무시 */
         }
+        // 읽는 사이 로그인했으면 그 세션을 둔다
+        current ??= parseSession(rawSession);
+        if (!seen && rawDevice) {
+          try {
+            const d = JSON.parse(rawDevice) as { apiUrl?: unknown; accountsSeen?: unknown };
+            if (typeof d.apiUrl === "string") seen = { apiUrl: d.apiUrl, on: d.accountsSeen === true };
+          } catch {
+            /* 무시 */
+          }
+        }
+        finish();
+      } catch {
+        finish(new SessionReadError());
       }
-    } catch {
-      /* 읽지 못함: 세션 없이 (저장된 값은 그대로) */
-    } finally {
-      loaded = true;
-      emit();
-    }
-  })();
-  return loading;
+    });
+  }
+  const attempt = loading;
+  if (!signal) return attempt.promise;
+  const onAbort = () => attempt.cancel(new SessionReadError("SESSION_STORAGE", "저장된 로그인 정보를 읽는 시간이 초과됐습니다. 다시 시도해 주세요."));
+  signal.addEventListener("abort", onAbort, { once: true });
+  if (signal.aborted) onAbort();
+  return attempt.promise.finally(() => signal.removeEventListener("abort", onAbort));
 }
 
 export function sessionLoaded(): boolean {
@@ -202,8 +252,11 @@ export function persistsPersonal(apiUrl: string): boolean {
 }
 
 /** 요청에 붙일 세션 토큰 (읽기가 끝나길 기다린다) */
-export async function sessionTokenFor(apiUrl: string): Promise<string | null> {
-  await loadSession();
+export async function sessionTokenFor(apiUrl: string, signal?: AbortSignal): Promise<string | null> {
+  const before = identityVersion;
+  await readSession(signal);
+  if (before !== identityVersion) throw new SessionReadError("SESSION_CHANGED", "로그인 정보가 바뀌었습니다. 다시 시도해 주세요.");
+  if (signal?.aborted) throw new SessionReadError();
   return sessionFor(apiUrl)?.token ?? null;
 }
 
@@ -214,8 +267,10 @@ export async function sessionTokenFor(apiUrl: string): Promise<string | null> {
  */
 export type BackgroundSession = { kind: "stored"; token: string } | { kind: "memory" } | { kind: "none" };
 
-export async function backgroundSessionFor(apiUrl: string): Promise<BackgroundSession> {
-  await loadSession();
+export async function backgroundSessionFor(apiUrl: string, signal?: AbortSignal): Promise<BackgroundSession> {
+  const before = identityVersion;
+  await sessionTokenFor(apiUrl, signal);
+  if (before !== identityVersion) throw new SessionReadError("SESSION_CHANGED", "로그인 정보가 바뀌었습니다. 다시 시도해 주세요.");
   const s = sessionFor(apiUrl);
   if (!s) return { kind: "none" };
   return s.remember ? { kind: "stored", token: s.token } : { kind: "memory" };
@@ -232,6 +287,9 @@ async function write(fn: (s: KeyValueStorage) => Promise<void>): Promise<void> {
 
 /** 로그인·가입 성공: 자동 로그인 켬이면 기기에 저장, 끔이면 메모리에만 (전에 저장한 세션은 지운다) */
 export async function saveSession(s: Omit<StoredSession, "savedAt"> & { savedAt?: number }): Promise<void> {
+  invalidateSessionRead();
+  loaded = true;
+  loadFailed = false;
   const prev = current;
   current = { ...s, apiUrl: clean(s.apiUrl), savedAt: s.savedAt ?? Date.now() };
   // 앞 사람의 캐시를 화면이 다시 그려지기 전에 비운다 (자동 로그인을 끈 채 앱을 닫아 세션이 없던 경우도 — 기기에 남은 캐시는 앞 사람 것일 수 있다)
@@ -260,7 +318,11 @@ export async function updateSessionUser(apiUrl: string, user: AccountUser): Prom
 
 /** 세션을 지운다 (직접 로그아웃·세션 끊김). 기기 표시(계정 모드를 봄)는 남긴다 — 다음에 로그인 화면이 나오게 */
 export async function clearSession(reason: EndReason): Promise<void> {
-  if (!current) return;
+  const wasReading = !!loading;
+  invalidateSessionRead();
+  loaded = true;
+  loadFailed = false;
+  if (!current) { if (wasReading) emit(); return; }
   const prev = current;
   current = null;
   ended = reason;
@@ -347,7 +409,7 @@ export async function addPendingLogout(apiUrl: string, token: string): Promise<v
 
 /** 이 서버에 다시 알려야 할 로그아웃 세션 토큰 (읽기가 끝나길 기다린다) */
 export async function pendingLogoutsFor(apiUrl: string): Promise<string[]> {
-  await loadSession();
+  await readSession();
   return pendingLogouts.filter((p) => sameServer(p.apiUrl, apiUrl)).map((p) => p.token);
 }
 
@@ -371,11 +433,13 @@ export function sessionVersion(): number {
 
 /** 테스트용: 모듈 상태를 처음으로 */
 export function resetSessionForTests(): void {
+  invalidateSessionRead();
   storage = null;
   current = null;
   seen = null;
   loading = null;
   loaded = false;
+  loadFailed = false;
   ended = null;
   failOpen = null;
   initialPrompt = false;

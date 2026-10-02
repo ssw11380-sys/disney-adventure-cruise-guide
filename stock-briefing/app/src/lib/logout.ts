@@ -73,7 +73,10 @@ function reachedServer(e: unknown): boolean {
 
 /** 알리지 못했던 로그아웃을 다시 알린다 (앱 루트가 켤 때·앞으로 돌아왔을 때). 서버가 답하면(끝남·이미 끝난 세션) 지우고, 닿지 않으면 남긴다 */
 export async function flushPendingLogouts(api: Api, apiUrl: string): Promise<void> {
-  for (const token of await pendingLogoutsFor(apiUrl)) {
+  // 저장소를 못 읽으면 다음 실행·복귀 때 다시 확인한다. 빈 목록으로 덮어쓰거나 서버 요청을 보내지 않는다.
+  const pending = await pendingLogoutsFor(apiUrl).catch(() => null);
+  if (!pending) return;
+  for (const token of pending) {
     try {
       await api.logoutSession(token);
       await dropPendingLogout(token);

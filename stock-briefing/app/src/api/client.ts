@@ -42,7 +42,7 @@ import type { AppErrorSummary, Evaluation,
   ReconcileBadgeBody,
 } from "./types";
 import { authMessage, NOT_JSON, SESSION_INVALID, SESSION_REQUIRED } from "@/lib/connectionError";
-import { handleSessionInvalid, markAccountsSeen, sessionTokenFor, type AccountUser } from "@/lib/session";
+import { handleSessionInvalid, markAccountsSeen, sessionFor, sessionTokenFor, SessionReadError, type AccountUser } from "@/lib/session";
 
 import { condDrop, condGet, condHeaders, condKey, condNote, condPut, isDelta, rebuild } from "./condCache";
 
@@ -68,25 +68,41 @@ export class ApiRequestError extends Error {
  * 계정 A단계: 이 서버 주소의 로그인 세션이 있으면 X-Session-Token 을 붙인다 (로그인·가입 요청은 withSession=false)
  */
 async function exchange(baseUrl: string, token: string, path: string, init: RequestInit, timeoutMs: number, withSession = true): Promise<{ res: Response; text: string; session: string | null }> {
-  const session = withSession ? await sessionTokenFor(baseUrl) : null;
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  let readingSession = withSession;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // 로그인 정보 읽기부터 본문 끝까지 같은 예산을 쓴다. 기한 뒤 늦은 읽기·본문도 성공으로 넘기지 않는다.
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new ApiRequestError(0, readingSession ? "SESSION_STORAGE" : "TIMEOUT", readingSession ? "저장된 로그인 정보를 읽는 시간이 초과됐습니다. 다시 시도해 주세요." : "서버 응답이 없습니다 (시간 초과)", path, baseUrl);
+      ctrl.abort();
+      reject(error);
+    }, timeoutMs);
+  });
   try {
-    const res = await fetch(`${baseUrl}${path}`, {
-      ...init,
-      headers: {
-        accept: "application/json",
-        ...(init.body ? { "content-type": "application/json" } : {}),
-        ...(token ? { authorization: `Bearer ${token}` } : {}),
-        ...(session ? { "x-session-token": session } : {}),
-        ...(init.headers ?? {}),
-      },
-      signal: ctrl.signal,
-    });
-    // 헤더만 오고 본문이 멈추는 경우도 제한 시간에 끊는다: 타이머는 본문을 다 읽은 뒤에 푼다 (NET-01)
-    const text = res.status === 204 || res.status === 304 ? "" : await res.text();
-    return { res, text, session };
+    return await Promise.race([(async () => {
+      const session = withSession ? await sessionTokenFor(baseUrl, ctrl.signal) : null;
+      if (ctrl.signal.aborted) throw new SessionReadError();
+      if (withSession && session !== (sessionFor(baseUrl)?.token ?? null)) throw new SessionReadError("SESSION_CHANGED", "로그인 정보가 바뀌었습니다. 다시 시도해 주세요.");
+      readingSession = false;
+      const res = await fetch(`${baseUrl}${path}`, {
+        ...init,
+        headers: {
+          accept: "application/json",
+          ...(init.body ? { "content-type": "application/json" } : {}),
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
+          ...(session ? { "x-session-token": session } : {}),
+          ...(init.headers ?? {}),
+        },
+        signal: ctrl.signal,
+      });
+      // 헤더만 오고 본문이 멈추는 경우도 제한 시간에 끊는다: 본문을 다 읽은 뒤 타이머를 푼다 (NET-01)
+      const text = res.status === 204 || res.status === 304 ? "" : await res.text();
+      return { res, text, session };
+    })(), expired]);
   } catch (e) {
+    if (e instanceof ApiRequestError) throw e;
+    if (e instanceof SessionReadError) throw new ApiRequestError(0, e.code, e.message, path, baseUrl);
     const aborted = ctrl.signal.aborted || (e as Error).name === "AbortError";
     throw new ApiRequestError(0, aborted ? "TIMEOUT" : "NETWORK", aborted ? "서버 응답이 없습니다 (시간 초과)" : `서버에 연결할 수 없습니다: ${baseUrl}`, path, baseUrl);
   } finally {

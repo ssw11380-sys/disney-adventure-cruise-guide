@@ -26,7 +26,7 @@ import { DEFAULT_PREFS, type NotifyPrefs } from "@/lib/briefingDigest";
 import { logWidgetRefresh } from "@/lib/widgetRefreshLog";
 // 계정 A단계: 위젯·백그라운드 작업(앱과 다른 JS 로 켜질 수 있다)도 기기에 저장한 로그인 세션으로 묻는다
 import "@/lib/sessionStorage";
-import { backgroundSessionFor, handleSessionInvalid, markAccountsSeen, type BackgroundSession } from "@/lib/session";
+import { backgroundSessionFor, handleSessionInvalid, markAccountsSeen, SessionReadError } from "@/lib/session";
 
 /**
  * 로그인 세션 머리글 (계정 A단계). **기기에 저장한 세션(자동 로그인 켬)만** 보낸다 (검증 4차 M1).
@@ -34,7 +34,7 @@ import { backgroundSessionFor, handleSessionInvalid, markAccountsSeen, type Back
  * (앱을 닫으면 사라져야 할 세션이라 홈 화면에 잔고를 남기지 않게). 세션이 없으면 머리글 없이 — 계정 모드 서버는 개인 데이터를 주지 않는다 (403)
  */
 async function withSession(apiUrl: string): Promise<{ headers: Record<string, string>; sent: string | null }> {
-  const b = await backgroundSessionFor(apiUrl).catch((): BackgroundSession => ({ kind: "none" }));
+  const b = await backgroundSessionFor(apiUrl);
   if (b.kind === "memory") throw new LoginNeededError("login");
   return b.kind === "stored" ? { headers: { "x-session-token": b.token }, sent: b.token } : { headers: {}, sent: null };
 }
@@ -457,7 +457,7 @@ export async function pushWidgetData(o: {
   const now = Date.now();
   const { apiUrl, rowKrw } = await readSettings();
   // 자동 로그인을 끈 세션(메모리에만)이면 앱이 받은 잔고라도 위젯에 적지 않는다 — '로그인하면 보여요' (검증 4차 M1: 앱을 닫으면 사라져야 할 세션)
-  if ((await backgroundSessionFor(apiUrl).catch((): BackgroundSession => ({ kind: "none" }))).kind === "memory") {
+  if ((await backgroundSessionFor(apiUrl)).kind === "memory") {
     await clearWidgetAccountData();
     const out = signedOutWidgetData(now);
     await saveWidgetView(out, apiUrl);
@@ -771,7 +771,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
   let ok = false;
   try {
     // 자동 로그인을 끈 세션(메모리에만)이면 받아 둔 응답도 쓰지 않는다 — 개인 데이터 없이 '로그인하면 보여요' (검증 4차 M1)
-    if ((await backgroundSessionFor(apiUrl).catch((): BackgroundSession => ({ kind: "none" }))).kind === "memory") throw new LoginNeededError("login");
+    if ((await backgroundSessionFor(apiUrl)).kind === "memory") throw new LoginNeededError("login");
     // 위젯이 스스로 갱신할 때는 백그라운드 작업이 받아 둔 응답을 다시 쓴다 (위젯마다 서버를 부르지 않게)
     const reused = opts.reuse ? await readCachedPayload(apiUrl) : null;
     // 칩은 플래그로 거른 것 (연장 세션 ext 는 widgetExtended 가 켜져 있을 때만 장중처럼 15분)
@@ -822,6 +822,8 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
     ok = true;
   } catch (e) {
     out.error = e instanceof Error ? e.message : String(e);
+    // 누구의 세션인지 읽지 못했을 때는 개인 캐시로 대신 그리거나 지우지 않는다. 다음 갱신에서 다시 읽는다.
+    if (e instanceof SessionReadError) { keepBoard(out, prevView); return out; }
     if (e instanceof LoginNeededError) {
       // 로그인이 필요함: 앞 사람(주인)의 잔고·브리핑으로 그리지 않고 적어 둔 개인 데이터를 지운다. 지수·환율 판·플래그는 개인 데이터가 아니라 남긴다
       await clearWidgetAccountData();
