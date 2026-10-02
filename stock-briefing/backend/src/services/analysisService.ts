@@ -117,6 +117,7 @@ export class AnalysisService {
       .where("code", "=", code)
       .where("kind", "=", kind)
       .orderBy("created_at", "desc")
+      .orderBy("id", "desc")
       .limit(1)
       .executeTakeFirst();
     if (!r) return null;
@@ -127,6 +128,12 @@ export class AnalysisService {
       /* ignore */
     }
     return { id: r.id, code: r.code, kind: r.kind as AnalysisKind, content: r.content, missing, model: r.model, createdAt: r.created_at, cached: true };
+  }
+
+  /** 저장된 결과와 이 서버의 진행 여부만 확인한다. 자료 수집·AI 생성은 시작하지 않는다. */
+  async state(code: string, kind: AnalysisKind): Promise<{ latest: Analysis | null; running: boolean }> {
+    const latest = await this.latest(code, kind);
+    return { latest, running: this.inflight.has(`${code}:${kind}`) };
   }
 }
 

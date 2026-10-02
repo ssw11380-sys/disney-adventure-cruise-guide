@@ -69,6 +69,8 @@ export interface BriefingServiceDeps {
    * 브리핑 한 건을 만들 때 한 번 읽는다. 없거나 읽기가 실패하면 끔 (예전 프롬프트·요약 그대로)
    */
   safeWording?: () => Promise<boolean>;
+  /** 한 실행에서 한 번 읽는다. 켜면 두 종목을 준비하고 저장·알림은 등록 순서를 지킨다. 없거나 읽기 실패 시 순차 실행 */
+  parallel?: () => Promise<boolean>;
 }
 
 export interface BriefingListener {
@@ -112,7 +114,7 @@ export interface RunProgress {
 
 /**
  * 브리핑 파이프라인: 수집 → 프롬프트 조립 → Claude(상세) → Claude(요약) → 저장.
- * 종목별로 순차 실행한다(외부 API rate limit). 실패도 저장해서 앱에서 "생성 실패" 를 볼 수 있게 한다.
+ * 병렬 플래그가 켜지면 최대 두 종목을 준비한다. 저장·알림은 등록 순서를 지키며 실패도 저장한다.
  */
 export class BriefingService {
   private readonly now: () => Date;
@@ -206,12 +208,12 @@ export class BriefingService {
       }
     }
     try {
+      const parallel = await this.parallelOn();
       let stocks = await this.deps.db.selectFrom("registered_stocks").selectAll().orderBy("created_at").execute();
       if (opts.codes?.length) stocks = stocks.filter((s) => opts.codes!.includes(s.code));
       progress.total = stocks.length;
       await this.deps.collector.warm?.(stocks.map((s) => s.code));
-      for (const row of stocks) {
-        progress.done = results.length;
+      const runStock = async (row: (typeof stocks)[number], waitTurn?: () => Promise<void>): Promise<void> => {
         const stock: RegisteredStock = {
           code: row.code, name: row.name, market: row.market as RegisteredStock["market"],
           quantity: row.quantity, avgPrice: row.avg_price, memo: row.memo, createdAt: row.created_at, updatedAt: row.updated_at,
@@ -219,19 +221,32 @@ export class BriefingService {
         if (!opts.force) {
           const existing = await this.find(stock.code, date, session);
           if (existing && existing.status === "ok" && !madeBefore(existing, opts.staleBefore)) {
+            if (waitTurn) await waitTurn();
             results.push({ code: stock.code, name: stock.name, status: "ok", briefingId: existing.id, error: null, summary: existing.summary });
-            continue;
+            return;
           }
           // 휴장일(공휴일·주말)에는 시세가 움직이지 않아 의미 없는 브리핑이 되므로 건너뛴다 (강제 실행은 예외)
           if (!(await tradingFor(stock.code))) {
+            if (waitTurn) await waitTurn();
             this.deps.log?.info({ code: stock.code, session }, "휴장일이라 브리핑 건너뜀");
             results.push({ code: stock.code, name: stock.name, status: "skipped", briefingId: null, error: "휴장일", summary: null });
-            continue;
+            return;
           }
         }
-        const { briefing: b, changeRate, error } = await this.generate(stock, session, date);
+        const { briefing: b, changeRate, error } = await this.generate(stock, session, date, waitTurn);
         if (!error) created.push({ briefing: b, changeRate });
         results.push({ code: b.code, name: stock.name, status: error ? "failed" : "ok", briefingId: b.id, error, summary: error ? null : b.summary });
+      };
+      if (parallel) {
+        await runTwoOrdered(stocks, async (row, waitTurn) => {
+          await runStock(row, waitTurn);
+          progress.done = results.length;
+        });
+      } else {
+        for (const row of stocks) {
+          progress.done = results.length;
+          await runStock(row);
+        }
       }
     } finally {
       // 도중에 예외로 끝나도 이미 만든 브리핑은 알린다
@@ -276,6 +291,14 @@ export class BriefingService {
     return { session, date, results, startedAt, finishedAt };
   }
 
+  private async parallelOn(): Promise<boolean> {
+    try {
+      return (await this.deps.parallel?.()) === true;
+    } catch {
+      return false;
+    }
+  }
+
   /** 직전 브리핑(오늘 이전 세션 또는 어제) 요약 — 같은 말 반복을 피하고 "달라진 점"을 쓰게 한다 */
   private async previousSummary(code: string, date: string, session: BriefingSession): Promise<string | null> {
     const rows = await this.deps.db
@@ -314,6 +337,7 @@ export class BriefingService {
     stock: RegisteredStock,
     session: BriefingSession,
     date: string,
+    waitTurn?: () => Promise<void>,
   ): Promise<{ briefing: Briefing; changeRate: number | null; error: string | null }> {
     const log = this.deps.log;
     // 브리핑 2차 6: 한 건을 만드는 동안 같은 값을 쓴다 (꺼져 있으면 프롬프트·데이터·요약·상세가 예전과 한 글자도 같다)
@@ -382,6 +406,9 @@ export class BriefingService {
     }
 
     const status: "ok" | "failed" = error ? "failed" : "ok";
+    // 자료·상세·요약 준비만 겹친다. 앞 종목의 저장과 알림이 끝나야 시각을 정하고 저장한다.
+    // 앞 종목에서 예상 밖 예외가 나면 뒤 종목의 준비 결과를 저장하지 않는다.
+    if (waitTurn) await waitTurn();
     const createdAt = seoulIso(this.now());
     const values = {
       code: stock.code,
@@ -470,6 +497,44 @@ export class BriefingService {
     }
     return out;
   }
+}
+
+/** 두 종목까지 준비하되 저장 차례를 지킨다. 예외가 나면 새 작업을 멈추고 이미 시작한 작업을 모두 회수한다. */
+async function runTwoOrdered<T>(items: readonly T[], run: (item: T, waitTurn: () => Promise<void>) => Promise<void>): Promise<void> {
+  const turns = items.map(() => {
+    let release!: () => void;
+    const done = new Promise<void>((resolve) => { release = resolve; });
+    return { done, release };
+  });
+  const failures: Array<{ index: number; error: unknown }> = [];
+  let next = 0;
+  let stopped = false;
+  const worker = async () => {
+    while (!stopped && next < items.length) {
+      const index = next++;
+      const previous = turns[index - 1]?.done;
+      const waitTurn = async () => {
+        await previous;
+        const earlier = failures.find((failure) => failure.index < index);
+        if (earlier) throw earlier.error;
+      };
+      try {
+        await run(items[index]!, waitTurn);
+      } catch (error) {
+        failures.push({ index, error });
+        stopped = true;
+      } finally {
+        // 뒤 종목의 수집이 먼저 실패해도 앞 종목이 끝날 때까지 세션 잠금을 놓지 않는다.
+        await previous;
+        turns[index]!.release();
+      }
+    }
+  };
+  const settled = await Promise.allSettled(Array.from({ length: Math.min(2, items.length) }, worker));
+  const first = failures.sort((a, b) => a.index - b.index)[0];
+  if (first) throw first.error;
+  const unexpected = settled.find((result) => result.status === "rejected");
+  if (unexpected?.status === "rejected") throw unexpected.reason;
 }
 
 const BRIEFING_COLS = [

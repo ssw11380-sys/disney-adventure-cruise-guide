@@ -671,6 +671,12 @@ export interface Analysis {
   cached: boolean;
 }
 
+/** 저장된 본문과 실행 상태만 읽는다. 새 분석을 만들지 않는다. */
+export interface AnalysisState {
+  latest: Analysis | null;
+  running: boolean;
+}
+
 export interface NewsItem {
   title: string;
   url: string;
@@ -1118,6 +1124,8 @@ export interface BriefingStatusProblem {
 
 /** 브리핑 늦음·실패 안내 (서버 GET /api/briefings/status — 플래그가 꺼져 있거나 예전 서버면 404) */
 export interface BriefingStatus {
+  /** 시작부터 표시하는 현재 실행. 없는 필드는 예전 서버·기능 꺼짐, null은 실행 없음. */
+  activeRun?: BriefingActiveRun | null;
   session: BriefingSession | null;
   date: string;
   scheduledAt: string | null;
@@ -1135,6 +1143,17 @@ export interface BriefingStatus {
   retryAt: string | null;
   /** 상세의 '이 종목 다시 만들기'가 있는지 (플래그 briefingManualRun) */
   manualRun: boolean;
+}
+
+export interface BriefingActiveRun {
+  session: BriefingSession;
+  date: string;
+  trigger: "schedule" | "manual";
+  partial: boolean;
+  startedAt: string;
+  total: number;
+  /** 성공·실패·건너뜀을 포함해 처리가 끝난 수 */
+  done: number;
 }
 
 /** 잔고 '숫자 기준' 배지 (3-32, 플래그 numberBasis — 서버 GET /api/admin/toss/reconcile/badge 와 같은 모양) */

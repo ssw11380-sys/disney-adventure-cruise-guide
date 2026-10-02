@@ -3,6 +3,7 @@ import { featureOn } from "@/lib/features";
 import { focusManager, keepPreviousData, queryOptions, useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type Query } from "@tanstack/react-query";
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { markRunSeen } from "@/lib/briefingSeen";
+import { analysisBusy, analysisRecoveryFor, invalidateAnalysisRecoveryScope } from "@/lib/analysisRecovery";
 import { isTradingHoursKst } from "@/lib/format";
 import { candleRefresh, pollInterval, refetchDue, streamFresh } from "@/lib/freshness";
 import { capToBoundary, marketBoundary, marketChip, nextBoundary, quotesOf, sessionOpen } from "@/lib/liveDot";
@@ -14,11 +15,12 @@ import { checkRankPage, nextRankPage, restartRankPages, type RankPageParam } fro
 import { loadedCredentials, useSettings } from "@/lib/settings";
 import { ApiRequestError, createApi, type Api } from "./client";
 import { SCORE_WAIT_REFETCH_MS, valueWaiting } from "@/lib/scoreView";
-import type { AnalysisKind, BriefingSession, CandlePeriod, DiscoverMarket, DiscoverRank, FeatureFlags, NotificationSettings, NotificationSettingsPatch, RankCategory, ThemeKind, ThemePeriod } from "./types";
+import type { Analysis, AnalysisKind, BriefingSession, CandlePeriod, DiscoverMarket, DiscoverRank, FeatureFlags, NotificationSettings, NotificationSettingsPatch, RankCategory, ThemeKind, ThemePeriod } from "./types";
 
 export function useApi(): Api {
   const { apiUrl, apiToken, ready } = useSettings();
   const qc = useQueryClient();
+  useEffect(() => invalidateAnalysisRecoveryScope(qc, apiUrl, apiToken), [qc, apiUrl, apiToken]);
   // 끊겼을 때 데이터 절약(pollSaver): 요청할 때마다 마지막으로 받은 플래그를 본다 (받기 전·예전 서버면 꺼짐 → 예전 요청 그대로)
   return useMemo(
     () => (ready ? createApi(apiUrl, apiToken, { saver: () => featureOn(qc.getQueryData<FeatureFlags>([apiUrl, "features"]), "pollSaver", false) }) : deferredApi()),
@@ -457,6 +459,22 @@ export function useAnalysis(code: string, kind: AnalysisKind, enabled = true) {
   });
 }
 
+/** 새 대기 화면 전용. 본문 캐시와 진행 상태를 분리해 갱신 중에도 본문을 유지한다. */
+export function useAnalysisRecovery(code: string, kind: AnalysisKind, requested: boolean) {
+  const api = useApi();
+  const qc = useQueryClient();
+  const { apiUrl, apiToken } = useSettings();
+  const recovery = useMemo(() => analysisRecoveryFor(qc, api, apiUrl, apiToken), [qc, api, apiUrl, apiToken]);
+  const wait = useSyncExternalStore(recovery.subscribe, () => recovery.snapshot(code, kind), () => recovery.snapshot(code, kind));
+  const query = useQuery<Analysis>({ queryKey: useKey("analysis", code, kind), enabled: false });
+  useEffect(() => { if (requested || recovery.snapshot(code, kind).phase !== "idle") recovery.ensure(code, kind); }, [recovery, code, kind, requested]);
+  return {
+    data: query.data, wait, busy: analysisBusy(wait),
+    refresh: () => void recovery.start(code, kind, true),
+    check: () => void recovery.start(code, kind, false, true),
+  };
+}
+
 /**
  * 지표 점수 (3-44, 플래그 indicatorScores — 부르는 화면이 켜져 있을 때만 enabled). 점수는 장 마감 뒤 하루 한 번 바뀌므로 30분 동안 새로 묻지 않는다.
  * 404(플래그 꺼짐·예전 서버·모르는 종목)는 오류가 아니라 없음(null) → 카드를 그리지 않는다
@@ -582,14 +600,14 @@ export function useMarketSummary(id: number, enabled: boolean) {
  * 브리핑 늦음·실패 안내 (브리핑 3차 2, 플래그 briefingStatus — 서버가 켤 때만 부른다). 404(꺼짐·예전 서버)는 null → 탭은 예전 안내.
  * 탭이 보일 때 60초마다, 탭·앱으로 돌아올 때 30초 지났으면 다시 받는다. 쿼리 키가 "briefings" 아래라 브리핑 알림을 받거나 누르면·수동 생성이 끝나면 함께 다시 받는다
  */
-export function briefingStatusQuery(api: Pick<Api, "briefingStatus">, apiUrl: string, focused: boolean, enabled: boolean) {
+export function briefingStatusQuery(api: Pick<Api, "briefingStatus">, apiUrl: string, focused: boolean, enabled: boolean, liveProgress = false) {
   return queryOptions({
     subscribed: focused,
     gcTime: KEEP_WHILE_AWAY,
     queryKey: [apiUrl, "briefings", "status"],
     queryFn: () => orNullOn404(api.briefingStatus()),
-    staleTime: 30_000,
-    refetchInterval: 60_000,
+    staleTime: liveProgress ? 5_000 : 30_000,
+    refetchInterval: liveProgress ? (q) => q.state.data?.activeRun ? 5_000 : 15_000 : 60_000,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
     retry: 0,
@@ -597,10 +615,10 @@ export function briefingStatusQuery(api: Pick<Api, "briefingStatus">, apiUrl: st
   });
 }
 
-export function useBriefingStatus(enabled: boolean) {
+export function useBriefingStatus(enabled: boolean, liveProgress = false) {
   const api = useApi();
   const { apiUrl } = useSettings();
-  return useQuery(briefingStatusQuery(api, apiUrl, useScreenFocused(), enabled));
+  return useQuery(briefingStatusQuery(api, apiUrl, useScreenFocused(), enabled, liveProgress));
 }
 
 /** 예전 서버·꺼진 기능의 경로(404)는 null 로 */
