@@ -342,6 +342,7 @@ function IndicesCard({ d, fit }: { d: MarketSummaryData; fit: Fit }) {
   const t = useTheme();
   const [width, onLayout] = useMeasuredWidth(fit.guess);
   const mode = indicesTableMode(width, fit.scale);
+  const valueLabel = d.phase === "intraday" ? "장중 값" : "종가";
   const us = d.market === "US";
   const foot = `${
     d.phase === "intraday"
@@ -362,7 +363,7 @@ function IndicesCard({ d, fit }: { d: MarketSummaryData; fit: Fit }) {
         <TableHead>
           <Text style={[styles.th, styles.colName, { color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>지수</Text>
           <Text style={[styles.th, styles.right, { width: wValue, color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>
-            {mode === "compact" ? "종가 · 전일 대비" : "종가"}
+            {mode === "compact" ? `${valueLabel} · 전일 대비` : valueLabel}
           </Text>
           {mode === "full" ? (
             <Text style={[styles.th, styles.right, { width: wChange, color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>
