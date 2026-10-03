@@ -25,6 +25,9 @@ export function createDb(databaseUrl: string): { db: Db; dialect: Dialect } {
       max: 5,
       ...(needsSsl(databaseUrl) ? { ssl: { rejectUnauthorized: false } } : {}),
     });
+    // 풀은 끊긴 유휴 연결을 제거한다. error 이벤트를 처리해 전체 서버 종료를 막고 다음 요청의 새 연결을 허용한다.
+    // 원래 오류 객체에는 연결 정보가 붙을 수 있으므로 고정 문구만 기록한다. 진행 중 쿼리 실패는 호출자에게 그대로 전달한다.
+    pool.on("error", () => { console.warn("PostgreSQL 유휴 연결이 끊어졌습니다. 다음 요청에서 새 연결을 사용합니다."); });
     return { db: new Kysely<Database>({ dialect: new PostgresDialect({ pool }) }), dialect: "postgres" };
   }
   if (databaseUrl !== ":memory:") mkdirSync(dirname(databaseUrl), { recursive: true });
