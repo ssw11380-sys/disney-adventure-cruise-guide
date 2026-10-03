@@ -17,6 +17,12 @@ export interface SendSummary {
   disabled: string[]; // 비활성화된 토큰
 }
 
+type PendingReceipt = { receiptId: string; token: string; receivedAt: number };
+/** Expo 영수증은 24시간 뒤 삭제된다. 그 전에는 기존 예약 간격으로 확인하며 발송은 반복하지 않는다.
+ * https://docs.expo.dev/push-notifications/sending-notifications/#check-push-receipts-for-errors
+ */
+const RECEIPT_MAX_AGE_MS = 24 * 3_600_000;
+
 /**
  * 브리핑 알림 푸시.
  *  - briefingDigest 플래그가 켜져 있으면(기본) 실행 한 번(세션)이 끝날 때 1건으로 묶어 보낸다: "오후 브리핑 17종목 · 변동 상위 2개".
@@ -28,8 +34,9 @@ export interface SendSummary {
 export class NotificationService {
   /** 실행 중인 세션이 시작할 때 읽은 briefingDigest 값 (실행 도중 플래그를 바꿔도 알림이 겹치거나 빠지지 않게) */
   private sessionDigest: boolean | null = null;
-  private pendingReceipts: Array<{ receiptId: string; token: string }> = [];
+  private pendingReceipts: PendingReceipt[] = [];
   private receiptTimer: NodeJS.Timeout | null = null;
+  private stopped = false;
 
   constructor(
     private readonly deps: {
@@ -120,10 +127,10 @@ export class NotificationService {
     for (const r of results) {
       if (r.ok) {
         summary.sent++;
-        if (r.receiptId) this.pendingReceipts.push({ receiptId: r.receiptId, token: r.token });
+        if (r.receiptId && !this.stopped) this.pendingReceipts.push({ receiptId: r.receiptId, token: r.token, receivedAt: (this.deps.now?.() ?? new Date()).getTime() });
       } else {
         summary.failed++;
-        if (r.error === "DeviceNotRegistered" || r.error === "InvalidToken") {
+        if (!this.stopped && (r.error === "DeviceNotRegistered" || r.error === "InvalidToken")) {
           await this.deps.devices.disable(r.token, r.error);
           summary.disabled.push(r.token);
         }
@@ -136,7 +143,7 @@ export class NotificationService {
   }
 
   private scheduleReceiptCheck(): void {
-    if (this.receiptTimer || this.pendingReceipts.length === 0) return;
+    if (this.stopped || this.receiptTimer || this.pendingReceipts.length === 0) return;
     const delay = this.deps.receiptDelayMs ?? 15 * 60_000;
     this.receiptTimer = setTimeout(() => {
       this.receiptTimer = null;
@@ -147,33 +154,61 @@ export class NotificationService {
 
   /** 대기 중인 영수증을 확인한다. 반환: 비활성화한 토큰 수 */
   async checkReceipts(): Promise<{ checked: number; disabled: number }> {
-    const pending = this.pendingReceipts;
+    if (this.stopped) return { checked: 0, disabled: 0 };
+    const queuedAtStart = this.pendingReceipts;
     this.pendingReceipts = [];
+    const now = (this.deps.now?.() ?? new Date()).getTime();
+    const pending = queuedAtStart.filter((receipt) => now - receipt.receivedAt < RECEIPT_MAX_AGE_MS);
+    if (pending.length < queuedAtStart.length) this.deps.log?.warn({ count: queuedAtStart.length - pending.length }, "푸시 영수증 확인 기한 초과");
     if (pending.length === 0) return { checked: 0, disabled: 0 };
     let disabled = 0;
+    const remaining = new Map(pending.map((p) => [p.receiptId, p]));
     try {
       const receipts = await this.deps.push.checkReceipts(pending.map((p) => p.receiptId));
-      const byId = new Map(pending.map((p) => [p.receiptId, p.token]));
       for (const r of receipts) {
-        if (r.ok) continue;
-        const token = byId.get(r.receiptId);
-        this.deps.log?.warn({ token: token ? mask(token) : null, err: r.error }, "푸시 영수증 오류");
-        if (token && r.error === "DeviceNotRegistered") {
-          await this.deps.devices.disable(token, r.error);
-          disabled++;
+        if (this.stopped) break;
+        const receipt = remaining.get(r.receiptId);
+        if (!receipt) continue;
+        if (!r.ok) {
+          this.deps.log?.warn({ token: mask(receipt.token), err: r.error }, "푸시 영수증 오류");
+          if (r.error === "DeviceNotRegistered") {
+            try {
+              await this.deps.devices.disable(receipt.token, r.error);
+              disabled++;
+            } catch {
+              // 이 영수증만 다음 확인으로 남기고 나머지 성공분은 계속 처리한다.
+              this.deps.log?.warn({}, "푸시 기기 비활성화 저장 실패");
+              continue;
+            }
+          }
+        }
+        remaining.delete(r.receiptId);
+      }
+    } catch {
+      this.deps.log?.warn({}, "푸시 영수증 확인 실패");
+    } finally {
+      // 확인 도중 새로 발송한 영수증은 유지하고 미완료 건만 중복 없이 합친다.
+      const queued = new Set(this.pendingReceipts.map((p) => p.receiptId));
+      let exhausted = 0;
+      const finishedAt = (this.deps.now?.() ?? new Date()).getTime();
+      for (const receipt of remaining.values()) {
+        if (this.stopped) break;
+        if (finishedAt - receipt.receivedAt >= RECEIPT_MAX_AGE_MS) { exhausted++; continue; }
+        if (!queued.has(receipt.receiptId)) {
+          this.pendingReceipts.push(receipt);
+          queued.add(receipt.receiptId);
         }
       }
-      // 아직 준비되지 않은 영수증은 다음 확인으로 넘긴다
-      const seen = new Set(receipts.map((r) => r.receiptId));
-      this.pendingReceipts.push(...pending.filter((p) => !seen.has(p.receiptId)));
+      if (exhausted) this.deps.log?.warn({ count: exhausted }, "푸시 영수증 확인 기한 초과");
       if (this.pendingReceipts.length) this.scheduleReceiptCheck();
-    } catch (e) {
-      this.deps.log?.warn({ err: (e as Error).message }, "푸시 영수증 확인 실패");
     }
     return { checked: pending.length, disabled };
   }
 
   stop(): void {
+    // 종료 전에 시작한 네트워크 응답이 나중에 와도 영수증 예약·DB 작업을 다시 시작하지 않는다.
+    this.stopped = true;
+    this.pendingReceipts = [];
     if (this.receiptTimer) clearTimeout(this.receiptTimer);
     this.receiptTimer = null;
   }

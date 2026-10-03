@@ -6,6 +6,22 @@ import { formatDateKo } from "@/lib/format";
 import { font, space, useTheme } from "@/theme";
 import { Badge, Button, Card, Muted, Row, SectionTitle } from "./ui";
 
+async function openApk(url: string): Promise<void> {
+  try {
+    await Linking.openURL(url);
+  } catch {
+    Alert.alert("설치 파일을 열지 못했습니다", "브라우저 연결을 확인한 뒤 다운로드를 다시 눌러 주세요.");
+  }
+}
+
+async function restartForUpdate(): Promise<void> {
+  try {
+    await applyOtaUpdate();
+  } catch {
+    Alert.alert("앱을 다시 시작하지 못했습니다", "잠시 뒤 다시 눌러 주세요. 계속 안 되면 앱을 완전히 닫았다가 다시 열어 주세요.");
+  }
+}
+
 /** 설정 > 앱 업데이트: 현재 버전, 새 APK 여부(release.json), OTA 확인/적용 */
 export function AppUpdateCard() {
   const t = useTheme();
@@ -29,12 +45,12 @@ export function AppUpdateCard() {
       if (r.kind === "apk") {
         Alert.alert(`새 버전 ${r.release.version}`, `${r.release.notes ?? "새 버전이 있습니다."}\n\n설치 파일(APK)을 내려받아 열면 현재 앱 위에 덮어씌워 설치됩니다. 등록한 종목과 설정은 유지됩니다.`, [
           { text: "나중에", style: "cancel" },
-          { text: "다운로드", onPress: () => void Linking.openURL(r.release.apkUrl!) },
+          { text: "다운로드", onPress: () => void openApk(r.release.apkUrl!) },
         ]);
       } else if (r.kind === "ota") {
         Alert.alert("업데이트 준비 완료", "새 화면/기능을 내려받았습니다. 지금 다시 시작할까요?", [
           { text: "나중에 (다음 실행 때 적용)", style: "cancel" },
-          { text: "지금 다시 시작", onPress: () => void applyOtaUpdate() },
+          { text: "지금 다시 시작", onPress: () => void restartForUpdate() },
         ]);
       }
     } catch (e) {
@@ -57,13 +73,13 @@ export function AppUpdateCard() {
             새 버전 {newer.version}
             {newer.publishedAt ? ` (${formatDateKo(newer.publishedAt)})` : ""}이 있습니다.{newer.notes ? ` ${newer.notes}` : ""}
           </Text>
-          {newer.apkUrl ? <Button title={`새 버전 ${newer.version} 설치 (APK)`} icon="download-outline" onPress={() => void Linking.openURL(newer.apkUrl!)} /> : null}
+          {newer.apkUrl ? <Button title={`새 버전 ${newer.version} 설치 (APK)`} icon="download-outline" onPress={() => void openApk(newer.apkUrl!)} /> : null}
         </View>
       ) : null}
       <Button title="업데이트 확인" variant="secondary" icon="refresh" onPress={() => void check()} loading={checking} />
       {error ? <Text style={{ color: t.danger, fontSize: font.small }}>{error}</Text> : null}
       {status.message ? status.failed ? <Text style={{ color: t.danger, fontSize: font.small }}>{status.message}</Text> : <Muted>{status.message}</Muted> : null}
-      {result?.kind === "ota" ? <Button title="지금 다시 시작해서 적용" variant="secondary" icon="play" onPress={() => void applyOtaUpdate()} /> : null}
+      {result?.kind === "ota" ? <Button title="지금 다시 시작해서 적용" variant="secondary" icon="play" onPress={() => void restartForUpdate()} /> : null}
     </Card>
   );
 }

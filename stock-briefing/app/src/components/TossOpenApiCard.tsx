@@ -10,6 +10,14 @@ import { reconcileLabel } from "@/lib/freshness";
 import { font, slopFor, space, useTheme } from "@/theme";
 import { Badge, Button, Card, Muted, Row, SectionTitle } from "./ui";
 
+async function openTossWts(): Promise<void> {
+  try {
+    await Linking.openURL("https://tossinvest.com");
+  } catch {
+    Alert.alert("토스증권 WTS를 열지 못했습니다", "브라우저 연결을 확인한 뒤 다시 눌러 주세요.");
+  }
+}
+
 /**
  * 설정 > 토스증권 연동 카드.
  *  - 키 미설정: 발급 절차 안내 + 서버 공인 IP(허용 IP 등록용)
@@ -84,7 +92,7 @@ export function TossOpenApiCard() {
           <Row label="서버 공인 IP" value={<Text selectable style={{ color: t.ink, fontSize: font.small, fontVariant: ["tabular-nums"] }}>{ip ?? "확인 불가"}</Text>} />
           {ip ? <Button title="IP 보내기/복사" variant="secondary" icon="share-outline" onPress={() => void copyIp()} /> : null}
           <Text style={{ color: t.ink, fontSize: font.small }}>3. 발급받은 두 값을 서버 설정에 넣고 서버를 다시 시작합니다 (서버 관리자 작업)</Text>
-          <Pressable onPress={() => void Linking.openURL("https://tossinvest.com")} accessibilityRole="link" accessibilityLabel="토스증권 WTS 열기" hitSlop={slopFor(font.small + space.xs)}>
+          <Pressable onPress={() => void openTossWts()} accessibilityRole="link" accessibilityLabel="토스증권 WTS 열기" hitSlop={slopFor(font.small + space.xs)}>
             <Text style={{ color: t.accent, fontSize: font.small }}>토스증권 WTS 열기</Text>
           </Pressable>
         </View>

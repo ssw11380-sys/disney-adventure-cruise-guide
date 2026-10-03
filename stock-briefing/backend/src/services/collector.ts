@@ -224,7 +224,7 @@ export class DataCollector {
             operatingMarginPct: pct(latest.operatingIncome, latest.revenue),
           }
         : null;
-    if (quote && quote.per === null && kind === "value") missing.push("PER/PBR(현재 시세 소스가 제공하지 않음)");
+    if (quote && (quote.per === null || quote.pbr === null) && kind === "value") missing.push("PER/PBR(현재 시세 소스가 제공하지 않음)");
 
     return {
       stock,
