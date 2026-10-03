@@ -38,6 +38,7 @@ export class NotificationService {
   private stopped = false;
   private restoreNeeded = false;
   private readonly unpersisted = new Map<string, PendingReceipt>();
+  private readonly checkingReceiptIds = new Set<string>();
 
   constructor(
     private readonly deps: {
@@ -61,7 +62,7 @@ export class NotificationService {
     try {
       const restored = await this.deps.receipts.load((this.deps.now?.() ?? new Date()).getTime());
       if (this.stopped) return;
-      const queued = new Set(this.pendingReceipts.map((r) => r.receiptId));
+      const queued = new Set([...this.checkingReceiptIds, ...this.pendingReceipts.map((r) => r.receiptId)]);
       for (const receipt of restored) if (!queued.has(receipt.receiptId)) { this.pendingReceipts.push(receipt); queued.add(receipt.receiptId); }
       this.restoreNeeded = false;
     } catch { this.deps.log?.warn({}, "푸시 영수증 복구 실패"); }
@@ -201,6 +202,7 @@ export class NotificationService {
     if (pending.length === 0) { await this.removeReceipts(queuedAtStart); this.scheduleReceiptCheck(); return { checked: 0, disabled: 0 }; }
     let disabled = 0;
     const remaining = new Map(pending.map((p) => [p.receiptId, p]));
+    for (const receipt of pending) this.checkingReceiptIds.add(receipt.receiptId);
     try {
       const receipts = await this.deps.push.checkReceipts(pending.map((p) => p.receiptId));
       for (const r of receipts) {
@@ -239,6 +241,7 @@ export class NotificationService {
       }
       if (exhausted) this.deps.log?.warn({ count: exhausted }, "푸시 영수증 확인 기한 초과");
       await this.removeReceipts(queuedAtStart.filter((receipt) => !remaining.has(receipt.receiptId) || finishedAt - receipt.receivedAt >= RECEIPT_MAX_AGE_MS));
+      for (const receipt of pending) this.checkingReceiptIds.delete(receipt.receiptId);
       this.scheduleReceiptCheck();
     }
     return { checked: pending.length, disabled };
