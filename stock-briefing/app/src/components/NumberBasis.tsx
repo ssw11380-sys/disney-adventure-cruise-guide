@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import { useReconcileBadge } from "@/api/hooks";
+import { useFeature, useReconcileBadge } from "@/api/hooks";
 import type { RegisteredWithQuote } from "@/api/types";
 import { fxNote, type AccountData } from "@/components/AccountBand";
 import { BASIS_FOOT, basisRows, reconcileBadge, type BasisRow } from "@/lib/numberBasis";
@@ -18,9 +18,10 @@ import { font, fontCap, layout, slopFor, space, touch, useFontScale, useTheme } 
 export function BasisMark({ stocks, account, dotOnly = false }: { stocks: readonly RegisteredWithQuote[]; account: AccountData; dotOnly?: boolean }) {
   const t = useTheme();
   const q = useReconcileBadge();
+  const tossSnapshotOn = useFeature("tossAccountSnapshot", false);
   const now = useNow(60_000);
   const [open, setOpen] = useState(false);
-  const badge = reconcileBadge(q.data, now);
+  const badge = reconcileBadge(q.data, now, { showComparedScope: tossSnapshotOn });
   const color = badge.tone === "ok" ? t.accent : badge.tone === "warn" ? t.warn : t.muted;
   const rows = open ? basisRows({ stocks, afterCost: account.afterCost, fxNote: fxNote(account), excluded: account.excluded, reconcile: q.data, now }) : [];
   return (

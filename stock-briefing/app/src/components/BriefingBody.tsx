@@ -8,6 +8,7 @@ import { Pills } from "@/components/BriefingList";
 import { BriefingSources } from "@/components/BriefingSources";
 import { StaleBanner } from "@/components/Freshness";
 import { ReportVerificationNotice } from "@/components/ReportVerification";
+import { ReportListNotice } from "@/components/ReportListNotice";
 import { useSettingsGuide } from "@/lib/settingsLink";
 import { MarkdownView } from "@/components/MarkdownView";
 import { Screen } from "@/components/Screen";
@@ -113,14 +114,14 @@ export function BriefingBody({
     </View>
   ) : null;
 
+  const pastItems = (history.data ?? []).filter((h) => h.id !== d.id);
   const past =
-    history.data && history.data.length > 1 ? (
+    pastItems.length > 0 || history.isError ? (
       <View>
         <SectionTitle style={{ paddingHorizontal: space.lg, paddingTop: space.sm }}>지난 브리핑</SectionTitle>
+        <ReportListNotice label="지난 브리핑" query={history} />
         <View>
-          {history.data
-            .filter((h) => h.id !== d.id)
-            .map((h) => (
+          {pastItems.map((h) => (
               <Pressable
                 key={h.id}
                 onPress={() => open(h.id)}

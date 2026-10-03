@@ -1,7 +1,7 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { router } from "expo-router";
 import React, { useEffect, useState } from "react";
-import { Alert, FlatList, Platform, Pressable, StyleSheet, Text, TextInput, ToastAndroid, View } from "react-native";
+import { Alert, FlatList, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, ToastAndroid, View } from "react-native";
 import { ApiRequestError } from "@/api/client";
 import { useRegisteredCodes, useSearch, useStockMutations } from "@/api/hooks";
 import type { ListedStock } from "@/api/types";
@@ -112,26 +112,29 @@ export default function AddStockScreen() {
             setQ(v);
             select(null);
           }}
-          placeholder="종목명·코드·미국 티커 (예: SK하이닉스, 000660, AAPL)"
+          placeholder="종목명·코드·티커"
           placeholderTextColor={t.muted}
           autoFocus
           autoCorrect={false}
           accessibilityLabel="종목 검색"
+          accessibilityHint="예: SK하이닉스, 000660, AAPL"
+          numberOfLines={1}
           style={[styles.input, { color: t.ink }]}
           returnKeyType="search"
           onSubmitEditing={retrySearch}
         />
         {q ? (
-          <Pressable onPress={() => setQ("")} accessibilityRole="button" accessibilityLabel="검색어 지우기" hitSlop={slopFor(ICON, space.xs)}>
+          <Pressable onPress={() => { setQ(""); select(null); }} accessibilityRole="button" accessibilityLabel="검색어 지우기" hitSlop={slopFor(ICON, space.xs)}>
             <Ionicons name="close-circle" size={ICON} color={t.muted} />
           </Pressable>
         ) : null}
       </View>
 
       {selected ? (
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: space.lg, paddingBottom: space.lg }} keyboardShouldPersistTaps="handled">
         <Card>
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-            <View>
+            <View style={{ flex: 1, minWidth: 0, paddingRight: space.sm }}>
               <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700" }}>{selected.name}</Text>
               <Muted>
                 {selected.code} · {selected.market}
@@ -164,6 +167,7 @@ export default function AddStockScreen() {
           </View>
           <Button title="등록" accessibilityLabel={`${selected.name} 등록`} onPress={submit} loading={register.isPending} />
         </Card>
+        </ScrollView>
       ) : q.trim().length === 0 ? (
         recent.items.length ? (
           <FlatList
