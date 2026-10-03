@@ -54,6 +54,7 @@ export default function SettingsScreen() {
   const alerts = usePriceAlerts();
   // 다듬은 잔고 위젯(widgetPolish)에서만 쓰는 설정이라 플래그가 켜져 있을 때만 보인다
   const widgetPolishOn = useFeature("widgetPolish", false);
+  const widgetClarityOn = useFeature("widgetClarity", false);
   // 위젯 자동 갱신 기록 요약·배터리 설정 열기 (위젯 리뷰 2). 기록은 늘 적고 보여 주는 것만 플래그 뒤에
   const widgetLogOn = useFeature("widgetRefreshLog", false);
   // 잔고 촘촘 모드 (3-39): 켜져 있을 때만 '잔고 표시' 기본/촘촘 칩 (꺼져 있으면 저장된 값과 상관없이 잔고는 기본)
@@ -256,6 +257,7 @@ export default function SettingsScreen() {
           <Text style={styles.label(t.ink)}>홈 화면 위젯 갱신</Text>
           <Muted style={{ fontSize: font.tiny }}>{WIDGET_REFRESH_HELP}</Muted>
           {widgetLogOn ? <WidgetRefreshStatus /> : null}
+          {gated(widgetClarityOn, true) ? <Button title="위젯별 표시 설정" variant="secondary" onPress={() => router.push("/widget-settings")} /> : null}
         </View>
       ) : null}
       {widgetPolishOn && owner ? (

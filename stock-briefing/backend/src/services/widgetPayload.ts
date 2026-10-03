@@ -72,6 +72,8 @@ export interface WidgetStock {
   e: [number, number, number | null, number | null, "exact" | "estimated" | null] | null;
   /** 시세 기준 원문(quote.priceBasis — 'KRX+NXT 통합' 등). &ms=1 이고 numberBasis 켬일 때만, 기준이 있는 종목만 (3-32) */
   b?: string;
+  /** 새 위젯에서 개별 거래 대상·세션 경계를 판단할 때만 전달한다. 자료 재조회는 하지 않는다. */
+  ss?: QuoteSession;
 }
 
 /**
@@ -119,6 +121,8 @@ export interface WidgetFeatures {
   marketSummary?: boolean;
   /** 숫자 기준 (3-32) — 지금 앱(&ms=1)이 물을 때 · 켬일 때만 true 칸을 넣는다 (끄면 칸 없음 — 응답·ETag 가 예전과 같게) */
   numberBasis?: boolean;
+  /** 위젯 정보 기준 개선. &ms=1 요청이고 켜졌을 때만 넣어 예전 응답을 보존한다 */
+  widgetClarity?: boolean;
 }
 
 /**
@@ -426,7 +430,8 @@ export function buildWidgetPayload(
     market,
     stocks: stocks.map((s) => {
       const w = slim(s, sharedFx);
-      return extra.basis && s.quote?.priceBasis ? { ...w, b: s.quote.priceBasis } : w;
+      return { ...w, ...(extra.basis && s.quote?.priceBasis ? { b: s.quote.priceBasis } : {}),
+        ...(extra.features?.widgetClarity && s.quote?.session ? { ss: s.quote.session } : {}) };
     }),
     latestIds: ok.map((b) => b.latest!.id).sort((a, b) => a - b),
     briefings: ok.slice(0, 3).map((b) => ({ id: b.latest!.id, code: b.code, name: b.name, session: b.latest!.session, date: b.latest!.date, summary: b.latest!.summary.split("\n").find((l) => l.trim()) ?? "", createdAt: b.latest!.createdAt })),

@@ -27,6 +27,10 @@ vi.mock("react-native-android-widget", async () => {
     TextWidget: text.TextWidget,
     ListWidget: list.ListWidget,
     getWidgetInfo: async (name: string) => (shared.widgets[name] ?? []).map((box, n) => ({ widgetName: name, widgetId: n + 1, ...box, screenInfo: {} })),
+    requestWidgetUpdateById: async ({ widgetName, widgetId, renderWidget }: { widgetName: string; widgetId: number; renderWidget: (i: unknown) => unknown }) => {
+      const box = shared.widgets[widgetName]?.[widgetId - 1];
+      if (box) shared.updates.push({ widgetName, rendered: await renderWidget({ widgetName, widgetId, ...box, screenInfo: {} }) });
+    },
     requestWidgetUpdate: async ({ widgetName, renderWidget }: { widgetName: string; renderWidget: (i: unknown) => unknown }) => {
       for (const box of shared.widgets[widgetName] ?? []) {
         shared.updates.push({ widgetName, rendered: await renderWidget({ widgetName, widgetId: 1, ...box, screenInfo: {} }) });

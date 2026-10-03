@@ -62,7 +62,7 @@ export function excludedCount(stocks: RegisteredWithQuote[]): number {
 }
 
 /** 위젯 목록 순서: 보유(원화 환산 평가금액 큰 순, 시세 없는 보유는 보유 맨 뒤) → 관심(이름 순) */
-export function widgetOrder(stocks: RegisteredWithQuote[], fxOf: (s: RegisteredWithQuote) => number | null): RegisteredWithQuote[] {
+export function widgetOrder(stocks: RegisteredWithQuote[], fxOf: (s: RegisteredWithQuote) => number | null, options?: { sort: "value" | "name"; pinnedCodes: readonly string[] }): RegisteredWithQuote[] {
   const krw = (s: RegisteredWithQuote) => {
     const v = s.evaluation?.marketValue;
     if (v === undefined) return Number.NEGATIVE_INFINITY;
@@ -70,7 +70,16 @@ export function widgetOrder(stocks: RegisteredWithQuote[], fxOf: (s: RegisteredW
   };
   const held = stocks.filter(isHeld).sort((a, b) => krw(b) - krw(a));
   const watch = stocks.filter((s) => !isHeld(s)).sort((a, b) => a.name.localeCompare(b.name, "ko"));
-  return [...held, ...watch];
+  const ordered = [...held, ...watch];
+  if (!options) return ordered;
+  const pins = new Map<string, number>();
+  for (const code of options.pinnedCodes) if (!pins.has(code)) pins.set(code, pins.size);
+  // 고정 종목을 앞에 두되 입력 목록·전체 합계는 바꾸지 않는다. 없는 종목은 새로 만들지 않는다.
+  return ordered.sort((a, b) => {
+    const ap = pins.get(a.code), bp = pins.get(b.code);
+    if (ap !== undefined || bp !== undefined) return (ap ?? Infinity) - (bp ?? Infinity);
+    return options.sort === "name" ? a.name.localeCompare(b.name, "ko") : 0;
+  });
 }
 
 /** 시세 기준 시각: 받은 시세 중 가장 늦은 asOf. 없으면 받은 시각 */
@@ -121,9 +130,9 @@ export function failureText(error: string | null): string | null {
 }
 
 /** 자산 위젯 아랫줄: 오늘 손익과 총손익을 각자 부호 색으로 (위젯-2) */
-export function assetLine(day: number, profit: number, fmt: (n: number) => string): { day: { text: string; color: string }; total: { text: string; color: string } } {
+export function assetLine(day: number, profit: number, fmt: (n: number) => string, dayLabel = DAY_LABEL): { day: { text: string; color: string }; total: { text: string; color: string } } {
   return {
-    day: { text: `오늘 ${fmt(day)}`, color: tone(day) },
+    day: { text: `${dayLabel} ${fmt(day)}`, color: tone(day) },
     total: { text: `총 ${fmt(profit)}`, color: tone(profit) },
   };
 }
@@ -429,9 +438,9 @@ export function polishedIndexItems(list: readonly (WidgetIndexLike & { asOf?: st
 }
 
 /** 잔고 한 줄을 화면 읽기가 읽는 문장 (다듬은 모습): "삼성전자 72,000원, 오늘 1.50% 상승, 수익 2.86% 상승". 시세가 없으면 "삼성전자 시세 없음" */
-export function polishedRowSpeech(name: string, price: string | null, changeRate: number | null | undefined, profitRate: number | null | undefined): string {
+export function polishedRowSpeech(name: string, price: string | null, changeRate: number | null | undefined, profitRate: number | null | undefined, dayLabel = DAY_LABEL): string {
   if (!price || price === "-") return `${name} 시세 없음`;
   const today = speakRate(changeRate);
   const profit = speakRate(profitRate);
-  return sentence([`${name} ${speakAmount(price)}`, today ? `오늘 ${today}` : null, profit ? `수익 ${profit}` : null]);
+  return sentence([`${name} ${speakAmount(price)}`, today ? `${dayLabel} ${today}` : null, profit ? `수익 ${profit}` : null]);
 }
