@@ -15,7 +15,7 @@ import { ConflictError, NotFoundError, ProviderError, TossLockedError, within } 
 import { seoulIso } from "../lib/time.js";
 import { toMarket } from "../providers/market/kisMaster.js";
 import type { MasterProvider, QuoteProvider, StockSearchProvider } from "../providers/market/types.js";
-import { applyFundamentals, type NaverFundamentals } from "../providers/market/fundamentals.js";
+import { applyFundamentalsBasis, type NaverFundamentals } from "../providers/market/fundamentals.js";
 import type { LiveTick, LiveTicks, QuickPriceSource, StockSessionFacts } from "../providers/market/tossRealtime.js";
 
 export interface StockServiceDeps {
@@ -1032,10 +1032,10 @@ export class StockService {
     if (!f) return quote;
     const needFundamentals = quote.per === null || quote.pbr === null || quote.dividendYieldPct === undefined;
     const [fund, fx] = await Promise.all([
-      needFundamentals ? f.get(quote.code, market).catch(() => null) : Promise.resolve(null),
+      needFundamentals ? f.getWithStatus(quote.code, market).catch(() => ({ value: null, receivedAt: null, refreshFailed: true })) : Promise.resolve(null),
       quote.currency === "USD" ? f.usdKrw().catch(() => null) : Promise.resolve(null),
     ]);
-    let out = applyFundamentals(quote, fund);
+    let out = fund ? applyFundamentalsBasis(quote, fund) : quote;
     if (quote.currency === "USD") {
       const rate = fx ?? (quote.priceKrw && quote.price ? Math.round((quote.priceKrw / quote.price) * 100) / 100 : null);
       // 원화 환산은 함께 보여 주는 환율(fxRate)로 — 공급자가 준 값(공식 API 매매기준율 등)과 섞이면 같은 화면에서 숫자가 어긋난다

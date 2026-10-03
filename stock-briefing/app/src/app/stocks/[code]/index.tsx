@@ -10,6 +10,7 @@ import { CandleChart } from "@/components/CandleChart";
 import { createChartViewMemo } from "@/lib/chartLayout";
 import { CANDLE_COUNT, parseCandlePeriod } from "@/lib/chartPrefs";
 import { FlashPrice } from "@/components/FlashPrice";
+import { FundamentalsBasis } from "@/components/FundamentalsBasis";
 import { ChartNotice, StaleBanner, useFeedState, usePull } from "@/components/Freshness";
 import { DetailSkeleton } from "@/components/Skeleton";
 import { Screen } from "@/components/Screen";
@@ -632,6 +633,7 @@ export default function StockDetailScreen() {
               ))}
             </StatGrid>
             {range()}
+            <FundamentalsBasis basis={q.fundamentalsBasis} />
           </View>
         ) : null}
 
@@ -776,6 +778,7 @@ export default function StockDetailScreen() {
           <PaneTitle title="시세" {...(tossBtn ? { action: tossBtn } : null)} />
           <PairGrid items={PHONE_ORDER.map((id) => quoteStats[id])} cols={sideCols} />
           {range()}
+          <FundamentalsBasis basis={q.fundamentalsBasis} />
         </View>
       ) : null}
       {ev && krwLast ? <View>{krwSide}</View> : null}
@@ -945,6 +948,7 @@ export default function StockDetailScreen() {
       {columns.length ? (
         <View style={[styles.panel, { backgroundColor: t.surface, borderColor: t.line, paddingLeft: space.lg + insets.left, paddingRight: space.lg + insets.right }]}>
           <StatColumns columns={columns} />
+          <FundamentalsBasis basis={q?.fundamentalsBasis} />
         </View>
       ) : null}
       {tabs}

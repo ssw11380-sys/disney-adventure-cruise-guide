@@ -155,6 +155,23 @@ const unregistered = () => ({ ...holding("035720", quote("035720", 41_000, { cha
 
 const CASES: Record<string, () => RegisteredWithQuote & { registered?: boolean }> = { samsung, apple, unregistered };
 
+describe("재무 보강 수신 기준 연결", () => {
+  it("접힘·펼침 각 배치와 200% 글씨에서도 같은 이전 자료 안내를 한 번만 그리고 줄 수로 숨기지 않는다", () => {
+    for (const k of ["F8C", "F8L", "F8P", "UP"] as const) {
+      for (const fontScale of [1, 2]) {
+        forgetWindowClass(); size(k); h.win = { ...h.win, fontScale };
+        const stock = samsung();
+        stock.quote!.fundamentalsBasis = { receivedAt: "2025-12-28T09:30:00+09:00", refreshFailed: true, source: "naver", fields: ["per", "pbr"] };
+        const r = open(stock, { flag: true });
+        const badges = r.all().filter(node => String(node.props.accessibilityLabel ?? "").startsWith("재무 갱신 실패 · 이전 자료."));
+        expect(badges, `${k}/${fontScale}`).toHaveLength(1);
+        expect(badges[0]!.props.accessibilityLabel).toContain("2025년");
+        for (const child of badges[0]!.children) if (typeof child !== "string") expect(child.props.numberOfLines).toBeUndefined();
+      }
+    }
+  });
+});
+
 function open(stock: RegisteredWithQuote, extra: Partial<typeof h> = {}) {
   h.stock = stock;
   Object.assign(h, extra);

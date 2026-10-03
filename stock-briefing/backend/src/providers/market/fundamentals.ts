@@ -48,12 +48,18 @@ export interface FundamentalsStatus {
   refreshFailed: boolean;
 }
 
-interface FundamentalsCache {
+export interface FundamentalsCache {
   at: number;
   ttl: number;
   value: Fundamentals | null;
   receivedAt: number | null;
   refreshFailed: boolean;
+}
+
+/** 마지막 정상 응답은 메모리에서 내보내기 전에 보존한다. 실패 응답이 새 정상값을 덮지 않는다. */
+export interface FundamentalsCacheStore {
+  load(code: string): Promise<FundamentalsCache | null>;
+  save(code: string, entry: FundamentalsCache): Promise<void>;
 }
 
 interface FxQuote {
@@ -87,6 +93,12 @@ export class NaverFundamentals {
   readonly name = "naver-fundamentals";
   private readonly cache = new Map<string, FundamentalsCache>();
   private readonly inFlight = new Map<string, Promise<FundamentalsCache>>();
+  private cacheStore: FundamentalsCacheStore | null = null;
+  private readonly persisted = new WeakSet<FundamentalsCache>();
+  private readonly normalEntries = new WeakMap<FundamentalsCache, FundamentalsCache>();
+  private readonly writes = new Map<string, { entry: FundamentalsCache; promise: Promise<void> }>();
+  private readonly pendingWrites = new Set<Promise<void>>();
+  private persistenceFailures = 0;
   private fx: { at: number; rate: number; source: "toss" | "naver" } | null = null;
   private fxInFlight: Promise<FxQuoteStatus> | null = null;
 
@@ -99,7 +111,58 @@ export class NaverFundamentals {
     private readonly ttlMs = 60 * 60_000,
     /** 받기에 실패한 결과는 이만큼만 기억한다 (한 번의 오류로 1시간 동안 PER/PBR 이 비지 않게) */
     private readonly failTtlMs = 2 * 60_000,
+    private readonly maxCacheEntries = 500,
   ) {}
+
+  setCacheStore(store: FundamentalsCacheStore): void {
+    this.cacheStore = store;
+    for (const [code, entry] of this.cache) this.persist(code, entry);
+    this.trimCache();
+  }
+
+  /** 정상 응답을 기다리게 하지 않는다. 서버의 정상 종료 때만 미완료 저장을 마친다. */
+  async flushCache(): Promise<void> {
+    await Promise.all([...this.pendingWrites]);
+  }
+
+  cacheStats(): { entries: number; limit: number; pendingWrites: number; safetyOverflow: number; persistenceFailures: number } {
+    const limit = Math.max(1, this.maxCacheEntries);
+    return { entries: this.cache.size, limit, pendingWrites: this.pendingWrites.size, safetyOverflow: Math.max(0, this.cache.size - limit), persistenceFailures: this.persistenceFailures };
+  }
+
+  private remember(code: string, entry: FundamentalsCache): void {
+    this.cache.delete(code);
+    this.cache.set(code, entry);
+    this.trimCache();
+  }
+
+  private trimCache(): void {
+    for (const [code, entry] of this.cache) {
+      if (this.cache.size <= Math.max(1, this.maxCacheEntries)) break;
+      // 저장 장애 중 마지막 정상 자료를 버려 한도를 맞추지는 않는다. 저장이 회복되면 다시 정리한다.
+      if (entry.value === null || this.persisted.has(entry)) this.cache.delete(code);
+    }
+  }
+
+  private persist(code: string, entry: FundamentalsCache): void {
+    entry = this.normalEntries.get(entry) ?? entry;
+    if (!this.cacheStore || entry.refreshFailed || this.persisted.has(entry) || this.writes.get(code)?.entry === entry) return;
+    const store = this.cacheStore;
+    const promise = Promise.resolve().then(() => store.save(code, entry)).then(() => {
+      this.persisted.add(entry);
+      const current = this.cache.get(code);
+      if (current?.value === entry.value && current.receivedAt === entry.receivedAt) this.persisted.add(current);
+      this.trimCache();
+    }).catch(() => {
+      // 분석 입력을 줄이지 않도록 정상 자료는 메모리에 남기고 다음 접근에서 저장을 다시 시도한다.
+      this.persistenceFailures++;
+    }).finally(() => {
+      this.pendingWrites.delete(promise);
+      if (this.writes.get(code)?.promise === promise) this.writes.delete(code);
+    });
+    this.pendingWrites.add(promise);
+    this.writes.set(code, { entry, promise });
+  }
 
   private async getJson(url: string): Promise<Fetched<Json>> {
     try {
@@ -167,12 +230,24 @@ export class NaverFundamentals {
   private async getEntry(code: string, market?: string | null): Promise<FundamentalsCache> {
     code = normalizeCode(code);
     const t = this.now().getTime();
-    const hit = this.cache.get(code);
-    if (hit && t - hit.at < hit.ttl) return hit;
+    let hit = this.cache.get(code);
+    if (hit && t - hit.at < hit.ttl) {
+      this.remember(code, hit);
+      this.persist(code, hit);
+      return hit;
+    }
     const running = this.inFlight.get(code);
     if (running) return running;
     // 같은 공개 자료의 갱신을 공유해 늦은 실패가 새 정상 값을 덮지 않게 한다.
     const pending = (async () => {
+      if (!hit && this.cacheStore) {
+        hit = await this.cacheStore.load(code).catch(() => null) ?? undefined;
+        if (hit) {
+          this.persisted.add(hit);
+          this.remember(code, hit);
+          if (t - hit.at < hit.ttl) return hit;
+        }
+      }
       const got = isKrCode(code) ? await this.getKr(code) : await this.getUs(code, market);
       // 받기 실패는 "값 없음"이 아니다: 직전 값이 있으면 그대로 두고, 짧게만 기억했다가 다시 받는다 (BH-43)
       const failed = got === FAILED;
@@ -182,7 +257,10 @@ export class NaverFundamentals {
         receivedAt: failed ? (hit?.receivedAt ?? null) : value === null ? null : this.now().getTime(),
         refreshFailed: failed,
       };
-      this.cache.set(code, entry);
+      if (failed && hit && this.persisted.has(hit)) this.persisted.add(entry);
+      if (failed && hit) this.normalEntries.set(entry, this.normalEntries.get(hit) ?? hit);
+      this.remember(code, entry);
+      this.persist(code, entry);
       return entry;
     })();
     this.inFlight.set(code, pending);
@@ -314,6 +392,15 @@ export function applyFundamentals(q: Quote, f: Fundamentals | null): Quote {
     industry: q.industry ?? f.industry,
     ...(fullName ? { fullName } : {}),
   };
+}
+
+/** 화면용 출처는 실제 보강한 칸에만 붙인다. 분석 수집은 기존 applyFundamentals 모양을 유지한다. */
+export function applyFundamentalsBasis(q: Quote, status: FundamentalsStatus): Quote {
+  const fields = (["per", "pbr", "eps", "bps", "high52w", "low52w", "marketCap", "dividendPerShare", "dividendYieldPct"] as const)
+    .filter(key => q[key] == null && status.value?.[key] != null);
+  return { ...applyFundamentals(q, status.value), fundamentalsBasis: {
+    receivedAt: status.receivedAt, refreshFailed: status.refreshFailed, source: status.value?.source ?? null, fields,
+  } };
 }
 
 export { ProviderError };
