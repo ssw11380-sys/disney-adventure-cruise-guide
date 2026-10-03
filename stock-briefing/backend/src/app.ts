@@ -10,6 +10,7 @@ import { seoulIso } from "./lib/time.js";
 import { GenerationError } from "./llm/generator.js";
 import { PromptStore } from "./llm/prompts.js";
 import { defaultsFromCron, NotificationSettingsStore, timeToCron } from "./notifications/settings.js";
+import { ReceiptStore } from "./notifications/receiptStore.js";
 import { describeProviders, metaStore, type Providers } from "./providers/index.js";
 import { adminRoutes, tossStatus, type AdminDeps } from "./routes/admin.js";
 import { HoldingsAutoSync, TossSyncService } from "./services/tossSyncService.js";
@@ -260,6 +261,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
 
   const deviceService = new DeviceService(opts.db, opts.providers.push, now);
   const notificationService = new NotificationService({
+    receipts: new ReceiptStore(opts.db),
     push: opts.providers.push,
     devices: deviceService,
     settings: settingsStore,
@@ -305,6 +307,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     now,
     log,
   });
+  await notificationService.resumeReceipts();
   briefingService.onBriefing(notificationService.onBriefing);
   briefingService.onSessionStart(notificationService.onSessionStart);
   // 시장 전체 요약 (플래그 marketSummary): 아래 발견 탭 서비스(한국 업종)를 만든 뒤 채운다
