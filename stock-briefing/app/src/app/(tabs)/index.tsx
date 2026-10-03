@@ -19,6 +19,7 @@ import { StockRow } from "@/components/StockRow";
 import { PRICE_HEAD, useLineCols } from "@/components/StockLine";
 import { closeOpenRow, SwipeRow, type SwipeAction } from "@/components/SwipeRow";
 import { TossImportButton } from "@/components/TossImportButton";
+import { TossAccountSummary } from "@/components/TossAccountSummary";
 import { Button, ErrorView, TableHead } from "@/components/ui";
 import { panelBasisFit } from "@/lib/basisFit";
 import { gated } from "@/lib/features";
@@ -62,6 +63,7 @@ export default function StocksScreen() {
   const { member } = useAccountView();
   // 숫자 기준 점 (3-32, 플래그 numberBasis): 켜졌을 때만 계좌 패널·띠에 점 + 토스 대조 글 (훅이므로 아래 이른 return 보다 위)
   const basisOn = useFeature("numberBasis", false);
+  const tossSnapshotOn = useFeature("tossAccountSnapshot", false);
   // 촘촘 모드 (3-39): 서버 플래그 + 설정 '잔고 표시 촘촘'. 불러오는 중 화면도 쓰므로 일찍 돌아가는 줄보다 위에서 정한다
   const densityOn = useFeature("densityMode", false);
   const dense = densityOn && density === "dense";
@@ -94,7 +96,7 @@ export default function StocksScreen() {
   //   (접은 화면에서 본 종목을 펼친 뒤 이어 보려면 접힌 동안에도 재야 한다). 플래그 값을 처음 받는 순간 목록을 한 번 새로 그린다 (아래 key)
   const anchor = useHoldingsAnchor(fold.on ? holdingsLayoutKey({ wide, oneLineBand, rail: fold.rail, cols: heldPlan?.cols.length ?? 0 }) : null);
 
-  // 합계는 토스 앱과 같은 기준: 평가금액은 (설정 시) 수수료·세금 차감 후, 해외 종목 원화 손익은 매수 당시 환율의 원화 매입금액 기준
+  // 실시간 평가: 앱 시세와 설정한 비용·원화 매입금액을 사용한다. 토스 계좌 원본은 별도 보기로 표시한다.
   const summary = useMemo(() => summarize(data ?? [], afterCost), [data, afterCost]);
   // 넓은 창 계좌 띠의 당일 등락률 기준: 비용 차감 전 평가금액 (당일손익이 비용 차감 전 금액이라 — AccountBand dayRateOf). 차감이 꺼져 있으면 같은 값
   const grossValue = useMemo(() => {
@@ -292,10 +294,11 @@ export default function StocksScreen() {
   // 넓은 한 줄 계좌 띠에 국내·해외 수익률까지 넣는 폭인지 (좁은 한 줄 띠는 숫자 기준 점만 — 글 없음)
   const rates = bandRates(tableW, fontScale);
   // 계정 A단계: 주인 아닌 계정은 맨 위에 '개인 종목 기능은 준비 중' 안내 (주인·플래그 꺼짐이면 없음)
+  const wrapAccount = (content: React.ReactNode) => gated(tossSnapshotOn && !member, true) ? <TossAccountSummary>{content}</TossAccountSummary> : content;
   const header = wide ? (
     <View>
       <MemberNotice />
-      {summary.held > 0 && heldPlan ? (
+      {wrapAccount(summary.held > 0 && heldPlan ? (
         <AccountBand
           data={account}
           oneLine={oneLineBand}
@@ -305,13 +308,13 @@ export default function StocksScreen() {
           {...(dense ? { dense: true } : null)}
           {...(basisOn ? { basis: basisMark, width: tableW } : null)}
         />
-      ) : null}
+      ) : null)}
     </View>
   ) : (
     <View>
       <MarketStrip {...(dense ? { dense: true } : null)} />
       <MemberNotice />
-      {summary.held > 0 ? (
+      {wrapAccount(summary.held > 0 ? (
         <AccountPanel
           data={account}
           onAllocation={gated(allocationOn, openAllocation)}
@@ -320,7 +323,7 @@ export default function StocksScreen() {
           // 휴대폰 목록은 창 폭을 다 쓴다 (좌우 여백은 패널 안에서)
           {...(basisOn ? { basis: basisMark, width: winW, fontScale } : null)}
         />
-      ) : null}
+      ) : null)}
     </View>
   );
 

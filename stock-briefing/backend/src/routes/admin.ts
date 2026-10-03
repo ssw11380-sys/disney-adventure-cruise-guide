@@ -7,6 +7,13 @@ import type { FeatureService } from "../services/featureService.js";
 import type { ReconcileService, ReconcileStatus } from "../services/reconcileService.js";
 import type { StockService } from "../services/stockService.js";
 import type { HoldingsAutoSync, TossSyncService } from "../services/tossSyncService.js";
+import type { TossAccountSnapshot } from "../services/tossAccountSnapshot.js";
+
+export interface TossAccountSnapshotBody {
+  on: boolean;
+  snapshot: TossAccountSnapshot | null;
+  sync: { enabled: boolean; intervalMin: number; idleIntervalMin: number; lastRunAt: string | null; nextRunAt: string | null; lastError: string | null } | null;
+}
 
 export interface AdminDeps {
   service: StockService;
@@ -74,6 +81,14 @@ export const adminRoutes: FastifyPluginAsync<AdminDeps> = async (app, { service,
       intraday: await toss.reconcile.intraday().catch(() => null),
       sync: { enabled: s.enabled, intervalMin: s.intervalMin, idleIntervalMin: s.idleIntervalMin, lastRunAt: s.lastRunAt, nextRunAt: s.nextRunAt },
     };
+  });
+
+  /** 저장된 전체 계좌 주식 평가만 읽는다. 조회가 동기화나 외부 요청을 일으키지 않는다. */
+  app.get("/toss/account-snapshot", async (): Promise<TossAccountSnapshotBody> => {
+    if (!toss || !features || !(await features.enabled("tossAccountSnapshot"))) return { on: false, snapshot: null, sync: null };
+    const state = await toss.sync.accountSnapshots.load();
+    const s = toss.autoSync.status();
+    return { on: true, snapshot: state.snapshot, sync: { enabled: s.enabled, intervalMin: s.intervalMin, idleIntervalMin: s.idleIntervalMin, lastRunAt: s.lastRunAt, nextRunAt: s.nextRunAt, lastError: state.lastError ?? s.lastError } };
   });
 
   /** 토스증권 계좌의 보유 종목을 등록 종목으로 가져온다 (수량·평단 동기화) */

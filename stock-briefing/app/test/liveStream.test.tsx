@@ -216,4 +216,20 @@ describe("BH-15: 연결 중에 닫은 소켓이 나중에 열려도 좀비로 �
     expect(invalidate.mock.calls.map((c) => c[0])).toEqual([{ queryKey: ["https://server.test", "reconcileBadge"] }]);
     expect(fetch).not.toHaveBeenCalled();
   });
+
+  it("토스 계좌 원본 기능이 켜지면 대조·계좌 알림이 원본 조회도 갱신한다", () => {
+    const r = mount();
+    const ws = FakeWS.all[0]!;
+    r.act(() => ws.open());
+    const qc = h.qc as QueryClient;
+    qc.setQueryData(["https://server.test", "features"], { features: { tossAccountSnapshot: true } });
+    const invalidate = vi.spyOn(qc, "invalidateQueries");
+    r.act(() => ws.message({ type: "reconcile", at: Date.parse("2026-10-04T12:00:00+09:00") }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["https://server.test", "tossAccountSnapshot"] });
+    invalidate.mockClear();
+    const fetch = vi.spyOn(qc, "fetchQuery").mockResolvedValue([]);
+    r.act(() => ws.message({ type: "holdings" }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["https://server.test", "tossAccountSnapshot"] });
+    fetch.mockRestore();
+  });
 });
