@@ -41,6 +41,32 @@ export interface Fundamentals {
   source: string;
 }
 
+export interface FundamentalsStatus {
+  value: Fundamentals | null;
+  /** 마지막 정상 자료를 받은 시각. 갱신 실패로 이전 값을 쓸 때도 바꾸지 않는다. */
+  receivedAt: string | null;
+  refreshFailed: boolean;
+}
+
+interface FundamentalsCache {
+  at: number;
+  ttl: number;
+  value: Fundamentals | null;
+  receivedAt: number | null;
+  refreshFailed: boolean;
+}
+
+interface FxQuote {
+  rate: number;
+  source: "toss" | "naver";
+  asOf: string;
+}
+
+export interface FxQuoteStatus {
+  value: FxQuote | null;
+  refreshFailed: boolean;
+}
+
 type Json = Record<string, unknown>;
 
 export function reutersCandidates(code: string, market?: string | null): string[] {
@@ -59,10 +85,10 @@ const NOT_FOUND_STATUS = new Set([400, 404, 409]);
 
 export class NaverFundamentals {
   readonly name = "naver-fundamentals";
-  private readonly cache = new Map<string, { at: number; ttl: number; value: Fundamentals | null }>();
-  private readonly inFlight = new Map<string, Promise<Fundamentals | null>>();
+  private readonly cache = new Map<string, FundamentalsCache>();
+  private readonly inFlight = new Map<string, Promise<FundamentalsCache>>();
   private fx: { at: number; rate: number; source: "toss" | "naver" } | null = null;
-  private fxInFlight: Promise<{ rate: number; source: "toss" | "naver"; asOf: string } | null> | null = null;
+  private fxInFlight: Promise<FxQuoteStatus> | null = null;
 
   /** 우선 쓸 환율 소스(토스 Open API 등). 토스 앱의 평가금과 같은 숫자를 내기 위해 토스 환율을 먼저 쓴다 */
   fxPrimary: (() => Promise<number | null>) | null = null;
@@ -96,24 +122,29 @@ export class NaverFundamentals {
    *  - asOf: 그 값을 받은 시각(한국 시간 ISO). 둘 다 실패해 전에 받아 둔 값을 돌려줄 때는 그때 시각이라, 지금보다 오래됐으면 옛 값이다
    * usdKrw() 와 같은 1분 캐시·같은 순서를 쓴다. 한 번도 못 받았으면 null
    */
-  async usdKrwQuote(): Promise<{ rate: number; source: "toss" | "naver"; asOf: string } | null> {
+  async usdKrwQuote(): Promise<FxQuote | null> {
+    return (await this.usdKrwQuoteWithStatus()).value;
+  }
+
+  /** 오래됐다는 추정 대신, 기존 환율 갱신의 실제 성공·실패를 함께 전달한다. */
+  async usdKrwQuoteWithStatus(): Promise<FxQuoteStatus> {
     const t = this.now().getTime();
     const quote = (fx: { at: number; rate: number; source: "toss" | "naver" }) => ({ rate: fx.rate, source: fx.source, asOf: seoulIso(new Date(fx.at)) });
-    if (this.fx && t - this.fx.at < 60_000) return quote(this.fx);
+    if (this.fx && t - this.fx.at < 60_000) return { value: quote(this.fx), refreshFailed: false };
     if (this.fxInFlight) return this.fxInFlight;
     const pending = (async () => {
       if (this.fxPrimary) {
         const primary = await this.fxPrimary().catch(() => null);
         if (primary && primary > 0) {
           this.fx = { at: t, rate: primary, source: "toss" };
-          return quote(this.fx);
+          return { value: quote(this.fx), refreshFailed: false };
         }
       }
       const j = await this.getJson("https://api.stock.naver.com/marketindex/exchange/FX_USDKRW");
       const rate = j === FAILED ? null : parseNum((j?.["exchangeInfo"] as Json | undefined)?.["closePrice"]);
-      if (rate === null || rate <= 0) return this.fx ? quote(this.fx) : null;
+      if (rate === null || rate <= 0) return { value: this.fx ? quote(this.fx) : null, refreshFailed: true };
       this.fx = { at: t, rate, source: "naver" };
-      return quote(this.fx);
+      return { value: quote(this.fx), refreshFailed: false };
     })();
     this.fxInFlight = pending;
     try {
@@ -124,10 +155,20 @@ export class NaverFundamentals {
   }
 
   async get(code: string, market?: string | null): Promise<Fundamentals | null> {
+    return (await this.getEntry(code, market)).value;
+  }
+
+  /** 기존 get과 같은 요청·캐시를 사용하고, 실패 안내에 필요한 수신 시각만 함께 돌려준다. */
+  async getWithStatus(code: string, market?: string | null): Promise<FundamentalsStatus> {
+    const entry = await this.getEntry(code, market);
+    return { value: entry.value, receivedAt: entry.receivedAt === null ? null : seoulIso(new Date(entry.receivedAt)), refreshFailed: entry.refreshFailed };
+  }
+
+  private async getEntry(code: string, market?: string | null): Promise<FundamentalsCache> {
     code = normalizeCode(code);
     const t = this.now().getTime();
     const hit = this.cache.get(code);
-    if (hit && t - hit.at < hit.ttl) return hit.value;
+    if (hit && t - hit.at < hit.ttl) return hit;
     const running = this.inFlight.get(code);
     if (running) return running;
     // 같은 공개 자료의 갱신을 공유해 늦은 실패가 새 정상 값을 덮지 않게 한다.
@@ -136,8 +177,13 @@ export class NaverFundamentals {
       // 받기 실패는 "값 없음"이 아니다: 직전 값이 있으면 그대로 두고, 짧게만 기억했다가 다시 받는다 (BH-43)
       const failed = got === FAILED;
       const value = failed ? (hit?.value ?? null) : got;
-      this.cache.set(code, { at: t, ttl: failed ? this.failTtlMs : this.ttlMs, value });
-      return value;
+      const entry = {
+        at: t, ttl: failed ? this.failTtlMs : this.ttlMs, value,
+        receivedAt: failed ? (hit?.receivedAt ?? null) : value === null ? null : this.now().getTime(),
+        refreshFailed: failed,
+      };
+      this.cache.set(code, entry);
+      return entry;
     })();
     this.inFlight.set(code, pending);
     try {
