@@ -35,6 +35,8 @@ export class BriefingScheduler {
   private crons: { morningCron: string | null; afternoonCron: string | null };
   private readonly beforeRun: SchedulerOptions["beforeRun"];
   private readonly now: () => Date;
+  private readonly activeRuns = new Set<Promise<void>>();
+  private shuttingDown = false;
 
   constructor(
     private readonly service: BriefingService,
@@ -53,6 +55,7 @@ export class BriefingScheduler {
 
   start(): void {
     this.stop();
+    if (this.shuttingDown) return;
     const jobs: Array<[BriefingSession, string | null]> = [
       ["morning", this.crons.morningCron],
       ["afternoon", this.crons.afternoonCron],
@@ -75,7 +78,15 @@ export class BriefingScheduler {
    *  - 예약 시각보다 먼저(수동으로) 만든 같은 회차 브리핑은 다시 만든다 — 장중·장전 내용이 그날 회차로 남지 않고 회차 알림에도 들어가게.
    *    예약 시각 뒤에 만든 것(겹친 수동 실행이 막 만든 것)은 그대로 쓴다
    */
-  private async runScheduled(session: BriefingSession, expr?: string): Promise<void> {
+  private runScheduled(session: BriefingSession, expr?: string): Promise<void> {
+    if (this.shuttingDown) return Promise.resolve();
+    const work = this.executeScheduled(session, expr);
+    this.activeRuns.add(work);
+    void work.then(() => this.activeRuns.delete(work), () => this.activeRuns.delete(work));
+    return work;
+  }
+
+  private async executeScheduled(session: BriefingSession, expr?: string): Promise<void> {
     const firedAt = this.now();
     // 브리핑 3차 2 (늦음·실패 안내): 실행 기록에 적을 그날 예약 시각 — 부른 그때의 cron 시·분 (나중에 설정 시각을 바꿔도 그날 기준이 흔들리지 않게)
     const scheduledAt = expr ? scheduledAtFor(expr, firedAt, this.timezone) : null;
@@ -104,6 +115,18 @@ export class BriefingScheduler {
   stop(): void {
     for (const t of this.tasks) void t.task.destroy();
     this.tasks = [];
+  }
+
+  /** 종료 시작 때 새 예약만 즉시 막는다. 진행 중 작업의 회수는 자원 정리 직전에 한다. */
+  beginShutdown(): void {
+    this.shuttingDown = true;
+    this.stop();
+  }
+
+  /** 정상 종료 때 이미 시작한 사전 작업·생성·완료 처리를 DB 정리 전에 회수한다. */
+  async shutdown(): Promise<void> {
+    this.beginShutdown();
+    await Promise.allSettled(this.activeRuns);
   }
 
   status(): SchedulerStatus {

@@ -112,7 +112,7 @@ async function notifyUnseen(latest: LatestBriefing[], opts: NotifyOpts): Promise
   const seen = await seenIds();
   const isFirst = opts.first ?? !(await initialized(seen));
   const now = opts.now ?? new Date();
-  const fresh = [];
+  const fresh: Parameters<typeof planNotifications>[0] = [];
   for (const item of latest) {
     const b = item.latest;
     if (!b || b.status !== "ok" || seen.has(b.id)) continue;
@@ -135,14 +135,34 @@ async function notifyUnseen(latest: LatestBriefing[], opts: NotifyOpts): Promise
   }
   for (const id of opts.accountIds ?? []) seen.add(-id);
   // 같은 세션의 계좌 브리핑이 있으면 그 세션 알림 앞머리를 계좌 요약으로, 새 계좌 브리핑만 있는 세션도 1건 (여전히 세션당 1건)
+  const prefs = opts.prefs ?? DEFAULT_PREFS;
   const messages =
     fresh.length || newAccountIds.length
-      ? planNotifications(fresh, opts.prefs ?? DEFAULT_PREFS, now, opts.accounts ?? [], { newAccountIds, ...(opts.codes?.length ? { codes: opts.codes } : {}), ...(opts.markets?.length ? { markets: opts.markets } : {}) })
+      ? planNotifications(fresh, prefs, now, opts.accounts ?? [], { newAccountIds, ...(opts.codes?.length ? { codes: opts.codes } : {}), ...(opts.markets?.length ? { markets: opts.markets } : {}) })
       : [];
-  for (const m of messages) {
-    await Notifications.scheduleNotificationAsync({ content: { title: m.title, body: m.body, data: m.data, sound: "default" }, trigger: briefingTrigger() });
+  // 한 건을 보낸 뒤 다음 예약이 실패해도 앞서 보낸 알림을 되풀이하지 않는다.
+  // 보낼 대상만 성공할 때까지 보류하고, 조용한 시간·끈 종목 등 알리지 않을 기록은 유지한다.
+  const deliveries = messages.map((message) => ({
+    message,
+    ids: prefs.digest
+      ? [
+        ...fresh.filter((b) => b.date === message.data.date && b.session === message.data.session && !prefs.mutedCodes.includes(b.code)).map((b) => b.briefingId),
+        ...(opts.accounts ?? []).filter((a) => newAccountIds.includes(a.id) && a.date === message.data.date && a.session === message.data.session).map((a) => -a.id),
+      ]
+      : fresh.filter((b) => b.briefingId === message.data.briefingId).map((b) => b.briefingId),
+  }));
+  for (const { ids } of deliveries) for (const id of ids) seen.delete(id);
+  try {
+    for (const { message: m, ids } of deliveries) {
+      await Notifications.scheduleNotificationAsync({ content: { title: m.title, body: m.body, data: m.data, sound: "default" }, trigger: briefingTrigger() });
+      for (const id of ids) seen.add(id);
+      await saveSeen(seen);
+    }
+    if (!deliveries.length) await saveSeen(seen);
+  } catch (error) {
+    await saveSeen(seen);
+    throw error;
   }
-  await saveSeen(seen);
   // 빈 목록이어도 기준을 적은 것으로 — 다음에 생기는 첫 브리핑을 알린다
   if (isFirst) await AsyncStorage.setItem(INIT_KEY, "1").catch(() => undefined);
   // 계좌 브리핑은 실제로 살펴본 뒤에만 기준을 적는다 (알림을 켤 때는 목록을 받지 않으므로 첫 확인에서 적는다)
