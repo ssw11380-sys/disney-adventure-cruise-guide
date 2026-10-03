@@ -564,7 +564,9 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
   await app.register(deviceRoutes, { prefix: "/api/devices", ...notifDeps });
   await app.register(notificationRoutes, { prefix: "/api/notifications", ...notifDeps });
 
-  // onClose는 역순이다. 다른 자원 정리보다 먼저, HTTP 밖 예약 생성의 저장과 완료 처리를 회수한다.
+  // 연결이 끊긴 수동 요청도 생성·저장을 끝낸다. 예약 종료 훅 뒤, 다른 자원 정리 전에 회수한다.
+  app.addHook("onClose", async () => { await Promise.all([analysisService.shutdown(), briefingService.shutdown()]); });
+  // onClose는 역순이다. 예약 사전 작업이 새 브리핑을 시작할 수 있으므로 예약부터 회수한다.
   if (scheduler) app.addHook("onClose", async () => scheduler.shutdown());
   return app;
 }
