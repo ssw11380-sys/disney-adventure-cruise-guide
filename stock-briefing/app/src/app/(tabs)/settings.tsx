@@ -55,6 +55,7 @@ export default function SettingsScreen() {
   // 다듬은 잔고 위젯(widgetPolish)에서만 쓰는 설정이라 플래그가 켜져 있을 때만 보인다
   const widgetPolishOn = useFeature("widgetPolish", false);
   const widgetClarityOn = useFeature("widgetClarity", false);
+  const tossAccountOn = useFeature("tossAccountSnapshot", false);
   // 위젯 자동 갱신 기록 요약·배터리 설정 열기 (위젯 리뷰 2). 기록은 늘 적고 보여 주는 것만 플래그 뒤에
   const widgetLogOn = useFeature("widgetRefreshLog", false);
   // 잔고 촘촘 모드 (3-39): 켜져 있을 때만 '잔고 표시' 기본/촘촘 칩 (꺼져 있으면 저장된 값과 상관없이 잔고는 기본)
@@ -185,7 +186,7 @@ export default function SettingsScreen() {
       <View style={styles.line}>
         <View style={{ flex: 1, paddingRight: space.md }}>
           <Text style={styles.label(t.ink)}>해외주식 원화 표시</Text>
-          <Muted style={{ fontSize: font.tiny }}>토스증권 적용 환율 기준</Muted>
+          <Muted style={{ fontSize: font.tiny }}>{tossAccountOn ? "앱 표시 환율로 환산한 참고 금액입니다." : "토스증권 적용 환율 기준"}</Muted>
         </View>
         <Toggle value={showKrw} onValueChange={(v) => void setShowKrw(v)} accessibilityLabel="해외주식 원화 표시" />
       </View>
@@ -193,7 +194,7 @@ export default function SettingsScreen() {
         <View style={styles.line}>
           <View style={{ flex: 1, paddingRight: space.md }}>
             <Text style={styles.label(t.ink)}>수수료·세금 차감 평가</Text>
-            <Muted style={{ fontSize: font.tiny }}>토스 앱과 같은 평가금액·손익 (토스 연동 종목)</Muted>
+            <Muted style={{ fontSize: font.tiny }}>{tossAccountOn ? "토스 계좌는 차감 후 제공값, 실시간 평가는 비용 정보가 있는 종목의 예상 비용을 반영합니다." : "토스 앱과 같은 평가금액·손익 (토스 연동 종목)"}</Muted>
           </View>
           <Toggle value={afterCost} onValueChange={(v) => void setAfterCost(v)} accessibilityLabel="수수료·세금 차감 평가" />
         </View>

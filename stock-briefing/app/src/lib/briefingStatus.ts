@@ -213,13 +213,14 @@ export function statusView(s: BriefingStatus | null | undefined, now: number, op
     case "late": {
       if (!sched || !fin) return null;
       const title = `${ses} 브리핑이 평소보다 늦게 만들어졌습니다`;
+      const note = "완료 시각은 생성이 끝난 때입니다. 자료 기준 시각은 각 보고서에서 확인해 주세요.";
       return {
         ...base,
         tone: "warn",
         title,
         line: `예정 ${sched} → ${fin} 완료`,
-        small: { parts: [], note: `숫자는 ${fin} 기준입니다.` },
-        speech: sentence(["브리핑 안내", title, `예정 ${speakClock(sched)}`, `${speakClock(fin)} 완료`, `숫자는 ${speakClock(fin)} 기준입니다`]),
+        small: { parts: [], note },
+        speech: sentence(["브리핑 안내", title, `예정 ${speakClock(sched)}`, `${speakClock(fin)} 완료`, note]),
       };
     }
     case "slow": {

@@ -4,7 +4,7 @@ import { StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFeature, useStocks } from "@/api/hooks";
 import { AllocationCard } from "@/components/AllocationCard";
-import { usePull } from "@/components/Freshness";
+import { StaleBanner, usePull } from "@/components/Freshness";
 import { Screen } from "@/components/Screen";
 import { Button, Empty, ErrorView, Loading } from "@/components/ui";
 import { MEMBER_EMPTY_ALLOCATION, useAccountView } from "@/lib/account";
@@ -26,7 +26,7 @@ import { foldScreens } from "@/tokens";
 
 /**
  * 비중 보기 (플래그 allocationView, 잔고 탭 계좌 평가의 '비중' 버튼): 국내·해외 / 통화 / 업종 / 종목별 원 차트와 범례 표.
- * 금액은 잔고 탭 총 평가금액과 같은 기준(비용 차감 설정·환율)이고, 사실만 보여 준다 — 판단·권유 문구는 넣지 않는다.
+ * 금액은 잔고 탭 앱 시세 평가와 같은 기준(비용 차감 설정·환율)이고, 토스 계좌 원본 합계와 구분한다.
  * 플래그가 꺼져 있으면 잔고를 받지도 계산하지도 않는다 (화면 작업 0건).
  * 주인 아닌 계정(계정 A단계)은 딥링크로 열어도 준비 중 안내만 — 잔고를 받지 않고, 쓸 수 없는 '수량·평균 단가 넣기'로 안내하지 않는다
  */
@@ -65,6 +65,7 @@ export default function AllocationScreen() {
 function AllocationBody() {
   const t = useTheme();
   const stocks = useStocks();
+  const tossSnapshotOn = useFeature("tossAccountSnapshot", false);
   const { afterCost } = useSettings();
   const { pulling, onPull } = usePull(stocks.refetch);
   // 3-24 (플래그 emptyGuide): 보유 종목이 없을 때 안내 + 버튼 하나, 연결 오류의 '설정 열기'
@@ -105,17 +106,22 @@ function AllocationBody() {
     );
 
   const note = excludedNote(a.excluded);
+  const freshness = stocks.isError || stocks.fetchStatus === "paused" ? { top: <StaleBanner query={stocks} {...guide} /> } : {};
+  const basisText = tossSnapshotOn
+    ? "종목의 원화 평가금액으로 나눈 비중입니다. 앱 시세 기준이며, 토스 계좌 평가와 범위·금액이 다를 수 있습니다."
+    : "종목의 원화 평가금액으로 나눈 비중입니다. 잔고 탭 총 평가금액과 같은 기준입니다.";
+  const emptyTitle = note ? "비중을 계산할 수 없습니다" : "보유 종목이 없습니다";
   if (a.count === 0)
     return (
-      <Screen refreshing={pulling} onRefresh={onPull}>
+      <Screen refreshing={pulling} onRefresh={onPull} {...freshness}>
         {ux.emptyGuide ? (
           <Empty
-            title="보유 종목이 없습니다"
+            title={emptyTitle}
             hint={note ?? "잔고에서 종목을 길게 눌러 수정 화면에서 수량과 평균 단가를 넣으면 비중을 보여 줍니다."}
             action={<Button title="잔고로" icon="wallet-outline" variant="secondary" onPress={() => (router.canGoBack() ? router.back() : router.dismissTo("/"))} />}
           />
         ) : (
-          <Empty title="보유 종목이 없습니다" hint={note ?? "수량과 평균 단가를 입력한 종목이 있으면 비중을 보여 줍니다."} />
+          <Empty title={emptyTitle} hint={note ?? "수량과 평균 단가를 입력한 종목이 있으면 비중을 보여 줍니다."} />
         )}
       </Screen>
     );
@@ -127,7 +133,7 @@ function AllocationBody() {
     // 두 장씩 한 줄 (같은 줄 두 카드는 높이를 맞춘다). 화면 읽기 순서: 요약 → 국내/해외 → 통화 → 업종 → 종목별
     const rows = [a.charts.slice(0, 2), a.charts.slice(2, 4)].filter((r) => r.length);
     return (
-      <Screen refreshing={pulling} onRefresh={onPull} disclaimer>
+      <Screen refreshing={pulling} onRefresh={onPull} disclaimer {...freshness}>
         {/* 요약 한 줄: 왼쪽 "총 평가금액  71,445,875 원", 오른쪽 설명 (카드 격자에 높이를 넘긴다).
             큰 글씨로 한 줄에 안 들어가면 설명이 다음 줄로, 그래도 모자라면 총액이 이름 아래 줄로 내려간다 — 총액은 말줄임 없이 */}
         <View accessible accessibilityLabel={summaryLabel} style={[styles.summaryWide, { backgroundColor: t.surface, borderColor: t.line }]}>
@@ -143,7 +149,7 @@ function AllocationBody() {
           </View>
           <View style={styles.summaryNote}>
             <Text style={{ color: t.muted, fontSize: font.small }}>
-              보유 {a.count}종목의 원화 평가금액으로 나눈 비중입니다. 잔고 탭 총 평가금액과 같은 기준입니다.
+              보유 {a.count}{basisText}
             </Text>
             {note ? <Text style={{ color: t.warn, fontSize: font.small }}>{note}</Text> : null}
           </View>
@@ -161,7 +167,7 @@ function AllocationBody() {
     );
   }
   return (
-    <Screen refreshing={pulling} onRefresh={onPull} disclaimer>
+    <Screen refreshing={pulling} onRefresh={onPull} disclaimer {...freshness}>
       <View accessible accessibilityLabel={summaryLabel} style={[styles.summary, { backgroundColor: t.surface, borderColor: t.line }]}>
         <Text style={{ color: t.muted, fontSize: font.small }}>
           {heading}
@@ -172,7 +178,7 @@ function AllocationBody() {
           <Text style={{ fontSize: font.body, color: t.muted, fontWeight: "500" }}> 원</Text>
         </Text>
         <Text style={{ color: t.muted, fontSize: font.small }}>
-          보유 {a.count}종목의 원화 평가금액으로 나눈 비중입니다. 잔고 탭 총 평가금액과 같은 기준입니다.
+          보유 {a.count}{basisText}
         </Text>
         {note ? <Text style={{ color: t.warn, fontSize: font.small }}>{note}</Text> : null}
       </View>

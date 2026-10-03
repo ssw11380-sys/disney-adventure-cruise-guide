@@ -49,6 +49,7 @@ vi.mock("react-native", async () => {
     Text: "Text",
     TextInput: "TextInput",
     Pressable: "Pressable",
+    ScrollView: "ScrollView",
     FlatList,
     StyleSheet: { create: <T,>(s: T) => s, hairlineWidth: 1 },
     Alert: { alert: h.alert },
@@ -195,6 +196,35 @@ describe("PF-06: 종목 등록 양식 — 다른 종목을 고르면 수량·평
     press(r, "애플 등록");
     expect(value(r, "보유 수량")).toBe("");
     expect(value(r, "평균 단가")).toBe("");
+  });
+
+  it("검색어 지우기도 선택 중인 등록 양식과 수량·평단을 함께 비운다", () => {
+    const r = open();
+    search(r, "삼성");
+    press(r, "삼성전자 등록");
+    fill(r, "10", "70000");
+    press(r, "검색어 지우기");
+    expect(value(r, "종목 검색")).toBe("");
+    expect(r.has("보유 수량")).toBe(false);
+    expect(h.register).not.toHaveBeenCalled();
+    r.act(() => vi.advanceTimersByTime(150));
+    press(r, "테슬라 등록");
+    expect(value(r, "보유 수량")).toBe("");
+    expect(value(r, "평균 단가")).toBe("");
+  });
+
+  it("등록 양식은 키보드로 화면이 줄어도 스크롤 경로와 입력 중 등록 동작을 가진다", () => {
+    const r = open();
+    search(r, "삼성");
+    press(r, "삼성전자 등록");
+    fill(r, "10", "70000");
+    const form = r.all().find((n) => n.type === "ScrollView");
+    expect(form).toBeDefined();
+    expect(form?.props.keyboardShouldPersistTaps).toBe("handled");
+    // 네이티브 높이·키보드 겹침은 여기서 증명하지 않는다. 제출이 스크롤 영역 안에 있는지만 확인한다.
+    expect(JSON.stringify(form?.children)).toContain("삼성전자 등록");
+    press(r, "삼성전자 등록");
+    expect(h.register.mock.calls[0][0]).toEqual({ code: "005930", quantity: 10, avgPrice: 70000 });
   });
 
   it("최근 검색에서 등록해도 비운다", () => {

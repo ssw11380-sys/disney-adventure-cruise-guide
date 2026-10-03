@@ -22,6 +22,7 @@ import { Screen } from "@/components/Screen";
 import { TwoPane } from "@/components/TwoPane";
 import { Button, Card, ChangeText, Empty, ErrorView, Muted, SectionTitle, Segmented } from "@/components/ui";
 import { orderForTab, runChoice, runConfirm, sessionNow } from "@/lib/briefingRun";
+import { ReportListNotice } from "@/components/ReportListNotice";
 import { accountCardItem } from "@/lib/accountBriefing";
 import { marketCardItem } from "@/lib/marketSummary";
 import { firstPick, gridColumns, isUnread, latestSession, noteListSession, noteTabHeadHidden, pickAuto, pickBriefing, pickByUser, selectedRowId, tabHeadOptions, usePick, type BriefingPick, type PickState } from "@/lib/briefingPick";
@@ -231,7 +232,12 @@ export default function BriefingsScreen() {
   };
   // 브리핑이 하나도 없으면(emptyGuide) 안내는 '수동 생성' 대신 빈 화면의 '지금 만들기'를 가리킨다.
   // 계정 A단계: 주인 아닌 계정은 늦음·실패 안내를 그리지 않고 상태도 묻지 않는다 (주인 브리핑 실행 상태 — 서버도 403. 맨 위 차분한 안내만)
-  const banner = member ? null : statusOn ? <BriefingStatusSlot fallback={oldBanner} onOpen={openProblem} role={twoPaneNow ? "button" : "link"} refetchRef={statusRefetch} nowButton={guideNoBriefing} /> : oldBanner;
+  const runBanner = member ? null : statusOn ? <BriefingStatusSlot fallback={oldBanner} onOpen={openProblem} role={twoPaneNow ? "button" : "link"} refetchRef={statusRefetch} nowButton={guideNoBriefing} /> : oldBanner;
+  const banner = (accountOn && accounts.isError) || (summaryOn && summaries.isError) ? <>
+    {accountOn ? <ReportListNotice label="계좌 브리핑" query={accounts} /> : null}
+    {summaryOn ? <ReportListNotice label="시장 요약" query={summaries} /> : null}
+    {runBanner}
+  </> : runBanner;
   // 실패 브리핑 카드·줄 글을 쉬운 말로 (꺼지면 속성을 넘기지 않아 지금과 같다)
   const plainFail = statusOn ? { plainFail: true } : {};
   const ratesFailText = moversOn && order === "movers" && stocks.isError ? "등락률을 불러오지 못해 등록순으로 보여 줍니다 · 당겨서 다시 시도" : null;

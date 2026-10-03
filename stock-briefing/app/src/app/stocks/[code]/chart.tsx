@@ -6,7 +6,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCandles, useFeature, useStock } from "@/api/hooks";
 import type { CandlePeriod } from "@/api/types";
 import { CandleChart } from "@/components/CandleChart";
-import { ChartNotice } from "@/components/Freshness";
+import { ChartNotice, StaleBanner } from "@/components/Freshness";
 import { ChangeText, ErrorView } from "@/components/ui";
 import { CHART_ICON_BTN, chartHeaderLayout, createChartViewMemo, headerNeedsTwoLines } from "@/lib/chartLayout";
 import { CANDLE_COUNT, parseCandlePeriod } from "@/lib/chartPrefs";
@@ -189,6 +189,8 @@ export default function FullscreenChartScreen() {
           if (chrome.key !== layoutKey || next > chrome.h + 1) setChrome({ key: layoutKey, h: next });
         }}
       >
+      {/* 현재가와 봉은 서로 다른 조회다. 봉이 정상이어도 현재가 조회 실패를 감추지 않는다. */}
+      {stock.data !== undefined && (stock.isError || stock.fetchStatus === "paused") ? <StaleBanner query={stock} /> : null}
       <CandleChart
         candles={candles.data?.candles}
         period={period}
