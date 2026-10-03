@@ -1,7 +1,8 @@
 import React from "react";
-import { Linking, Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { BriefingWithData } from "@/api/types";
 import { formatDateKo } from "@/lib/format";
+import { openSourceLink } from "@/lib/openSourceLink";
 import { font, space, touch, useTheme } from "@/theme";
 import { Card, Muted, SectionTitle } from "./ui";
 
@@ -14,7 +15,7 @@ export function BriefingSources({ data }: { data: BriefingWithData["data"] }) {
   if (!data) return null;
   const news = data.news ?? [];
   const disclosures = data.disclosures ?? [];
-  const link = (url: string) => () => void Linking.openURL(url).catch(() => undefined);
+  const link = (url: string) => () => void openSourceLink(url);
   return (
     <Card>
       <SectionTitle>근거</SectionTitle>

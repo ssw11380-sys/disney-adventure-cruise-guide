@@ -1,6 +1,6 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import React, { useEffect, useState } from "react";
-import { Animated, Linking, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View, type StyleProp, type ViewStyle } from "react-native";
+import { Animated, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View, type StyleProp, type ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAnalysis, useAnalysisRecovery, useFeature, useStockMutations, useStockNews } from "@/api/hooks";
 import type { AnalysisKind, Briefing, Disclosure, NewsItem } from "@/api/types";
@@ -11,6 +11,7 @@ import { ReportVerificationNotice } from "@/components/ReportVerification";
 import { Button, Card, ErrorView, LiveDot, Loading, Muted, SectionTitle, Stat } from "@/components/ui";
 import { chunkRows, detailHeaderLayout, fillChartHeight, HEAD_PAD, headPriceParts, headTitleMaxWidth, markdownPreview, shortStamp } from "@/lib/detailLayout";
 import { formatDateKo, relativeTime } from "@/lib/format";
+import { openSourceLink } from "@/lib/openSourceLink";
 import { analysisView } from "@/lib/freshness";
 import { gated } from "@/lib/features";
 import type { AnalysisWait } from "@/lib/analysisRecovery";
@@ -145,6 +146,7 @@ function LegacyAnalysisPeek({ code, kind, title, lines, requested, onRequest, to
             </Text>
           ) : null}
           <ReportVerificationNotice verification={d.verification} />
+          {d.missing.length ? <Muted>데이터 미확인: {d.missing.join(", ")}</Muted> : null}
           {lines !== null ? (
             <Text style={{ color: t.ink, fontSize: font.body, lineHeight: foldDetail.previewLineH }} numberOfLines={lines}>
               {markdownPreview(d.content)}
@@ -152,7 +154,6 @@ function LegacyAnalysisPeek({ code, kind, title, lines, requested, onRequest, to
           ) : (
             <>
               <MarkdownView>{d.content}</MarkdownView>
-              {d.missing.length ? <Muted>데이터 미확인: {d.missing.join(", ")}</Muted> : null}
               <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: space.xs }}>
                 <Muted>보고서 생성 {formatDateKo(d.createdAt, true)}</Muted>
                 <Button title={refreshError ? "다시 시도" : "갱신"} variant="secondary" icon="refresh" compact onPress={() => refreshAnalysis.mutate({ code, kind })} />
@@ -198,12 +199,12 @@ function AnalysisWaitBody({ code, kind, requested, onRequest, title, lines = nul
             </View>
           ) : !d ? <Loading label="저장된 분석 확인 중" /> : null}
           {d ? <ReportVerificationNotice verification={d.verification} /> : null}
+          {d?.missing.length ? <Muted>데이터 미확인: {d.missing.join(", ")}</Muted> : null}
           {d ? lines !== null ? (
             <Text style={{ color: t.ink, fontSize: font.body, lineHeight: foldDetail.previewLineH }} numberOfLines={lines}>{markdownPreview(d.content)}</Text>
           ) : (
             <>
               <MarkdownView>{d.content}</MarkdownView>
-              {d.missing.length ? <Muted>데이터 미확인: {d.missing.join(", ")}</Muted> : null}
               <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: space.xs }}>
                 <Muted>보고서 생성 {formatDateKo(d.createdAt, true)}</Muted>
                 {!unknown ? <Button title={a.busy ? "처리 중" : "갱신"} variant="secondary" icon="refresh" compact disabled={a.busy} onPress={a.refresh} /> : null}
@@ -234,7 +235,7 @@ export function NewsItems({ items }: { items: NewsItem[] }) {
   return (
     <>
       {items.map((item, i) => (
-        <Pressable key={`${item.url}-${i}`} onPress={() => void Linking.openURL(item.url)} accessibilityRole="link" accessibilityLabel={`뉴스: ${item.title}, ${item.source ?? ""} ${relativeTime(item.publishedAt) || formatDateKo(item.publishedAt)}`} style={[styles.newsItem, { borderTopColor: t.line, borderTopWidth: i === 0 ? 0 : StyleSheet.hairlineWidth }]}>
+        <Pressable key={`${item.url}-${i}`} onPress={() => void openSourceLink(item.url)} accessibilityRole="link" accessibilityLabel={`뉴스: ${item.title}, ${item.source ?? ""} ${relativeTime(item.publishedAt) || formatDateKo(item.publishedAt)}`} style={[styles.newsItem, { borderTopColor: t.line, borderTopWidth: i === 0 ? 0 : StyleSheet.hairlineWidth }]}>
           <Text style={{ color: t.ink, fontSize: font.body, lineHeight: 20 }} numberOfLines={2}>{item.title}</Text>
           <Muted>
             {item.source ?? ""} · {relativeTime(item.publishedAt) || formatDateKo(item.publishedAt)}
@@ -251,7 +252,7 @@ export function DisclosureItems({ items }: { items: Disclosure[] }) {
   return (
     <>
       {items.map((item, i) => (
-        <Pressable key={item.receiptNo} onPress={() => void Linking.openURL(item.url)} accessibilityRole="link" accessibilityLabel={`공시: ${item.title}, ${item.filer}, ${formatDateKo(item.filedAt)}`} style={[styles.newsItem, { borderTopColor: t.line, borderTopWidth: i === 0 ? 0 : StyleSheet.hairlineWidth }]}>
+        <Pressable key={item.receiptNo} onPress={() => void openSourceLink(item.url)} accessibilityRole="link" accessibilityLabel={`공시: ${item.title}, ${item.filer}, ${formatDateKo(item.filedAt)}`} style={[styles.newsItem, { borderTopColor: t.line, borderTopWidth: i === 0 ? 0 : StyleSheet.hairlineWidth }]}>
           <Text style={{ color: t.ink, fontSize: font.body }}>{item.title}</Text>
           <Muted>
             {item.filer} · {formatDateKo(item.filedAt)}

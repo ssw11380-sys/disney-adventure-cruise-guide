@@ -12,7 +12,8 @@ const params = z.object({
   kind: z.enum(["company", "value", "technical"]),
 });
 const codeParam = z.object({ code: z.string().transform(normalizeCode).pipe(z.string().regex(CODE_RE, "종목 코드는 6자리 숫자(한국) 또는 티커(미국)")) });
-const query = z.object({ refresh: z.coerce.boolean().default(false) });
+// 쿼리 문자열 "false"·"0"을 참으로 바꾸면 유효한 결과를 버리고 AI를 다시 부른다.
+const query = z.object({ refresh: z.enum(["true", "false", "1", "0"]).transform((value) => value === "true" || value === "1").default(false) });
 const trackingQuery = z.object({ requestId: z.string().regex(/^[A-Za-z0-9_-]{12,80}$/, "분석 요청 ID 형식이 올바르지 않습니다").optional() });
 
 export interface AnalysisRouteDeps {

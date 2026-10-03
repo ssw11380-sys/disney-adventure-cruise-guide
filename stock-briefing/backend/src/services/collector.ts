@@ -213,6 +213,8 @@ export class DataCollector {
     // 기술적 지표는 브리핑과 같이 끝난 정규장 봉까지만
     const marketState = marketContext(stock.code, status, now);
     const technical = daily ? computeTechnicalSummary(completedCandles(daily.candles, marketState, now)) : null;
+    // 조회 성공과 지표 계산 가능은 다르다. 빈 응답·신규 상장의 짧은 이력을 누락 없음으로 안내하지 않는다.
+    if (kind === "technical" && daily && !technical) missing.push("기술적 지표(봉 부족)");
     const latest = financials?.at(-1) ?? null;
     const ratios =
       latest
