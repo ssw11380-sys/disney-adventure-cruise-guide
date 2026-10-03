@@ -254,7 +254,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       now,
     });
     scheduler.start();
-    app.addHook("onClose", async () => scheduler?.stop());
+    // preClose에는 플러그인 기한이 있으므로 새 예약만 막고 바로 끝낸다. 회수는 아래 마지막 onClose에서 한다.
+    app.addHook("preClose", async () => scheduler?.beginShutdown());
   }
 
   const deviceService = new DeviceService(opts.db, opts.providers.push, now);
@@ -563,6 +564,8 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
   await app.register(deviceRoutes, { prefix: "/api/devices", ...notifDeps });
   await app.register(notificationRoutes, { prefix: "/api/notifications", ...notifDeps });
 
+  // onClose는 역순이다. 다른 자원 정리보다 먼저, HTTP 밖 예약 생성의 저장과 완료 처리를 회수한다.
+  if (scheduler) app.addHook("onClose", async () => scheduler.shutdown());
   return app;
 }
 
