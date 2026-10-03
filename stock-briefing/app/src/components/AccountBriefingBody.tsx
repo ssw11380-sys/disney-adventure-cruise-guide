@@ -1,6 +1,6 @@
 import { router } from "expo-router";
 import React, { useState } from "react";
-import { Linking, Pressable, StyleSheet, Text, useWindowDimensions, View, type StyleProp, type TextStyle, type ViewStyle } from "react-native";
+import { Pressable, StyleSheet, Text, useWindowDimensions, View, type StyleProp, type TextStyle, type ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAccountBriefing, useFeature, useFeatures } from "@/api/hooks";
 import type { AccountBriefingWithData, AccountData, AccountEvents, AccountExposure, AccountSchedule } from "@/api/types";
@@ -22,6 +22,7 @@ import { accountColumns } from "@/lib/briefingPick";
 import { gated } from "@/lib/features";
 import { formatDateKo, formatIndexValue, formatPct, formatWon, SESSION_LABEL, shownSign } from "@/lib/format";
 import { viewState } from "@/lib/freshness";
+import { openSourceLink } from "@/lib/openSourceLink";
 import { quoteBasisChunks, quoteBasisSpeech } from "@/lib/numberBasis";
 import { changeColor, font, fontCap, space, touch, useTheme } from "@/theme";
 import { foldBriefings as FB, layout as L } from "@/tokens";
@@ -693,7 +694,7 @@ function ScheduleCard({ s, asOf }: { s: AccountSchedule; asOf: string }) {
           x.url ? (
             <Pressable
               key={`${x.code}-${x.title}-${x.filedAt}`}
-              onPress={() => void Linking.openURL(x.url!)}
+              onPress={() => void openSourceLink(x.url!)}
               accessibilityRole="link"
               accessibilityLabel={sentence([x.name, "공시", x.title, formatDateKo(x.filedAt), "DART 에서 열기"])}
               style={({ pressed }) => [styles.disclosure, { backgroundColor: pressed ? t.surfaceAlt : "transparent" }]}

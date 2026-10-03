@@ -1,6 +1,6 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import React, { useEffect, useState } from "react";
-import { Animated, Linking, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View, type StyleProp, type ViewStyle } from "react-native";
+import { Animated, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View, type StyleProp, type ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAnalysis, useAnalysisRecovery, useFeature, useStockMutations, useStockNews } from "@/api/hooks";
 import type { AnalysisKind, Briefing, Disclosure, NewsItem } from "@/api/types";
@@ -11,6 +11,7 @@ import { ReportVerificationNotice } from "@/components/ReportVerification";
 import { Button, Card, ErrorView, LiveDot, Loading, Muted, SectionTitle, Stat } from "@/components/ui";
 import { chunkRows, detailHeaderLayout, fillChartHeight, HEAD_PAD, headPriceParts, headTitleMaxWidth, markdownPreview, shortStamp } from "@/lib/detailLayout";
 import { formatDateKo, relativeTime } from "@/lib/format";
+import { openSourceLink } from "@/lib/openSourceLink";
 import { analysisView } from "@/lib/freshness";
 import { gated } from "@/lib/features";
 import type { AnalysisWait } from "@/lib/analysisRecovery";
@@ -234,7 +235,7 @@ export function NewsItems({ items }: { items: NewsItem[] }) {
   return (
     <>
       {items.map((item, i) => (
-        <Pressable key={`${item.url}-${i}`} onPress={() => void Linking.openURL(item.url)} accessibilityRole="link" accessibilityLabel={`뉴스: ${item.title}, ${item.source ?? ""} ${relativeTime(item.publishedAt) || formatDateKo(item.publishedAt)}`} style={[styles.newsItem, { borderTopColor: t.line, borderTopWidth: i === 0 ? 0 : StyleSheet.hairlineWidth }]}>
+        <Pressable key={`${item.url}-${i}`} onPress={() => void openSourceLink(item.url)} accessibilityRole="link" accessibilityLabel={`뉴스: ${item.title}, ${item.source ?? ""} ${relativeTime(item.publishedAt) || formatDateKo(item.publishedAt)}`} style={[styles.newsItem, { borderTopColor: t.line, borderTopWidth: i === 0 ? 0 : StyleSheet.hairlineWidth }]}>
           <Text style={{ color: t.ink, fontSize: font.body, lineHeight: 20 }} numberOfLines={2}>{item.title}</Text>
           <Muted>
             {item.source ?? ""} · {relativeTime(item.publishedAt) || formatDateKo(item.publishedAt)}
@@ -251,7 +252,7 @@ export function DisclosureItems({ items }: { items: Disclosure[] }) {
   return (
     <>
       {items.map((item, i) => (
-        <Pressable key={item.receiptNo} onPress={() => void Linking.openURL(item.url)} accessibilityRole="link" accessibilityLabel={`공시: ${item.title}, ${item.filer}, ${formatDateKo(item.filedAt)}`} style={[styles.newsItem, { borderTopColor: t.line, borderTopWidth: i === 0 ? 0 : StyleSheet.hairlineWidth }]}>
+        <Pressable key={item.receiptNo} onPress={() => void openSourceLink(item.url)} accessibilityRole="link" accessibilityLabel={`공시: ${item.title}, ${item.filer}, ${formatDateKo(item.filedAt)}`} style={[styles.newsItem, { borderTopColor: t.line, borderTopWidth: i === 0 ? 0 : StyleSheet.hairlineWidth }]}>
           <Text style={{ color: t.ink, fontSize: font.body }}>{item.title}</Text>
           <Muted>
             {item.filer} · {formatDateKo(item.filedAt)}

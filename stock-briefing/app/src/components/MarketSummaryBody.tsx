@@ -1,7 +1,7 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { router } from "expo-router";
 import React, { useCallback, useState } from "react";
-import { Linking, Pressable, StyleSheet, Text, useWindowDimensions, View, type LayoutChangeEvent, type TextStyle } from "react-native";
+import { Pressable, StyleSheet, Text, useWindowDimensions, View, type LayoutChangeEvent, type TextStyle } from "react-native";
 import { useFeature, useFeatures, useMarketSummary } from "@/api/hooks";
 import type { CompareRow, HoldingsCompare, MarketSummary, MarketSummaryData, SummaryEvent } from "@/api/types";
 import { BriefingSplit, type BodyLayout } from "@/components/BriefingBody";
@@ -13,6 +13,7 @@ import { Badge, Button, Card, Empty, ErrorView, Muted, SectionTitle, TableHead }
 import { sentence, speakRate } from "@/lib/a11y";
 import { gated } from "@/lib/features";
 import { formatDateKo, shownSign } from "@/lib/format";
+import { openSourceLink } from "@/lib/openSourceLink";
 import { viewState } from "@/lib/freshness";
 import {
   basisText,
@@ -607,7 +608,7 @@ function NewsCard({ d }: { d: MarketSummaryData }) {
               </View>
               {link ? (
                 <Pressable
-                  onPress={() => void Linking.openURL(link)}
+                  onPress={() => void openSourceLink(link)}
                   accessibilityRole="link"
                   accessibilityLabel={sentence([`${n.outlet} 기사 원문 열기`, n.title])}
                   style={({ pressed }) => [styles.link, { backgroundColor: pressed ? t.surfaceAlt : "transparent" }]}
