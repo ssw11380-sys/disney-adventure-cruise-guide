@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { backgroundSessionFor, clearSession, installSessionStorage, loadSession, persistsPersonal, resetSessionForTests, saveSession, SESSION_KEY, sessionFor, type KeyValueStorage } from "@/lib/session";
+import { backgroundSessionFor, clearSession, installSessionStorage, loadSession, persistsPersonal, resetSessionForTests, saveSession, SESSION_KEY, sessionFor, updateSessionUser, type KeyValueStorage } from "@/lib/session";
 
 const SERVER = "https://remaining-session.test";
 const login = (id: number, apiUrl = SERVER, remember = true) => ({ apiUrl, token: `offline-fixture-${id}`, remember, savedAt: 1, user: { id, loginId: `가짜사용자${id}`, email: null, isOwner: id === 1, usingInitialPassword: false } });
@@ -137,5 +137,43 @@ describe("실제 임시 파일 저장소와 계정 전환 실패 경계", () => 
     expect(sessionFor(SERVER)).toMatchObject({ user: { id: 3 }, remember: true });
     expect(restoredInNewProcess()).toEqual({ first: 3, second: null });
     expect(removals).toBe(1);
+  });
+
+  it("로그인 저장 실패 전에 대기한 프로필 갱신이 메모리 전용 전환 뒤 인증값을 다시 저장하지 않는다", async () => {
+    let release!: () => void;
+    const delayed = new Promise<void>((resolve) => { release = resolve; });
+    const set = disk.setItem;
+    let firstSessionWrite = true;
+    disk.setItem = async (key, value) => {
+      if (key === SESSION_KEY && firstSessionWrite) { firstSessionWrite = false; await delayed; throw new Error("주입한 첫 로그인 저장 실패"); }
+      await set(key, value);
+    };
+    const saved = saveSession(login(1));
+    const profile = updateSessionUser(SERVER, { ...login(1).user, email: "fixture@example.test" });
+    release(); await Promise.all([saved, profile]);
+    expect(sessionFor(SERVER)).toMatchObject({ remember: false, user: { email: "fixture@example.test" } });
+    expect(await backgroundSessionFor(SERVER)).toEqual({ kind: "memory" });
+    expect(restoredInNewProcess()).toEqual({ first: null, second: null });
+    expect(await disk.getItem(SESSION_KEY)).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("같은 로그인에서 연속 프로필 갱신은 마지막 정보를 순서대로 한 번씩 저장한다", async () => {
+    await saveSession(login(1));
+    let release!: () => void;
+    const delayed = new Promise<void>((resolve) => { release = resolve; });
+    const set = disk.setItem;
+    disk.setItem = async (key, value) => {
+      if (key === SESSION_KEY && value.includes("first@example.test")) await delayed;
+      await set(key, value);
+    };
+    const first = updateSessionUser(SERVER, { ...login(1).user, email: "first@example.test" });
+    const last = updateSessionUser(SERVER, { ...login(1).user, email: "last@example.test" });
+    release(); await Promise.all([first, last]);
+    expect(sessionFor(SERVER)).toMatchObject({ remember: true, user: { email: "last@example.test" } });
+    expect(JSON.parse((await disk.getItem(SESSION_KEY))!)).toMatchObject({ remember: true, user: { email: "last@example.test" } });
+    expect(writes).toBe(3); expect(removals).toBe(0);
+    expect(restoredInNewProcess()).toEqual({ first: 1, second: null });
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

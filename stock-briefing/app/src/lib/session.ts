@@ -353,7 +353,12 @@ export async function updateSessionUser(apiUrl: string, user: AccountUser): Prom
   current = { ...s, user };
   emit();
   const saved = current;
-  if (saved.remember) await writeSession((st) => st.setItem(SESSION_KEY, JSON.stringify(saved)));
+  const identity = identityVersion;
+  if (saved.remember) await writeSession(async (st) => {
+    // 대기 중 로그인 저장이 실패해 메모리 전용으로 바뀌었다면 앞서 캡처한 인증값을 다시 남기지 않는다.
+    if (identity !== identityVersion || current?.token !== saved.token || !current.remember) return;
+    await st.setItem(SESSION_KEY, JSON.stringify(saved));
+  });
 }
 
 /** 세션을 지운다 (직접 로그아웃·세션 끊김). 기기 표시(계정 모드를 봄)는 남긴다 — 다음에 로그인 화면이 나오게 */
