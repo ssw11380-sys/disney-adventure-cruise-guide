@@ -755,14 +755,15 @@ describe("전체 화면 브리핑 상세 (알림·위젯·종목 상세에서 �
     expect(h.store.size).toBe(0);
   });
 
-  it("폰 화면 구조: 이름 링크 → 날짜 → 시세 칸 → 요약|상세 탭 → 본문 카드 → 근거 → 다시 만들기 → 지난 브리핑(주소 바꿔 끼움)", () => {
+  it("폰 화면 구조: 이름·시세 → 근거 바로가기 → 요약|상세 → 본문 → 근거 → 다시 만들기 → 지난 브리핑", () => {
     const r = render(<BriefingDetailScreen />);
     const screen = ofType(r, "Screen")[0]!;
     expect(screen.props.disclaimer).toBe(true);
     expect(screen.props.scroll).toBeUndefined();
     expect(ofType(r, "StackScreen")[0]!.props.options).toEqual({ title: "퀀티넘 · 오전" });
     const kids = screen.children.filter((c): c is HostNode => typeof c !== "string").map((c) => c.type);
-    expect(kids).toEqual(["StackScreen", "View", "Card", "Segmented", "Card", "BriefingSources", "View", "View"]);
+    expect(kids).toEqual(["StackScreen", "View", "Card", "View", "Segmented", "Card", "View", "View", "View"]);
+    expect(r.all().some((n) => n.props.accessibilityRole === "link" && String(n.props.accessibilityLabel).endsWith("근거 자료로 이동"))).toBe(true);
     expect(r.byLabel("퀀티넘 종목 화면으로").props.accessibilityRole).toBe("link");
     expect(ofType(r, "Row").map((n) => n.props.label)).toEqual(["브리핑 시점 가격", "전일 대비", "보유 손익"]);
     press(r, r.all().find((n) => n.type === "Pressable" && String(n.props.accessibilityLabel).startsWith("9월 24일 (목)"))!);
