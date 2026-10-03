@@ -306,9 +306,15 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
           // 잔고 탭이 가려져 구독이 끊겨 있어도 바로 받는다 (위젯이 옛 잔고를 그리지 않게) — 구독이 없으면 refetch 가 건너뛰므로 직접 받는다
           void qc.fetchQuery({ queryKey: [apiUrl, "stocks"], queryFn: createApi(apiUrl, apiToken).listStocks, staleTime: 0 }).catch(() => undefined);
           void qc.invalidateQueries({ queryKey: [apiUrl, "stock"] });
+          if (featureOn(qc.getQueryData<FeatureFlags>([apiUrl, "features"]), "tossAccountSnapshot", false)) {
+            void qc.invalidateQueries({ queryKey: [apiUrl, "tossAccountSnapshot"] });
+          }
         } else if (msg.type === "reconcile") {
           // 토스 대조 기록이 새로 생겼다 (3-32): 배지를 보고 있는 화면이 있으면 바로 다시 받고, 없으면 다음에 볼 때 받는다. 잔고·상세는 다시 받지 않는다
           void qc.invalidateQueries({ queryKey: [apiUrl, "reconcileBadge"] });
+          if (featureOn(qc.getQueryData<FeatureFlags>([apiUrl, "features"]), "tossAccountSnapshot", false)) {
+            void qc.invalidateQueries({ queryKey: [apiUrl, "tossAccountSnapshot"] });
+          }
         }
       };
       ws.onerror = () => {

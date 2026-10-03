@@ -3,6 +3,7 @@ import { CODE_RE, isKrCode, normalizeCode } from "../../lib/codes.js";
 import { ProviderError, within } from "../../lib/errors.js";
 import { mapLimit } from "../../lib/concurrency.js";
 import { seoulIso } from "../../lib/time.js";
+import { parseTossAccountTotals, type TossAccountTotals } from "../../services/tossAccountSnapshot.js";
 import type { InvestorFlowDay, InvestorFlowProvider } from "./investorFlow.js";
 import type { FetchFn, MasterProvider, QuoteProvider } from "./types.js";
 
@@ -730,6 +731,7 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
   async holdingsWithOverview(accountSeq: number): Promise<{
     items: TossHolding[];
     overview: { purchaseKrw: number; purchaseUsd: number | null; afterCostKrw: number; afterCostUsd: number; rateAfterCost: number | null };
+    accountEvaluation: TossAccountTotals | null;
   }> {
     const r = await this.client.get<Json>("/api/v1/holdings", {}, { "X-Tossinvest-Account": String(accountSeq) });
     // 본문이 빈 200 은 일시 오류로 본다 (빈 목록으로 받아들이면 전량 매도로 처리돼 보유·원화 장부가 지워진다)
@@ -739,6 +741,7 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
     const rate = num(((r["profitLoss"] as Json | undefined) ?? {})["rateAfterCost"]);
     return {
       items: parseHoldingItems(r["items"] as Json[]),
+      accountEvaluation: parseTossAccountTotals(r),
       overview: {
         purchaseKrw: num(purchase?.["krw"]) ?? 0,
         // 모르면 null (0 이면 "달러 종목 없음"으로 읽혀 원화 장부가 지워진다)

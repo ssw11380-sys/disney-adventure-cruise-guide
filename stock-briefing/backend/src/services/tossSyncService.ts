@@ -6,6 +6,7 @@ import { toMarket } from "../providers/market/kisMaster.js";
 import { ProviderError, within } from "../lib/errors.js";
 import { holdingsWriteLock } from "../lib/mutex.js";
 import { ACCOUNT_GONE_MS, KrwCostBook, RateNotFoundError, type AccountForBook, type OverviewForBook, type SetExactResult } from "./krwCostBook.js";
+import { TossAccountSnapshotStore, sumTossAccountTotals, type TossAccountSnapshot, type TossAccountTotals } from "./tossAccountSnapshot.js";
 
 /**
  * 토스증권 계좌의 보유 종목을 registered_stocks 로 가져온다.
@@ -92,6 +93,7 @@ export function tossBasisFor(quantity: number | null, detail: TossHoldingDetail 
 export class TossSyncService {
   /** 해외 종목 원화 매입금액 장부 (토스 앱의 원화 손익과 맞추기 위해) */
   readonly costBook: KrwCostBook;
+  readonly accountSnapshots: TossAccountSnapshotStore;
   private accountSeqs: number[] = [];
 
   constructor(
@@ -101,7 +103,9 @@ export class TossSyncService {
     /** 토스가 원화 평가에 쓰는 표시 환율 (없으면 원화 장부 보정을 건너뛴다) */
     private readonly displayFx: (() => Promise<number | null>) | null = null,
     private readonly log?: { warn(obj: Record<string, unknown>, msg: string): void },
+    private readonly accountSnapshotEnabled: () => Promise<boolean> = async () => false,
   ) {
+    this.accountSnapshots = new TossAccountSnapshotStore(db);
     this.costBook = new KrwCostBook({
       db,
       now,
@@ -211,6 +215,16 @@ export class TossSyncService {
   }
 
   async importHoldings(): Promise<ImportResult> {
+    const snapshotEnabled = await this.accountSnapshotEnabled();
+    try {
+      return await this.importHoldingsInner(snapshotEnabled);
+    } catch (error) {
+      if (snapshotEnabled) await this.accountSnapshots.failed("토스 계좌 동기화에 실패해 이전 평가를 유지합니다.");
+      throw error;
+    }
+  }
+
+  private async importHoldingsInner(snapshotEnabled: boolean): Promise<ImportResult> {
     const accounts = await this.toss.accounts();
     // 계좌 목록이 비면 일시 오류로 본다 (그대로 진행하면 토스에서 가져온 종목이 전부 전량 매도로 처리된다)
     if (accounts.length === 0) throw emptyAccounts();
@@ -218,10 +232,14 @@ export class TossSyncService {
     this.onAccounts?.(this.accountSeqs);
     const merged = new Map<string, TossHolding>();
     const perAccount: PerAccount[] = [];
+    let receivedFrom: string | null = null;
+    let receivedAt: string | null = null;
     for (const a of accounts) {
       // 보유 종목과 계좌 요약을 한 응답에서 (원화 장부 보정은 둘이 같은 시점이어야 맞는다)
-      const { items, overview } = await this.toss.holdingsWithOverview(a.accountSeq);
-      perAccount.push({ account: a.accountSeq, holdings: items, overview });
+      const { items, overview, accountEvaluation } = await this.toss.holdingsWithOverview(a.accountSeq);
+      receivedAt = seoulIso(this.now());
+      receivedFrom ??= receivedAt;
+      perAccount.push({ account: a.accountSeq, holdings: items, overview, accountEvaluation });
       for (const h of items) {
         const prev = merged.get(h.code);
         if (!prev) merged.set(h.code, h);
@@ -244,14 +262,27 @@ export class TossSyncService {
     const holdings = [...merged.values()].filter((h) => h.quantity > 0);
     const infos = holdings.length ? await this.toss.stockInfos(holdings.map((h) => h.code)).catch(() => new Map()) : new Map();
     // 여기부터 DB 쓰기: 앱의 등록·수정·삭제와 겹치지 않게 한 줄로
-    const result = await holdingsWriteLock.run(() => this.applyHoldings(accounts.map((a) => a.accountSeq), holdings, infos, perAccount));
+    const { result, snapshotTrusted } = await holdingsWriteLock.run(() => this.applyHoldings(accounts.map((a) => a.accountSeq), holdings, infos, perAccount));
     // 원화 장부는 토스(주문 내역·과거 환율)를 부르므로 쓰기 잠금 밖에서 한다 — 토스가 느려도 앱의 등록·수정·삭제가 기다리지 않게.
     // 장부는 자기 잠금으로 한 줄로 저장하고, 등록 종목 쓰기와는 겹치는 데이터가 없다
-    await this.updateCostBook(perAccount);
+    const displayFx = await this.updateCostBook(perAccount);
+    if (snapshotEnabled) {
+      const totals = sumTossAccountTotals(perAccount.map((a) => a.accountEvaluation));
+      if (!totals || !snapshotTrusted || !receivedFrom || !receivedAt) {
+        await this.accountSnapshots.failed("토스 계좌 응답이 불완전해 이전 평가를 유지합니다.");
+      } else {
+        try {
+          await this.accountSnapshots.save({ ...totals, source: "toss-openapi", scope: "all-toss-stock-holdings", excludesCash: true, includesExcludedHoldings: true,
+            receivedFrom, receivedAt, accountCount: accounts.length, holdingCount: holdings.length, excludedHoldingCount: result.excluded.length, displayFx });
+        } catch {
+          await this.accountSnapshots.failed("새 토스 계좌 평가를 저장하지 못해 이전 평가를 유지합니다.");
+        }
+      }
+    }
     return result;
   }
 
-  private async applyHoldings(accountSeqs: number[], holdings: TossHolding[], infos: Map<string, unknown>, perAccount: PerAccount[]): Promise<ImportResult> {
+  private async applyHoldings(accountSeqs: number[], holdings: TossHolding[], infos: Map<string, unknown>, perAccount: PerAccount[]): Promise<{ result: ImportResult; snapshotTrusted: boolean }> {
     const result: ImportResult = { accounts: accountSeqs.length, added: [], updated: [], unchanged: [], removed: [], excluded: [], holdings: [] };
     const ts = seoulIso(this.now());
     const excluded = await this.excluded();
@@ -343,19 +374,29 @@ export class TossSyncService {
       await this.db.insertInto("meta").values({ key: ACCOUNTS_KEY, value: state }).onConflict((oc) => oc.column("key").doUpdateSet({ value: state })).execute();
     const frozenSet = new Set(frozen);
     await this.saveDetail(holdings.filter((h) => !frozenSet.has(h.code)), [...pending, ...frozen]);
-    return result;
+    const snapshotTrusted = Object.keys(next.doubt).length === 0
+      && !Object.keys(prev.held).some((account) => !listed.has(Number(account)))
+      && new Set(accountSeqs).size === accountSeqs.length
+      && accountSeqs.every((account) => Number.isInteger(account) && account > 0)
+      && perAccount.every((a) => a.holdings.some((h) => h.quantity > 0)
+        || (a.overview.purchaseKrw === 0 && (a.overview.purchaseUsd === 0 || a.overview.purchaseUsd === null)
+          && a.accountEvaluation?.gross.krw === 0 && a.accountEvaluation.gross.usd === 0));
+    return { result, snapshotTrusted };
   }
 
   /** 해외 종목 원화 매입금액 장부 갱신. 실패해도 동기화 자체는 성공으로 둔다(장부는 다음 동기화에서 다시) */
-  private async updateCostBook(perAccount: PerAccount[]): Promise<void> {
+  private async updateCostBook(perAccount: PerAccount[]): Promise<TossAccountSnapshot["displayFx"]> {
+    let reference: TossAccountSnapshot["displayFx"] = null;
     try {
       // 계좌 수익률은 계좌마다 따로라 합칠 수 없다 → 계좌가 하나일 때만 계좌 합계로 보정한다
       const overview = perAccount.length === 1 ? perAccount[0]!.overview : null;
       const fx = this.displayFx ? await this.displayFx().catch(() => null) : null;
+      if (fx !== null && Number.isFinite(fx) && fx > 0) reference = { usdKrw: fx, receivedAt: seoulIso(this.now()), source: "app-display-fx", kind: "reference" };
       await this.costBook.update(forBook(perAccount), overview, fx);
     } catch {
       /* 원화 장부는 다음 동기화에서 다시 시도 */
     }
+    return reference;
   }
 
   private async readAccounts(): Promise<PerAccount[]> {
@@ -405,7 +446,7 @@ export class TossSyncService {
   }
 }
 
-type PerAccount = { account: number; holdings: TossHolding[]; overview: OverviewForBook & { purchaseUsd: number | null } };
+type PerAccount = { account: number; holdings: TossHolding[]; overview: OverviewForBook & { purchaseUsd: number | null }; accountEvaluation?: TossAccountTotals | null };
 
 function emptyAccounts(): ProviderError {
   return new ProviderError("toss-openapi", "토스 계좌 목록이 비었습니다 (일시 오류일 수 있어 이번 동기화는 건너뜁니다)");

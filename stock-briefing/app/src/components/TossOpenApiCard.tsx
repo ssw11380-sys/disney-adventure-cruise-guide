@@ -37,6 +37,7 @@ export function TossOpenApiCard() {
     onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: [apiUrl, "stocks"] });
       void qc.invalidateQueries({ queryKey: [apiUrl, "briefings"] });
+      void qc.invalidateQueries({ queryKey: [apiUrl, "tossAccountSnapshot"] });
       const lines = r.holdings.map((h) => `${h.name} ${h.quantity}주 · 평단 ${formatPrice(h.avgPrice, h.currency)}`);
       const removed = r.removed ?? [];
       if (removed.length) lines.push(`전량 매도 → 관심 종목: ${removed.join(", ")}`);

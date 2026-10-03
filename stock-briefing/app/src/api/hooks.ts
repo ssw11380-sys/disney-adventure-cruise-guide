@@ -13,7 +13,8 @@ import { RECONCILE_OFF, RECONCILE_POLL_MS } from "@/lib/numberBasis";
 import { saverInterval, unchangedStreak } from "@/lib/pollSaver";
 import { checkRankPage, nextRankPage, restartRankPages, type RankPageParam } from "@/lib/rankPages";
 import { loadedCredentials, useSettings } from "@/lib/settings";
-import { loginRequiredFor, sessionFor, subscribeSession } from "@/lib/session";
+import { loginRequiredFor, personalBlocked, sessionFor, sessionIdentityVersion, sessionVersion, subscribeSession } from "@/lib/session";
+import { TOSS_SNAPSHOT_OFF, TOSS_SNAPSHOT_POLL_MS } from "@/lib/tossAccountSnapshot";
 import { ApiRequestError, createApi, type Api } from "./client";
 import { SCORE_WAIT_REFETCH_MS, valueWaiting } from "@/lib/scoreView";
 import type { Analysis, AnalysisKind, BriefingSession, CandlePeriod, DiscoverMarket, DiscoverRank, FeatureFlags, NotificationSettings, NotificationSettingsPatch, RankCategory, ThemeKind, ThemePeriod } from "./types";
@@ -256,6 +257,7 @@ export function useTossImport() {
       void qc.invalidateQueries({ queryKey: [apiUrl, "stocks"] });
       void qc.invalidateQueries({ queryKey: [apiUrl, "briefings"] });
       void qc.invalidateQueries({ queryKey: [apiUrl, "tossStatus"] });
+      void qc.invalidateQueries({ queryKey: [apiUrl, "tossAccountSnapshot"] });
     },
   });
 }
@@ -288,6 +290,49 @@ export function useSearch(q: string) {
     // 오류 뒤 사용자가 요청할 때만 두 기존 조회를 다시 보낸다. 연타 중 진행 중인 요청은 취소·중복 생성하지 않는다.
     refetch: () => query.length ? Promise.all([full.refetch({ cancelRefetch: false }), local.refetch({ cancelRefetch: false })]) : Promise.resolve([]),
   };
+}
+
+/** 캐시는 메모리에만 두고 서버·계정·인증 변경을 구분한다. API 토큰은 키에 넣지 않는다. */
+export function tossAccountSnapshotQuery(api: Pick<Api, "tossAccountSnapshot">, apiUrl: string, scope: string, focused = true) {
+  return queryOptions({
+    subscribed: focused,
+    enabled: !personalBlocked(apiUrl),
+    queryKey: [apiUrl, "tossAccountSnapshot", scope],
+    queryFn: async () => {
+      if (personalBlocked(apiUrl)) return TOSS_SNAPSHOT_OFF;
+      try { return await api.tossAccountSnapshot(); }
+      catch (e) {
+        if (e instanceof ApiRequestError && e.status === 404) return TOSS_SNAPSHOT_OFF;
+        throw e;
+      }
+    },
+    staleTime: TOSS_SNAPSHOT_POLL_MS,
+    refetchInterval: TOSS_SNAPSHOT_POLL_MS,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
+    retry: 0,
+  });
+}
+
+let tossCredentialSequence = 0;
+const tossCredentialScopes = new WeakMap<object, { apiUrl: string; apiToken: string; id: number }>();
+/** 같은 인증으로 화면을 다시 열면 캐시를 재사용한다. 인증값은 메모리 비교에만 쓴다. */
+export function tossSnapshotCredentialScope(client: object, apiUrl: string, apiToken: string): number {
+  const previous = tossCredentialScopes.get(client);
+  if (previous?.apiUrl === apiUrl && previous.apiToken === apiToken) return previous.id;
+  const next = { apiUrl, apiToken, id: ++tossCredentialSequence };
+  tossCredentialScopes.set(client, next);
+  return next.id;
+}
+/** 켜진 주인 화면에서만 호출한다. 종목 조회·보고서 생성과 독립된 서버 저장 기록 조회다. */
+export function useTossAccountSnapshot() {
+  const api = useApi();
+  const qc = useQueryClient();
+  const { apiUrl, apiToken } = useSettings();
+  useSyncExternalStore(subscribeSession, sessionVersion, sessionVersion);
+  const credentialScope = tossSnapshotCredentialScope(qc, apiUrl, apiToken);
+  const scope = `${sessionFor(apiUrl)?.user.id ?? "legacy"}:${sessionIdentityVersion()}:${credentialScope}`;
+  return useQuery(tossAccountSnapshotQuery(api, apiUrl, scope, useScreenFocused()));
 }
 
 /**

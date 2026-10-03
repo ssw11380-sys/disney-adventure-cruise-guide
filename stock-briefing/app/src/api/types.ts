@@ -1197,6 +1197,27 @@ export interface BriefingActiveRun {
   done: number;
 }
 
+/** 토스 계좌 API가 준 통화별 주식 평가금액. 현금·예수금은 포함하지 않는다. */
+export interface TossAccountSnapshot {
+  source: "toss-openapi";
+  scope: "all-toss-stock-holdings";
+  excludesCash: true;
+  includesExcludedHoldings: true;
+  receivedFrom: string;
+  receivedAt: string;
+  accountCount: number;
+  holdingCount: number;
+  excludedHoldingCount: number;
+  gross: { krw: number; usd: number };
+  net: { krw: number; usd: number };
+  displayFx: { usdKrw: number; receivedAt: string; source: "app-display-fx"; kind: "reference" } | null;
+}
+export interface TossAccountSnapshotBody {
+  on: boolean;
+  snapshot: TossAccountSnapshot | null;
+  sync: { enabled: boolean; intervalMin: number; idleIntervalMin: number; lastRunAt: string | null; nextRunAt: string | null; lastError: string | null } | null;
+}
+
 /** 잔고 '숫자 기준' 배지 (3-32, 플래그 numberBasis — 서버 GET /api/admin/toss/reconcile/badge 와 같은 모양) */
 export interface ReconcileBadgeBody {
   /** numberBasis·tossReconcile 이 켜져 있고 토스 연동이 있을 때만 true */

@@ -40,6 +40,7 @@ import type { AppErrorSummary, Evaluation,
   AuthMe,
   BriefingStatus,
   ReconcileBadgeBody,
+  TossAccountSnapshotBody,
 } from "./types";
 import { authMessage, NOT_JSON, SESSION_INVALID, SESSION_REQUIRED } from "@/lib/connectionError";
 import { assertSessionIdentity, handleSessionInvalid, markAccountsSeen, sessionFor, sessionIdentityVersion, sessionTokenFor, SessionReadError, type AccountUser } from "@/lib/session";
@@ -337,6 +338,7 @@ export function createApi(baseUrl: string, token = "", opts: ApiOptions = {}) {
     priceAlertVolume: (codes: string[]) => get<{ items: VolumeStatus[] }>(`/api/price-alerts/volume?codes=${codes.map(encodeURIComponent).join(",")}`, 45_000),
     /** 잔고 '숫자 기준' 배지 (3-32, 플래그 numberBasis). 예전 서버는 404 → 부르는 쪽(reconcileBadgeQuery)이 꺼짐으로 본다 */
     reconcileBadge: () => get<ReconcileBadgeBody>("/api/admin/toss/reconcile/badge", 8_000),
+    tossAccountSnapshot: () => get<TossAccountSnapshotBody>("/api/admin/toss/account-snapshot", 8_000),
   };
 }
 
