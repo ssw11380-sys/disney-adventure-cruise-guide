@@ -8,6 +8,8 @@ import { DEFAULT_PREFS, planNotifications, type NotifyPrefs } from "@/lib/briefi
 import { loadMarketSummaries } from "@/lib/marketSummaryLoad";
 import { INIT_KEY, initialized, saveSeen, SEEN_KEY, seenIds, withSeen } from "@/lib/briefingSeen";
 import { ANDROID_CHANNEL, ensureAndroidChannel } from "@/lib/notifications";
+import { inspectLocalDeliveries, LocalDeliveryRecordError } from "@/lib/localNotificationDelivery";
+import { assertSessionIdentity, sessionIdentityVersion } from "@/lib/session";
 import { logWidgetRefresh } from "@/lib/widgetRefreshLog";
 import { lastWidgetState, loadAccountBriefings, loadLatestBriefings, loadNotifyPrefs, loadWidgetData, pendingRetry, readCachedPayload, type WidgetData } from "@/widgets/data";
 import { failureText, quietState } from "@/widgets/model";
@@ -109,6 +111,7 @@ export function notifyNewBriefings(latest: LatestBriefing[], opts: NotifyOpts = 
 }
 
 async function notifyUnseen(latest: LatestBriefing[], opts: NotifyOpts): Promise<number> {
+  const identity = sessionIdentityVersion();
   // 켜기 직후의 명시적 기준 설정은 알림을 보내지 않으며, 예전처럼 현재 목록으로 다시 시작한다.
   const seen = await seenIds(opts.first !== true);
   const isFirst = opts.first ?? !(await initialized(seen, true));
@@ -153,22 +156,33 @@ async function notifyUnseen(latest: LatestBriefing[], opts: NotifyOpts): Promise
       : fresh.filter((b) => b.briefingId === message.data.briefingId).map((b) => b.briefingId),
   }));
   for (const { ids } of deliveries) for (const id of ids) seen.delete(id);
+  const book = deliveries.length ? await inspectLocalDeliveries(now.getTime()) : null;
+  assertSessionIdentity(identity);
+  let sent = 0;
   try {
     for (const { message: m, ids } of deliveries) {
-      await Notifications.scheduleNotificationAsync({ content: { title: m.title, body: m.body, data: m.data, sound: "default" }, trigger: briefingTrigger() });
+      const identifier = book!.identifier(ids, m.data.date, m.data.session);
+      assertSessionIdentity(identity);
+      if (!book!.known.has(identifier)) {
+        await Notifications.scheduleNotificationAsync({ identifier, content: { title: m.title, body: m.body, data: m.data, sound: "default" }, trigger: briefingTrigger() });
+        book!.accepted(identifier);
+        sent++;
+      }
       for (const id of ids) seen.add(id);
-      await saveSeen(seen);
+      try { await saveSeen(seen, true); }
+      catch { await book!.recordFailure(identifier); }
+      await book!.completed(identifier);
     }
     if (!deliveries.length) await saveSeen(seen);
   } catch (error) {
-    await saveSeen(seen);
+    if (!(error instanceof LocalDeliveryRecordError)) await saveSeen(seen);
     throw error;
   }
   // 빈 목록이어도 기준을 적은 것으로 — 다음에 생기는 첫 브리핑을 알린다
   if (isFirst) await AsyncStorage.setItem(INIT_KEY, "1").catch(() => undefined);
   // 계좌 브리핑은 실제로 살펴본 뒤에만 기준을 적는다 (알림을 켤 때는 목록을 받지 않으므로 첫 확인에서 적는다)
   if (accountInfo) await AsyncStorage.setItem(ACCOUNT_INIT_KEY, "1").catch(() => undefined);
-  return messages.length;
+  return sent;
 }
 
 /**
@@ -263,8 +277,8 @@ export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskR
     });
     await logWidgetRefresh("background", "ok");
     return BackgroundTask.BackgroundTaskResult.Success;
-  } catch {
-    await logWidgetRefresh("background", "failed");
+  } catch (error) {
+    await logWidgetRefresh("background", "failed", error instanceof LocalDeliveryRecordError ? { error: error.message } : undefined);
     return BackgroundTask.BackgroundTaskResult.Failed;
   }
 }

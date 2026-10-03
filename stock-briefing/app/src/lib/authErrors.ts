@@ -44,6 +44,7 @@ export function authErrorView(e: unknown): AuthErrorView {
   const status = typeof x.status === "number" ? x.status : -1;
   const body = (x.body && typeof x.body === "object" ? x.body : {}) as { code?: unknown; message?: unknown; error?: unknown; fields?: unknown };
   const view = (message: string | null, extra: Partial<AuthErrorView> = {}): AuthErrorView => ({ message, fields: {}, showServer: false, failOpen: false, ...extra });
+  if (x.code === "SESSION_PERSISTENCE" && e instanceof Error) return view(e.message);
   if (status === 0) return view(x.code === "TIMEOUT" ? AUTH_TEXT.timeout : AUTH_TEXT.network);
   if (status === 404) return body.error === "NOT_FOUND" ? view(null, { failOpen: true }) : view(AUTH_TEXT.address, { showServer: true });
   if (x.code === "NOT_JSON") return view(AUTH_TEXT.address, { showServer: true });
