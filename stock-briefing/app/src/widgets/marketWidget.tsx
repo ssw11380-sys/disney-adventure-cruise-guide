@@ -219,18 +219,24 @@ function ClarityMarketWidget(props: MarketWidgetProps) {
   const maxValue = Math.max(TOUCH, ...tiles.map((t) => textWidth(t.value, F.base, scale, true)));
   const columns = content >= (maxValue + space.md) * 3 ? 3 : content >= (maxValue + space.md) * 2 ? 2 : 1;
   const tileWidth = Math.floor((content - space.md * (columns - 1)) / columns);
-  const tileH = Math.max(TOUCH, lineHeight(F.base, scale) * 2 + lineHeight(F.big, scale) + space.sm);
   const hint = clarityLine([`${tiles.length}개 지수·시장 환율 · 아래로 밀어 보기`, "지수·시장 환율 · 아래로 ↓", "시장 환율 포함 ↓"], content, scale, F.md);
-  const hintH = hint ? lineHeight(F.md, scale) : 0;
-  const showList = has && height - TOUCH - statusH - hintH - space.sm >= tileH;
+  // 기본 4×2는 시각과 목록 안내를 합친다. 좁거나 큰 글씨에서 안 맞으면 각각 보존한다.
+  const combined = status && !fail ? clarityLine([`${status} · ${tiles.length}개 지수·시장 환율 · 아래로 ↓`, `${status} · 시장 환율 · 아래로 ↓`], content, scale, F.md) : null;
+  const hintH = !combined && hint ? lineHeight(F.md, scale) : 0;
+  const gridRoom = Math.max(0, height - TOUCH - statusH - hintH - space.sm - BOARD.border * 2);
+  const textH = Math.max(TOUCH, lineHeight(F.base, scale) * 2 + lineHeight(F.big, scale));
+  // 글씨와 48dp 터치는 유지한다. 두 행이 들어갈 때 행의 장식 여백만 줄인다.
+  const twoRowsH = Math.floor(gridRoom / 2);
+  const tileH = columns === 3 && twoRowsH >= textH ? Math.min(textH + space.sm, twoRowsH) : textH + space.sm;
+  const showList = has && gridRoom >= tileH;
   const groups: BoardTile[][] = [];
   for (let n = 0; n < tiles.length; n += columns) groups.push(tiles.slice(n, n + columns));
   const fallback = !props.enabled ? MARKET_OFF_TEXT : !has ? MARKET_EMPTY_TEXT : "앱에서 전체 지수 보기";
   return <FlexWidget style={{ ...rootStyle(c), paddingRight: PAD, paddingBottom: space.sm }}>
     <ClarityWidgetHeader title="지수·시장 환율" shortTitle="시장정보" width={width} scale={scale} widgetId={props.widgetId} refreshing={props.refreshing} uri={HOME_URI} c={c} />
-    {status ? <TextWidget text={status} maxLines={1} style={{ color: fail ? c.warn : c.muted, fontSize: fail ? F.base : F.md }} /> : null}
+    {status ? <TextWidget text={showList && combined ? combined : status} maxLines={1} style={{ color: fail ? c.warn : c.muted, fontSize: fail ? F.base : F.md }} /> : null}
     {showList ? <FlexWidget style={{ width: "match_parent", height: "match_parent", flexDirection: "column" }}>
-      {hint ? <TextWidget text={hint} maxLines={1} style={{ color: c.muted, fontSize: F.md }} /> : null}
+      {!combined && hint ? <TextWidget text={hint} maxLines={1} style={{ color: c.muted, fontSize: F.md }} /> : null}
       <ListWidget style={{ width: "match_parent", height: "match_parent" }}>
         {groups.map((group) => <FlexWidget key={group.map((x) => x.code).join("-")} style={{ width: "match_parent", height: tileH, flexDirection: "row", flexGap: space.md }}>
           {group.map((tile) => {

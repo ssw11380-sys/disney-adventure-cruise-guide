@@ -1098,7 +1098,8 @@ function ClarityHoldingsWidget(props: StockWidgetProps & WidgetFrame & HoldingsE
   const warningText = warning ? clarityLine([warning, "금액 주의", "주의"], content, scale) : null;
   const showWarning = warningText && take(lineHeight(F.base, scale));
   const showAmount = !embedded && take(mainHeight);
-  const metaText = clarityLine([`${quoteTime} · ${props.afterCost === false ? "비용 전" : "비용 후"} · ${stocks.length}종목 아래로 ↓`, `${quoteTime} · ${stocks.length}종목 ↓`, quoteTime], content, scale, F.md);
+  const rowBasis = `종목 ${WIDGET_CHANGE_LABEL}`;
+  const metaText = clarityLine([`${quoteTime} · ${props.afterCost === false ? "비용 전" : "비용 후"} · ${rowBasis} · ${stocks.length}종목 아래로 ↓`, `${quoteTime} · ${rowBasis} · ${stocks.length}종목 아래로 ↓`, `${quoteTime} · ${rowBasis}`, `${rowBasis} · ${stocks.length}종목 아래로 ↓`, rowBasis], content, scale, F.md);
   const showMeta = metaText && take(lineHeight(F.md, scale));
   const separatePnlLines = pnl ? [pnl.label + (props.pnlToggle ? " ↔" : ""), ...(clarityLine([pnlText], content, scale) ? [pnlText] : [pnl.valueText, ...(pnl.rate ? [pnl.rate] : [])])] : [];
   const separatePnlH = Math.max(TOUCH, separatePnlLines.length * lineHeight(F.base, scale));
@@ -1110,7 +1111,8 @@ function ClarityHoldingsWidget(props: StockWidgetProps & WidgetFrame & HoldingsE
   const showList = stocks.length > 0 && room >= rowHeight + hintH;
   const selectedIndex = props.indexLine ? polishedIndexItems(props.indices, props.now, accountMix(props.stocks, fxOf).us > accountMix(props.stocks, fxOf).kr) : [];
   // 사용자가 켜도 종목 한 줄을 밀어내지 않는다. 충분히 큰 위젯에서만 추가하고 값은 줄이지 않는다.
-  const indexText = selectedIndex.length ? clarityLine([selectedIndex.map((x) => `${x.label} ${x.rate ?? x.value}${indexTag(x) ? ` (${indexTag(x)})` : ""}`).join(" · ")], content, scale, F.md) : null;
+  const indexCandidates = selectedIndex.map((_, n) => selectedIndex.slice(0, selectedIndex.length - n).map((x) => `${x.label} ${x.rate ?? x.value}${indexTag(x) ? ` (${indexTag(x)})` : ""}`).join(" · "));
+  const indexText = clarityLine(indexCandidates, content, scale, F.md);
   const showIndex = indexText && room >= rowHeight + hintH + lineHeight(F.md, scale) && take(lineHeight(F.md, scale));
   const a11y = sentence(["앱 시세 평가", info.partial ? "부분 평가금액" : null, amount ? speakAmount(amount) : "금액 확인 불가", pnl?.text, details]);
   return <FlexWidget style={{ ...rootStyle(c), paddingHorizontal: PAD, paddingBottom: space.sm }}>
