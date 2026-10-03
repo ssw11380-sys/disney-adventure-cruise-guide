@@ -23,6 +23,13 @@ function setup() {
 }
 
 describe("실제 pg Pool/Client의 오류 경계, 연결 통신은 모의", () => {
+  it("연결 인수가 없는 풀 오류도 처리 중 예외를 만들지 않는다", () => {
+    const { pool, warn } = setup();
+    expect(() => pool.emit("error", new Error("연결 인수 없는 오류"))).not.toThrow();
+    expect(() => pool.emit("error", new Error("후속 풀 오류"))).not.toThrow();
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
   it("빌린 연결의 연속 오류는 프로세스 예외 대신 원래 쿼리 거절을 유지한다", async () => {
     const { pool, warn } = setup();
     const client = await pool.connect() as pg.PoolClient & NoNetworkClient;

@@ -26,9 +26,15 @@ export function createDb(databaseUrl: string): { db: Db; dialect: Dialect } {
       ...(needsSsl(databaseUrl) ? { ssl: { rejectUnauthorized: false } } : {}),
     });
     const reported = new WeakSet<pg.PoolClient>();
-    const report = (client: pg.PoolClient) => {
-      if (reported.has(client)) return;
-      reported.add(client);
+    let reportedWithoutClient = false;
+    const report = (client?: pg.PoolClient) => {
+      if (client && typeof client === "object") {
+        if (reported.has(client)) return;
+        reported.add(client);
+      } else {
+        if (reportedWithoutClient) return;
+        reportedWithoutClient = true;
+      }
       // 원래 오류 객체에는 연결 정보가 붙을 수 있으므로 연결당 한 번, 고정 문구만 기록한다.
       console.warn("PostgreSQL 연결이 끊어졌습니다. 진행 중 요청은 실패할 수 있으며 다음 요청에서 새 연결을 사용합니다.");
     };
