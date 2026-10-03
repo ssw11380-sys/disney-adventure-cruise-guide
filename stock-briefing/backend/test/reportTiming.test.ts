@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Kysely } from "kysely";
 import { createMigratedDb, type Db } from "../src/db/index.js";
 import type { RegisteredStock } from "../src/domain/types.js";
 import { GenerationError, type GenerateRequest } from "../src/llm/generator.js";
@@ -11,6 +12,8 @@ import { FakeGenerator, FakeNewsProvider, FakeQuoteProvider } from "./helpers.js
 const AT = new Date("2026-12-28T08:30:00+09:00");
 const STOCK: RegisteredStock = { code: "005930", name: "삼성전자", market: "KOSPI", quantity: 2, avgPrice: 90_000, memo: "계정 메모 원문", createdAt: AT.toISOString(), updatedAt: AT.toISOString() };
 const databases: Db[] = [];
+// 트랜잭션도 상속하는 삽입 경계에서 보고서 표만 계측한다. 작업 소유권 표의 쓰기는 이 모의 지연 대상이 아니다.
+const insertInto = Kysely.prototype.insertInto;
 let elapsed = 0;
 type Log = { info: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn> };
 const logger = (): Log => ({ info: vi.fn(), warn: vi.fn() });
@@ -47,11 +50,12 @@ async function setup(log?: Log, fail?: "수집" | "프롬프트" | "모델" | "�
     if (fail === "요약" && req.label?.startsWith("briefing_summary")) throw new GenerationError("저장하면 안 되는 요약 오류 원문", "api");
     return generate(req);
   });
-  const insert = db.insertInto.bind(db);
-  vi.spyOn(db, "insertInto").mockImplementation(((...args: Parameters<Db["insertInto"]>) => {
-    elapsed += 7;
-    if (fail === "저장") throw new Error("저장하면 안 되는 DB 오류 원문");
-    return insert(...args);
+  vi.spyOn(Kysely.prototype, "insertInto").mockImplementation((function (this: Db, table: Parameters<Db["insertInto"]>[0]) {
+    if (table === "analyses" || table === "briefings") {
+      elapsed += 7;
+      if (fail === "저장") throw new Error("저장하면 안 되는 DB 오류 원문");
+    }
+    return insertInto.call(this, table);
   }) as Db["insertInto"]);
   const deps = { db, collector, generator: gen, prompts, now: () => AT, log };
   return { db, gen, collected, collectedBriefing, analysis: new AnalysisService(deps), briefing: new BriefingService(deps) };
