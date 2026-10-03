@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { Kysely } from "kysely";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
@@ -128,10 +129,10 @@ describe("서버 보고서 경계 추가 감사 — 실제 서비스와 가짜 �
     h.setClock(new Date("2026-12-28T09:00:00+09:00"));
     const done: Parameters<RunDoneListener>[0][] = [];
     h.briefing.onRunDone((value) => { done.push(value); });
-    const insert = h.db.insertInto.bind(h.db);
-    vi.spyOn(h.db, "insertInto").mockImplementation(((table: Parameters<Db["insertInto"]>[0]) => {
+    const insert = Kysely.prototype.insertInto;
+    vi.spyOn(Kysely.prototype, "insertInto").mockImplementation((function (this: Db, table: Parameters<Db["insertInto"]>[0]) {
       if (table === "briefings") throw new Error("가짜 저장 실패");
-      return insert(table);
+      return insert.call(this, table);
     }) as Db["insertInto"]);
     await expect(h.briefing.runSession("morning", { force: true })).rejects.toThrow("가짜 저장 실패");
     expect(await h.briefing.find(CODE, DATE, "morning")).toEqual(old);
@@ -152,12 +153,12 @@ describe("서버 보고서 경계 추가 감사 — 실제 서비스와 가짜 �
     const h = await setup();
     await h.db.insertInto("registered_stocks").values({ code: "000660", name: "SK하이닉스", market: "KOSPI", quantity: 1, avg_price: 90_000, memo: "", created_at: "2026-12-02T09:00:00+09:00", updated_at: AT.toISOString() }).execute();
     const briefing = new BriefingService({ db: h.db, collector: h.collector, generator: h.gen, prompts: h.prompts, calendar: { isTradingDate: async () => true }, now: () => AT, parallel: async () => parallel });
-    const insert = h.db.insertInto.bind(h.db);
+    const insert = Kysely.prototype.insertInto;
     let inserts = 0;
     const error = new Error("가짜 뒤 종목 저장 오류");
-    vi.spyOn(h.db, "insertInto").mockImplementation(((table: Parameters<Db["insertInto"]>[0]) => {
+    vi.spyOn(Kysely.prototype, "insertInto").mockImplementation((function (this: Db, table: Parameters<Db["insertInto"]>[0]) {
       if (table === "briefings" && ++inserts === 2) throw error;
-      return insert(table);
+      return insert.call(this, table);
     }) as Db["insertInto"]);
     const done: Parameters<RunDoneListener>[0][] = [];
     briefing.onRunDone((value) => { done.push(value); });
@@ -202,20 +203,29 @@ describe("서버 보고서 경계 추가 감사 — 실제 서비스와 가짜 �
   it("분석 저장 실패는 이전 성공을 유지하고 failed로 끝나며 새 요청 ID로만 다시 만들 수 있다", async () => {
     const h = await setup();
     const old = await h.analysis.get(CODE, "company");
-    const insert = h.db.insertInto.bind(h.db);
-    const spy = vi.spyOn(h.db, "insertInto").mockImplementation(((table: Parameters<Db["insertInto"]>[0]) => {
+    const insert = Kysely.prototype.insertInto;
+    const spy = vi.spyOn(Kysely.prototype, "insertInto").mockImplementation((function (this: Db, table: Parameters<Db["insertInto"]>[0]) {
       if (table === "analyses") throw new Error("가짜 분석 저장 실패");
-      return insert(table);
+      return insert.call(this, table);
     }) as Db["insertInto"]);
     await expect(h.analysis.getTracked(CODE, "company", "audit-failed-save", { refresh: true })).rejects.toThrow("가짜 분석 저장 실패");
     expect(await h.analysis.state(CODE, "company", "audit-failed-save")).toMatchObject({ latest: { id: old.id }, running: false, request: { status: "failed", result: null } });
+    const checkpoint = JSON.parse((await h.db.selectFrom("generation_jobs").select("checkpoint").where("job_key", "=", `analysis:${CODE}:company`).executeTakeFirstOrThrow()).checkpoint) as { steps: Record<string, unknown> };
+    const model = Object.entries(checkpoint.steps).find(([key]) => key.startsWith("model:"))![1] as { text: string; model: string };
+    const requests = structuredClone(h.gen.requests);
+    const collect = vi.spyOn(h.collector, "collectAnalysis");
     spy.mockRestore();
     await expect(h.analysis.getTracked(CODE, "company", "audit-failed-save", { refresh: true })).rejects.toThrow("가짜 분석 저장 실패");
     expect(h.gen.requests).toHaveLength(2);
     const next = await h.analysis.getTracked(CODE, "company", "audit-retry-save", { refresh: true });
     expect(next.id).not.toBe(old.id);
     expect((await h.analysis.state(CODE, "company", "audit-retry-save")).request).toMatchObject({ status: "completed", result: { id: next.id } });
-    expect(h.gen.requests).toHaveLength(3);
+    expect(next).toMatchObject({ content: model.text, model: model.model, createdAt: checkpoint.steps.createdAt });
+    expect(JSON.parse((await h.db.selectFrom("analyses").select("data_snapshot").where("id", "=", next.id).executeTakeFirstOrThrow()).data_snapshot)).toEqual(checkpoint.steps.snapshot);
+    expect(checkpoint.steps.request).toEqual(requests[1]);
+    expect(collect).not.toHaveBeenCalled();
+    expect(h.gen.requests).toEqual(requests);
+    expect(h.gen.requests).toHaveLength(2);
   });
 
   it("같은 분석의 동시 강제 요청 ID 여러 개와 동일 ID 재전송은 생성 한 건을 공유한다", async () => {

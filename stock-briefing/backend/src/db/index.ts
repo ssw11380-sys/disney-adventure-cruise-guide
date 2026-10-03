@@ -25,9 +25,23 @@ export function createDb(databaseUrl: string): { db: Db; dialect: Dialect } {
       max: 5,
       ...(needsSsl(databaseUrl) ? { ssl: { rejectUnauthorized: false } } : {}),
     });
-    // 풀은 끊긴 유휴 연결을 제거한다. error 이벤트를 처리해 전체 서버 종료를 막고 다음 요청의 새 연결을 허용한다.
-    // 원래 오류 객체에는 연결 정보가 붙을 수 있으므로 고정 문구만 기록한다. 진행 중 쿼리 실패는 호출자에게 그대로 전달한다.
-    pool.on("error", () => { console.warn("PostgreSQL 유휴 연결이 끊어졌습니다. 다음 요청에서 새 연결을 사용합니다."); });
+    const reported = new WeakSet<pg.PoolClient>();
+    let reportedWithoutClient = false;
+    const report = (client?: pg.PoolClient) => {
+      if (client && typeof client === "object") {
+        if (reported.has(client)) return;
+        reported.add(client);
+      } else {
+        if (reportedWithoutClient) return;
+        reportedWithoutClient = true;
+      }
+      // 원래 오류 객체에는 연결 정보가 붙을 수 있으므로 연결당 한 번, 고정 문구만 기록한다.
+      console.warn("PostgreSQL 연결이 끊어졌습니다. 진행 중 요청은 실패할 수 있으며 다음 요청에서 새 연결을 사용합니다.");
+    };
+    // pg-pool은 대여 중 유휴 오류 리스너를 제거한다. 트랜잭션 연결의 연속 오류도 처리하되
+    // 쿼리 거절·롤백 실패·끊긴 연결 폐기는 pg의 원래 동작을 유지한다.
+    pool.on("connect", (client) => { client.on("error", () => report(client)); });
+    pool.on("error", (_error, client) => report(client));
     return { db: new Kysely<Database>({ dialect: new PostgresDialect({ pool }) }), dialect: "postgres" };
   }
   if (databaseUrl !== ":memory:") mkdirSync(dirname(databaseUrl), { recursive: true });

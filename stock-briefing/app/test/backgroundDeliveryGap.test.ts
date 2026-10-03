@@ -8,10 +8,12 @@ vi.mock("@react-native-async-storage/async-storage", () => ({ default: {
   setItem: async (key: string, value: string) => { h.store.set(key, value); },
   removeItem: async (key: string) => { h.store.delete(key); },
 } }));
-vi.mock("expo-notifications", () => ({ scheduleNotificationAsync: async (input: { content: { data: { session: string; briefingId?: number } } }) => {
+vi.mock("expo-notifications", () => ({
+  getPresentedNotificationsAsync: async () => [], getAllScheduledNotificationsAsync: async () => [], scheduleNotificationAsync: async (input: { content: { data: { session: string; briefingId?: number } } }) => {
   if (++h.attempts === h.failAt) throw new Error("기기 알림 예약 실패");
   h.delivered.push(`${input.content.data.session}:${input.content.data.briefingId}`);
 } }));
+vi.mock("@/lib/settings", () => ({ STORAGE_KEYS: { apiUrl: "settings.apiUrl" }, defaultApiUrl: () => "https://server.test" }));
 vi.mock("expo-background-task", () => ({}));
 vi.mock("expo-task-manager", () => ({}));
 vi.mock("react-native", () => ({ Platform: { OS: "android" } }));

@@ -69,6 +69,8 @@ export interface Quote {
   asOf: string;
   source: string;
   afterMarket?: AfterMarketQuote | null;
+  /** 실제 보강한 재무 숫자의 원 수신 시각. 예전 서버는 없을 수 있다. */
+  fundamentalsBasis?: { receivedAt: string | null; refreshFailed: boolean; source: string | null; fields: string[] };
   priceBasis?: string; // "KRX+NXT 통합" | "KRX 정규장" | "정규장"
   priceKrw?: number | null; // 미국 종목 원화 환산
   /** 실시간 체결로 스냅샷과 다른 가격을 덮어쓴 현재가 (예전 서버의 초록 점 기준 — 새 서버면 realtime·session 을 쓴다, lib/liveDot) */

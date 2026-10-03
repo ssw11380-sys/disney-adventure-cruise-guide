@@ -114,13 +114,17 @@ describe("4차 연결 중단과 정상 종료의 경계 — 실제 로컬 HTTP, 
     const generator = new FakeGenerator(fail ? { failKind: "api" } : {});
     const { app, db } = await setup(generator);
     const pendingRead = gate();
+    const readEntered = gate();
     const original = app.analysisService.latest.bind(app.analysisService);
     const read = vi.spyOn(app.analysisService, "latest").mockImplementation(async (...args) => {
+      readEntered.release();
       await pendingRead.promise;
       return original(...args);
     });
     const result = app.analysisService.getTracked("005930", "company", "fourth_before_generate");
     const observed = result.then((value) => ({ value }), (error: unknown) => ({ error }));
+    // DB 요청 복원 조회 횟수와 무관하게 실제 캐시 조회가 시작된 경계를 확정한다.
+    await readEntered.promise;
     let stopped = false;
     const stopping = app.analysisService.shutdown().then(() => { stopped = true; });
     try {

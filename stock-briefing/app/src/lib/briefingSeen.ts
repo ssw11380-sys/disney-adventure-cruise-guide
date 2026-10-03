@@ -20,11 +20,11 @@ export async function seenIds(strict = false): Promise<Set<number>> {
   }
 }
 
-export async function saveSeen(ids: Set<number>): Promise<void> {
+export async function saveSeen(ids: Set<number>, strict = false): Promise<void> {
   try {
     await AsyncStorage.setItem(SEEN_KEY, JSON.stringify([...ids].slice(-200)));
   } catch {
-    /* ignore */
+    if (strict) throw new Error("알림 발송 기록을 저장하지 못했습니다.");
   }
 }
 

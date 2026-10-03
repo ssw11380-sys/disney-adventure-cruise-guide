@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { Kysely } from "kysely";
 import { createMigratedDb, type Db } from "../src/db/index.js";
 import type { RegisteredStock } from "../src/domain/types.js";
 import type { GenerateRequest, GenerateResult } from "../src/llm/generator.js";
@@ -231,10 +232,10 @@ describe("두 종목 브리핑 준비와 순서 보존", () => {
       if (r.label === `briefing_detail:${CODES[1]}`) await secondGate.promise;
     };
     if (stage === "저장") {
-      const insert = h.db.insertInto.bind(h.db);
-      vi.spyOn(h.db, "insertInto").mockImplementation(((table: Parameters<Db["insertInto"]>[0]) => {
+      const insert = Kysely.prototype.insertInto;
+      vi.spyOn(Kysely.prototype, "insertInto").mockImplementation((function (this: Db, table: Parameters<Db["insertInto"]>[0]) {
         if (table === "briefings") throw fatal;
-        return insert(table);
+        return insert.call(this, table);
       }) as Db["insertInto"]);
     }
     const seen: string[] = [];

@@ -18,9 +18,11 @@ vi.mock("@react-native-async-storage/async-storage", () => ({ default: {
   },
 } }));
 vi.mock("expo-notifications", () => ({
+  getPresentedNotificationsAsync: async () => [], getAllScheduledNotificationsAsync: async () => [],
   getPermissionsAsync: async () => ({ status: "granted" }),
   scheduleNotificationAsync: async (input: unknown) => { h.notified.push(input); },
 }));
+vi.mock("@/lib/settings", () => ({ STORAGE_KEYS: { apiUrl: "settings.apiUrl" }, defaultApiUrl: () => "https://server.test" }));
 vi.mock("expo-background-task", () => ({
   getStatusAsync: async () => 1,
   registerTaskAsync: async () => { h.registrations++; if (h.failRegister) throw new Error("가짜 작업 등록 실패"); h.registered = true; },

@@ -7,6 +7,7 @@ const scheduled: unknown[] = [];
 // 알림을 띄우는 도중에 멈춰 둘 수 있게 (hold 가 있으면 풀릴 때까지 기다린다. reached: 알림을 띄우기 시작함)
 const gate: { hold: Promise<void> | null; reached: () => void } = { hold: null, reached: () => undefined };
 vi.mock("expo-notifications", () => ({
+  getPresentedNotificationsAsync: async () => [], getAllScheduledNotificationsAsync: async () => [],
   getPermissionsAsync: async () => ({ status: "granted" }),
   requestPermissionsAsync: async () => ({ status: "granted" }),
   scheduleNotificationAsync: async (x: unknown) => {

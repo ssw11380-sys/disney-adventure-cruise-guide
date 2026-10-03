@@ -164,13 +164,14 @@ describe("분석 요청 식별자로 정확한 결과 회수", () => {
       .toMatchObject({ request: { id: ID, status: "unknown", result: null } });
   });
 
-  it("기록 없는 상태 조회·서버 재시작은 latest와 무관하게 unknown이고 AI 호출은 없다", async () => {
+  it("서버 재시작 후 같은 요청의 완료 결과를 회수하고 기록 없는 요청만 unknown이며 AI 호출은 없다", async () => {
     const gen = new FakeGenerator();
     const a = await setup(gen);
     const result = (await a.inject({ method: "GET", url: `${PATH}?requestId=${ID}` })).json();
-    const restarted = new AnalysisService({ db: db!, collector: {} as never, generator: gen, prompts: new PromptStore() });
+    const restarted = new AnalysisService({ db: db!, collector: {} as never, generator: gen, prompts: new PromptStore(), now: () => new Date("2026-12-28T08:30:00+09:00") });
     expect(await restarted.state("005930", "company", ID))
-      .toMatchObject({ latest: { id: result.id }, running: false, request: { id: ID, status: "unknown", result: null } });
+      .toMatchObject({ latest: { id: result.id }, running: false, request: { id: ID, status: "completed", result } });
+    expect(await restarted.getTracked("005930", "company", ID, { refresh: true })).toEqual(result);
     for (let i = 0; i < 3; i++) {
       expect((await a.inject({ method: "GET", url: `${PATH}/state?requestId=${NEXT_ID}` })).json())
         .toMatchObject({ request: { id: NEXT_ID, status: "unknown", result: null } });

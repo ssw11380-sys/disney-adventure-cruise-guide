@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { Kysely } from "kysely";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { createMigratedDb, type Db } from "../src/db/index.js";
@@ -270,10 +271,10 @@ describe("예약 보고서 실행 중 정상 종료 경계 — 가짜 시계·�
     const h = await setup();
     const block = gate();
     h.gen.before = () => block.promise;
-    const original = h.db.insertInto.bind(h.db);
-    vi.spyOn(h.db, "insertInto").mockImplementation(((table: Parameters<Db["insertInto"]>[0]) => {
+    const original = Kysely.prototype.insertInto;
+    vi.spyOn(Kysely.prototype, "insertInto").mockImplementation((function (this: Db, table: Parameters<Db["insertInto"]>[0]) {
       if (table === "briefings") throw new Error("가짜 저장 실패");
-      return original(table);
+      return original.call(this, table);
     }) as Db["insertInto"]);
     const run = track(h.job.fire());
     await vi.waitFor(() => expect(h.gen.entered).toBe(true));
@@ -309,8 +310,8 @@ describe("예약 보고서 실행 중 정상 종료 경계 — 가짜 시계·�
   });
 });
 
-describe("다른 서비스 인스턴스 사이의 메모리 잠금 한계 — 운영 재현 아님", () => {
-  it("다른 분석 서비스는 동일 요청의 진행 상태를 모르며 직접 재전송하면 별도 생성한다", async () => {
+describe("다른 서비스 인스턴스 사이의 DB 작업 공유 — 운영 재현 아님", () => {
+  it("다른 분석 서비스도 동일 요청의 진행 상태를 확인하고 재전송은 기존 생성에 합류한다", async () => {
     const h = await setup();
     const collector = new DataCollector({ quotes: new FakeQuoteProvider("가짜시세"), news: new FakeNewsProvider(), financials: null, investorFlow: null, now: () => AT });
     const second = new AnalysisService({ db: h.db, collector, generator: h.gen, prompts: new PromptStore(), now: () => AT });
@@ -319,16 +320,16 @@ describe("다른 서비스 인스턴스 사이의 메모리 잠금 한계 — �
     const first = track(h.app.analysisService.getTracked("005930", "company", "restart-same-request", { refresh: true }));
     await vi.waitFor(() => expect(h.gen.entered).toBe(true));
     expect(await second.state("005930", "company", "restart-same-request"))
-      .toMatchObject({ running: false, request: { status: "unknown", result: null } });
+      .toMatchObject({ running: true, request: { status: "pending", result: null } });
     const duplicate = track(second.getTracked("005930", "company", "restart-same-request", { refresh: true }));
     block.release();
     const [one, two] = await Promise.all([first, duplicate]);
-    expect(one.id).not.toBe(two.id);
-    expect(h.gen.requests).toHaveLength(2);
-    expect(await h.db.selectFrom("analyses").selectAll().execute()).toHaveLength(2);
+    expect(one.id).toBe(two.id);
+    expect(h.gen.requests).toHaveLength(1);
+    expect(await h.db.selectFrom("analyses").selectAll().execute()).toHaveLength(1);
   });
 
-  it("두 브리핑 서비스가 같은 회차를 함께 시작하면 최종 행은 한 개지만 모델 작업은 두 번 진행한다", async () => {
+  it("두 브리핑 서비스가 같은 회차를 함께 시작해도 상세·요약 모델 작업과 저장 결과를 공유한다", async () => {
     const h = await setup();
     const collector = new DataCollector({ quotes: new FakeQuoteProvider("가짜시세"), news: new FakeNewsProvider(), financials: null, investorFlow: null, now: () => AT });
     const second = new BriefingService({ db: h.db, collector, generator: h.gen, prompts: new PromptStore(), now: () => AT });
@@ -337,13 +338,12 @@ describe("다른 서비스 인스턴스 사이의 메모리 잠금 한계 — �
     const first = track(h.app.briefingService.runSession("morning"));
     await vi.waitFor(() => expect(h.gen.entered).toBe(true));
     expect(second.isRunning).toBe(false);
-    const original = h.gen.generate.bind(h.gen);
-    const secondEntered = vi.spyOn(h.gen, "generate").mockImplementation(original);
     const duplicate = track(second.runSession("morning"));
-    await vi.waitFor(() => expect(secondEntered).toHaveBeenCalled());
+    await new Promise<void>((resolve) => setImmediate(resolve));
     block.release();
-    await Promise.all([first, duplicate]);
-    expect(h.gen.requests).toHaveLength(4);
+    const results = await Promise.all([first, duplicate]);
+    expect(results[1]).toEqual(results[0]);
+    expect(h.gen.requests).toHaveLength(2);
     expect(await h.db.selectFrom("briefings").selectAll().execute()).toHaveLength(1);
   });
 });

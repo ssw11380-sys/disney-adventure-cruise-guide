@@ -10,6 +10,7 @@ import { cleanDetail, cleanPrevious, codeSummaryLine, normalizeSummary, secondLi
 import type { BriefingSnapshot, DataCollector } from "./collector.js";
 import { verifyReport, type ReportVerification } from "./reportVerification.js";
 import { ReportTiming, safeReportLogger, type ReportLog } from "./reportTiming.js";
+import { checkpointGenerator, GenerationJobs, type GenerationContext } from "./generationJobs.js";
 
 // 요약 정리(normalizeSummary)는 검사기(briefingWording.ts)와 함께 쓰므로 그쪽에 두고, 예전 이름 그대로 여기서도 내보낸다
 export { normalizeSummary };
@@ -78,14 +79,17 @@ export interface BriefingServiceDeps {
   safeWording?: () => Promise<boolean>;
   /** 한 실행에서 한 번 읽는다. 켜면 두 종목을 준비하고 저장·알림은 등록 순서를 지킨다. 없거나 읽기 실패 시 순차 실행 */
   parallel?: () => Promise<boolean>;
+  jobs?: GenerationJobs;
 }
 
 export interface BriefingListener {
-  (briefing: Briefing): Promise<void> | void;
+  (briefing: Briefing, eventId?: string): Promise<void> | void;
 }
 
 /** 한 번의 실행(세션)이 끝났을 때: 이번에 새로 만든 브리핑(성공만)과 브리핑 시점 등락률 (3-19 알림 묶음) */
 export interface SessionDone {
+  /** 복구 후에도 같은 실행임을 구분하는 영구 식별자. 새 명시적 실행은 새 값을 쓴다. */
+  eventId?: string;
   session: BriefingSession;
   date: string;
   trigger: "schedule" | "manual";
@@ -137,10 +141,14 @@ export class BriefingService {
   private idleWaiters: Array<() => void> = [];
   private _lastRun: LastRun | null = null;
   private _progress: RunProgress | null = null;
+  private readonly jobs: GenerationJobs;
+  private readonly generator: TextGenerator;
 
   constructor(private readonly deps: BriefingServiceDeps) {
     this.now = deps.now ?? (() => new Date());
     this.log = safeReportLogger(deps.log);
+    this.jobs = deps.jobs ?? new GenerationJobs(deps.db);
+    this.generator = checkpointGenerator(deps.generator);
   }
 
   get lastRun(): LastRun | null {
@@ -150,6 +158,21 @@ export class BriefingService {
   /** 지금 도는 실행 (없으면 null) — 브리핑 3차 2 '아직 만드는 중' 안내 */
   get progress(): RunProgress | null {
     return this._progress;
+  }
+
+  /** 다른 서버가 만드는 회차도 저장된 체크포인트로 조회한다. 자료 조회·생성은 시작하지 않는다. */
+  async currentProgress(): Promise<RunProgress | null> {
+    if (this._progress) return { ...this._progress };
+    const row = await this.deps.db.selectFrom("generation_jobs").select("checkpoint").where("job_key", "=", "briefing:session")
+      .where("status", "=", "running").where("lease_until", ">", new Date().toISOString()).executeTakeFirst();
+    if (!row) return null;
+    const steps = (JSON.parse(row.checkpoint) as { steps: Record<string, unknown> }).steps;
+    const meta = steps["progress"] as RunProgress | undefined;
+    if (!meta) return null;
+    const stocks = steps["stocks"] as Array<{ code: string }> | undefined;
+    const codes = steps["codes"] as string[] | undefined;
+    const total = stocks?.filter((stock) => !codes?.length || codes.includes(stock.code)).length ?? 0;
+    return { ...meta, total, done: Object.keys(steps).filter((key) => key.startsWith("stock:")).length };
   }
 
   /** 4단계(푸시)에서 알림 발송기를 여기에 붙인다. */
@@ -211,8 +234,22 @@ export class BriefingService {
     // 끝나는 순간 여럿이 깨어나도 먼저 잡은 쪽만 돌고 나머지는 다시 기다린다 (검사와 잡기 사이에 await 없음)
     while (this.running) await new Promise<void>((r) => this.idleWaiters.push(r));
     this.running = true;
-    const startedAt = seoulIso(this.now());
     const date = seoulDate(this.now());
+    this._progress = { session, date, trigger: opts.trigger ?? "manual", partial: !!opts.codes?.length, startedAt: seoulIso(this.now()), total: 0, done: 0 };
+    try {
+      return await this.jobs.run("briefing:session", {
+        signature: JSON.stringify({ session, date, codes: opts.codes?.slice().sort() ?? [], force: !!opts.force, staleBefore: opts.staleBefore?.toISOString() ?? null }),
+        retryUncertain: opts.force === true, waitForDifferent: opts.wait === true,
+      }, (context) => this.runSessionOwned(session, opts, date, context));
+    } finally {
+      this._progress = null;
+      this.running = false;
+      for (const w of this.idleWaiters.splice(0)) w();
+    }
+  }
+
+  private async runSessionOwned(session: BriefingSession, opts: RunOptions, date: string, context: GenerationContext): Promise<RunResult> {
+    const startedAt = await context.step("startedAt", async () => seoulIso(this.now()));
     const results: RunResult["results"] = [];
     let runError: string | undefined;
     let finishedAt = startedAt;
@@ -221,6 +258,8 @@ export class BriefingService {
     const partial = !!opts.codes?.length;
     const progress: RunProgress = { session, date, trigger, partial, startedAt, total: 0, done: 0 };
     this._progress = progress;
+    await context.step("progress", async () => ({ ...progress }));
+    await context.step("codes", async () => opts.codes ?? []);
     // 휴장 판단은 세션마다 시장별로 한 번 — 세션 날짜(date)가 다루는 현지 거래일로 (자정을 넘겨도, 달력을 다시 받아도 종목마다 달라지지 않게)
     const trading = new Map<"KR" | "US", Promise<boolean>>();
     const tradingFor = (code: string): Promise<boolean> => {
@@ -242,11 +281,12 @@ export class BriefingService {
     }
     try {
       const parallel = await this.parallelOn();
-      let stocks = await this.deps.db.selectFrom("registered_stocks").selectAll().orderBy("created_at").execute();
+      let stocks = await context.step("stocks", () => this.deps.db.selectFrom("registered_stocks").selectAll().orderBy("created_at").execute());
       if (opts.codes?.length) stocks = stocks.filter((s) => opts.codes!.includes(s.code));
       progress.total = stocks.length;
       await this.deps.collector.warm?.(stocks.map((s) => s.code));
       const runStock = async (row: (typeof stocks)[number], waitTurn?: () => Promise<void>): Promise<void> => {
+        const outcome = await context.step<{ result: RunResult["results"][number]; created: SessionDone["created"][number] | null }>(`stock:${row.code}`, async () => {
         const stock: RegisteredStock = {
           code: row.code, name: row.name, market: row.market as RegisteredStock["market"],
           quantity: row.quantity, avgPrice: row.avg_price, memo: row.memo, createdAt: row.created_at, updatedAt: row.updated_at,
@@ -255,20 +295,20 @@ export class BriefingService {
           const existing = await this.find(stock.code, date, session);
           if (existing && existing.status === "ok" && !madeBefore(existing, opts.staleBefore)) {
             if (waitTurn) await waitTurn();
-            results.push({ code: stock.code, name: stock.name, status: "ok", briefingId: existing.id, error: null, summary: existing.summary });
-            return;
+            return { result: { code: stock.code, name: stock.name, status: "ok", briefingId: existing.id, error: null, summary: existing.summary }, created: null };
           }
           // 휴장일(공휴일·주말)에는 시세가 움직이지 않아 의미 없는 브리핑이 되므로 건너뛴다 (강제 실행은 예외)
           if (!(await tradingFor(stock.code))) {
             if (waitTurn) await waitTurn();
             this.log?.info({ code: stock.code, session }, "휴장일이라 브리핑 건너뜀");
-            results.push({ code: stock.code, name: stock.name, status: "skipped", briefingId: null, error: "휴장일", summary: null });
-            return;
+            return { result: { code: stock.code, name: stock.name, status: "skipped", briefingId: null, error: "휴장일", summary: null }, created: null };
           }
         }
-        const { briefing: b, changeRate, error } = await this.generate(stock, session, date, waitTurn);
-        if (!error) created.push({ briefing: b, changeRate });
-        results.push({ code: b.code, name: stock.name, status: error ? "failed" : "ok", briefingId: b.id, error, summary: error ? null : b.summary });
+        const { briefing: b, changeRate, error } = await this.generate(stock, session, date, waitTurn, opts.force === true, context.runId);
+        return { result: { code: b.code, name: stock.name, status: error ? "failed" : "ok", briefingId: b.id, error, summary: error ? null : b.summary }, created: error ? null : { briefing: b, changeRate } };
+        });
+        if (outcome.created) created.push(outcome.created);
+        results.push(outcome.result);
       };
       if (parallel) {
         await runTwoOrdered(stocks, async (row, waitTurn) => {
@@ -289,12 +329,15 @@ export class BriefingService {
       // 도중에 예외로 끝나도 이미 만든 브리핑은 알린다
       progress.done = results.length;
       const done = {
+        eventId: context.runId,
         session, date, trigger, partial, created, force: opts.force === true, results,
         // 브리핑 3차 2 실행 기록 (더하기만 — 다른 리스너는 모르는 칸)
         startedAt, firedAt: opts.firedAt ? seoulIso(opts.firedAt) : null, scheduledAt: opts.scheduledAt ?? null,
         ...(runError ? { total: progress.total, runError } : {}),
       };
-      if (created.length > 0) {
+      let owns = true;
+      try { await context.renew(); } catch { owns = false; }
+      if (owns && created.length > 0) {
         for (const l of this.sessionListeners) {
           try {
             await l(done);
@@ -303,9 +346,9 @@ export class BriefingService {
           }
         }
       }
-      for (const l of this.runDoneListeners) {
+      for (const [index, l] of (owns ? this.runDoneListeners : []).entries()) {
         try {
-          await l(done);
+          await context.effect(`done:${index}`, async () => { await l(done); return null; });
         } catch (e) {
           this.log?.warn({ err: (e as Error).message }, "실행 완료 리스너 오류");
         }
@@ -320,9 +363,6 @@ export class BriefingService {
         trigger,
         ...(runError ? { total: progress.total } : {}),
       };
-      this._progress = null;
-      this.running = false;
-      for (const w of this.idleWaiters.splice(0)) w();
     }
     return { session, date, results, startedAt, finishedAt };
   }
@@ -363,7 +403,7 @@ export class BriefingService {
 
   async generateOne(stock: RegisteredStock, session: BriefingSession, date = seoulDate(this.now())): Promise<Briefing> {
     if (this.shuttingDown) throw new AppError(503, "SERVER_CLOSING", "서버가 재시작 중입니다. 잠시 뒤 다시 시도해 주세요.");
-    return this.track(this.generate(stock, session, date).then((result) => result.briefing));
+    return this.track(this.generate(stock, session, date, undefined, true).then((result) => result.briefing));
   }
 
   /**
@@ -375,14 +415,32 @@ export class BriefingService {
     session: BriefingSession,
     date: string,
     waitTurn?: () => Promise<void>,
+    retryUncertain = false,
+    parentRunId?: string,
   ): Promise<{ briefing: Briefing; changeRate: number | null; error: string | null }> {
+    let generated = false;
+    const outcome = await this.jobs.run(`briefing:${stock.code}:${date}:${session}`, { retryUncertain, ...(parentRunId ? { signature: parentRunId, reuseCompleted: true } : {}) }, async (context) => {
+      generated = true;
+      return this.generateOwned(stock, session, date, context, waitTurn);
+    });
+    // 본문 커밋 직후 종료됐으면 같은 발송 ID로 후처리를 복원한다. 발송기는 DB 중복 방지를 거친다.
+    if (!generated && outcome.error === null) {
+      for (const listener of this.listeners) {
+        try { await listener(outcome.briefing, outcome.eventId); }
+        catch (error) { this.log?.warn({ err: (error as Error).message }, "복구 브리핑 리스너 오류"); }
+      }
+    }
+    return outcome;
+  }
+
+  private async generateOwned(stock: RegisteredStock, session: BriefingSession, date: string, context: GenerationContext, waitTurn?: () => Promise<void>): Promise<{ briefing: Briefing; changeRate: number | null; error: string | null; eventId: string }> {
     const log = this.log;
     const timing = new ReportTiming({ report: "브리핑", session }, log);
     let success = false;
     try {
       // 브리핑 2차 6: 한 건을 만드는 동안 같은 값을 쓴다 (꺼져 있으면 프롬프트·데이터·요약·상세가 예전과 한 글자도 같다)
-      const safe = await this.safeWordingOn();
-      const [snapshot, previous] = await Promise.all([this.deps.collector.collectBriefing(stock), this.previousSummary(stock.code, date, session)]);
+      const safe = await context.step("safe", () => this.safeWordingOn());
+      const [snapshot, previous] = await context.step("inputs", () => Promise.all([this.deps.collector.collectBriefing(stock), this.previousSummary(stock.code, date, session)]));
       // 평균 단가는 종목 통화로 저장된다 (미국은 달러). JSON 의 quote.currency 와 맞추고, 시세를 못 받았으면 코드 규칙으로
       const currency: Currency = snapshot.quote?.currency ?? (isKrCode(stock.code) ? "KRW" : "USD");
       const source = safe ? sourceText(snapshot) : "";
@@ -409,15 +467,15 @@ export class BriefingService {
         timing.next("프롬프트");
         // 모델 호출 label 은 켜도 꺼도 같다 (briefing_detail:코드 · briefing_summary:코드)
         const detailPrompt = await this.deps.prompts.load(safe ? "briefing_detail_safe" : "briefing_detail");
-        const detailRequest: GenerateRequest = {
+        const detailRequest: GenerateRequest = await context.step("detailRequest", async () => ({
           system: detailPrompt.system,
           user: renderTemplate(detailPrompt.userTemplate, vars),
           maxTokens: 4096,
           effort: "medium",
           label: `briefing_detail:${stock.code}`,
-        };
+        }));
         timing.next("모델 상세");
-        const d = await this.deps.generator.generate(detailRequest);
+        const d = await this.generator.generate(detailRequest);
         timing.next("프롬프트");
         detail = d.text;
         model = d.model;
@@ -427,15 +485,15 @@ export class BriefingService {
         if (cleaned) detail = cleaned.text;
 
         const summaryPrompt = await this.deps.prompts.load(safe ? "briefing_summary_safe" : "briefing_summary");
-        const summaryRequest: GenerateRequest = {
+        const summaryRequest: GenerateRequest = await context.step("summaryRequest", async () => ({
           system: summaryPrompt.system,
           user: renderTemplate(summaryPrompt.userTemplate, { ...vars, detail }),
           maxTokens: 512,
           effort: "low",
           label: `briefing_summary:${stock.code}`,
-        };
+        }));
         timing.next("요약");
-        const s = await this.deps.generator.generate(summaryRequest);
+        const s = await this.generator.generate(summaryRequest);
         if (cleaned) {
           // 첫 줄은 시세로 만든 가격 줄, 둘째 줄은 검사를 통과한 모델 한 줄 또는 개수 줄
           const second = secondLine(snapshot, s.text);
@@ -447,6 +505,7 @@ export class BriefingService {
           summary = normalizeSummary(s.text);
         }
       } catch (e) {
+        if (e instanceof AppError && e.code.startsWith("GENERATION_")) throw e;
         timing.fail();
         error = e instanceof GenerationError ? `${e.kind}: ${e.message}` : (e as Error).message;
         log?.warn({ code: stock.code, err: error }, "브리핑 생성 실패");
@@ -458,7 +517,7 @@ export class BriefingService {
       timing.next("저장 대기");
       if (waitTurn) await waitTurn();
       timing.next("저장");
-      const createdAt = seoulIso(this.now());
+      const createdAt = await context.step("createdAt", async () => seoulIso(this.now()));
       const values = {
         code: stock.code,
         session,
@@ -472,7 +531,8 @@ export class BriefingService {
         error,
         created_at: createdAt,
       };
-      await this.deps.db
+      const outcome = await context.commit(async (db) => {
+      await db
         .insertInto("briefings")
         .values(values)
         .onConflict((oc) => {
@@ -481,22 +541,27 @@ export class BriefingService {
           return status === "ok" ? update : update.where("briefings.status", "<>", "ok");
         })
         .execute();
-      const saved = (await this.find(stock.code, date, session))!;
+      const stored = await db.selectFrom("briefings").leftJoin("registered_stocks", "registered_stocks.code", "briefings.code").select(BRIEFING_COLS)
+        .where("briefings.code", "=", stock.code).where("briefing_date", "=", date).where("session", "=", session).executeTakeFirstOrThrow();
+      const saved = toBriefing(stored);
+      if (status !== "ok" && saved.status === "ok") error = `${error} (이전 브리핑은 그대로 둡니다)`;
+      return { briefing: saved, changeRate: snapshot.quote?.changeRate ?? null, error, eventId: context.runId };
+      });
+      const saved = outcome.briefing;
       timing.next("완료 처리");
       if (status === "ok") {
         for (const l of this.listeners) {
           try {
-            await l(saved);
+            await l(saved, context.runId);
           } catch (e) {
             log?.warn({ err: (e as Error).message }, "브리핑 리스너 오류");
           }
         }
       } else if (saved.status === "ok") {
         log?.info({ code: stock.code, session, date }, "다시 만들기 실패 — 이전 브리핑을 그대로 둠");
-        error = `${error} (이전 브리핑은 그대로 둡니다)`;
       }
       success = error === null;
-      return { briefing: saved, changeRate: snapshot.quote?.changeRate ?? null, error };
+      return outcome;
     } finally {
       timing.finish(success);
     }
