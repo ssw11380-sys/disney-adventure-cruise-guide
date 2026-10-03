@@ -36,6 +36,7 @@ export class NotificationService {
   private sessionDigest: boolean | null = null;
   private pendingReceipts: PendingReceipt[] = [];
   private receiptTimer: NodeJS.Timeout | null = null;
+  private stopped = false;
 
   constructor(
     private readonly deps: {
@@ -126,10 +127,10 @@ export class NotificationService {
     for (const r of results) {
       if (r.ok) {
         summary.sent++;
-        if (r.receiptId) this.pendingReceipts.push({ receiptId: r.receiptId, token: r.token, receivedAt: (this.deps.now?.() ?? new Date()).getTime() });
+        if (r.receiptId && !this.stopped) this.pendingReceipts.push({ receiptId: r.receiptId, token: r.token, receivedAt: (this.deps.now?.() ?? new Date()).getTime() });
       } else {
         summary.failed++;
-        if (r.error === "DeviceNotRegistered" || r.error === "InvalidToken") {
+        if (!this.stopped && (r.error === "DeviceNotRegistered" || r.error === "InvalidToken")) {
           await this.deps.devices.disable(r.token, r.error);
           summary.disabled.push(r.token);
         }
@@ -142,7 +143,7 @@ export class NotificationService {
   }
 
   private scheduleReceiptCheck(): void {
-    if (this.receiptTimer || this.pendingReceipts.length === 0) return;
+    if (this.stopped || this.receiptTimer || this.pendingReceipts.length === 0) return;
     const delay = this.deps.receiptDelayMs ?? 15 * 60_000;
     this.receiptTimer = setTimeout(() => {
       this.receiptTimer = null;
@@ -153,6 +154,7 @@ export class NotificationService {
 
   /** 대기 중인 영수증을 확인한다. 반환: 비활성화한 토큰 수 */
   async checkReceipts(): Promise<{ checked: number; disabled: number }> {
+    if (this.stopped) return { checked: 0, disabled: 0 };
     const queuedAtStart = this.pendingReceipts;
     this.pendingReceipts = [];
     const now = (this.deps.now?.() ?? new Date()).getTime();
@@ -164,6 +166,7 @@ export class NotificationService {
     try {
       const receipts = await this.deps.push.checkReceipts(pending.map((p) => p.receiptId));
       for (const r of receipts) {
+        if (this.stopped) break;
         const receipt = remaining.get(r.receiptId);
         if (!receipt) continue;
         if (!r.ok) {
@@ -189,6 +192,7 @@ export class NotificationService {
       let exhausted = 0;
       const finishedAt = (this.deps.now?.() ?? new Date()).getTime();
       for (const receipt of remaining.values()) {
+        if (this.stopped) break;
         if (finishedAt - receipt.receivedAt >= RECEIPT_MAX_AGE_MS) { exhausted++; continue; }
         if (!queued.has(receipt.receiptId)) {
           this.pendingReceipts.push(receipt);
@@ -202,6 +206,9 @@ export class NotificationService {
   }
 
   stop(): void {
+    // 종료 전에 시작한 네트워크 응답이 나중에 와도 영수증 예약·DB 작업을 다시 시작하지 않는다.
+    this.stopped = true;
+    this.pendingReceipts = [];
     if (this.receiptTimer) clearTimeout(this.receiptTimer);
     this.receiptTimer = null;
   }
