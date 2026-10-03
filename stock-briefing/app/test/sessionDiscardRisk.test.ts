@@ -1,12 +1,12 @@
 import { mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { authErrorView } from "@/lib/authErrors";
-import { backgroundSessionFor, clearSession, dropPendingLogout, installSessionStorage, loadSession, pendingLogoutsFor, PENDING_LOGOUT_KEY, resetSessionForTests, saveSession, SESSION_KEY, sessionFor, type KeyValueStorage } from "@/lib/session";
+import { addPendingLogout, backgroundSessionFor, clearSession, dropPendingLogout, installSessionStorage, loadSession, pendingLogoutsFor, PENDING_LOGOUT_KEY, resetSessionForTests, saveSession, SESSION_KEY, sessionFor, type KeyValueStorage } from "@/lib/session";
 
 const API = "https://discard-risk.test";
 const token = "offline-discard-fixture";
@@ -38,6 +38,44 @@ beforeEach(async () => {
 afterEach(async () => { resetSessionForTests(); await rm(directory, { recursive: true, force: true }); });
 
 describe("세션을 폐기할 수 없는 저장소의 추가 방어", () => {
+  it("앞 폐기 표식 삭제가 늦게 끝나도 그 사이 추가된 다음 폐기 표식을 지우지 않는다", async () => {
+    await addPendingLogout(API, token);
+    let entered!: () => void, release!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const paused = new Promise<void>((resolve) => { release = resolve; });
+    const remove = disk.removeItem.bind(disk);
+    disk.removeItem = async (key) => { if (key === PENDING_LOGOUT_KEY) { entered(); await paused; } await remove(key); };
+    const dropping = dropPendingLogout(token);
+    await started;
+    const next = { ...login, token: "next-discard-fixture" };
+    await disk.setItem(SESSION_KEY, JSON.stringify(next));
+    // 이 경쟁에서는 파일 작업을 동기 완료시켜 실제 디스크 지연 순서에 기대지 않는다.
+    disk.getItem = async (key) => { try { return readFileSync(join(directory, key), "utf8"); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; } };
+    disk.setItem = async (key, value) => { writeFileSync(join(directory, key), value); };
+    const adding = addPendingLogout(API, next.token);
+    // 늦은 삭제가 새 쓰기와 겹칠 여지를 실제 파일 경계에서 만든다.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    release();
+    await Promise.all([dropping, adding]);
+    expect(restoredByFreshProcess()).toEqual({ userId: null });
+  });
+
+  it("다른 로그인 저장이 여러 번 실패해도 디스크에 남은 앞 인증값의 폐기 표식은 밀어내지 않는다", async () => {
+    await saveSession(login); failSession = true;
+    await expect(clearSession("logout")).rejects.toMatchObject({ code: "SESSION_PERSISTENCE" });
+    for (let id = 2; id < 10; id++) {
+      await expect(saveSession({ ...login, token: `failed-login-fixture-${id}`, user: { ...login.user, id } })).rejects.toMatchObject({ code: "SESSION_PERSISTENCE" });
+    }
+    expect(JSON.parse((await disk.getItem(PENDING_LOGOUT_KEY))!)).toHaveLength(5);
+    expect(restoredByFreshProcess()).toEqual({ userId: null });
+  });
+
+  it.each(["{", "{}", '[{"apiUrl":1,"token":"bad"}]'])("폐기 표식 손상 %s은 빈 목록으로 간주하여 앞 인증값을 복원하지 않는다", async (raw) => {
+    await saveSession(login);
+    await disk.setItem(PENDING_LOGOUT_KEY, raw);
+    expect(restoredByFreshProcess()).toEqual({ userId: null });
+  });
+
   it("로그아웃 대기와 같은 서버·토큰은 새 프로세스 시작부터 복원하지 않는다", async () => {
     await saveSession(login);
     await disk.setItem(PENDING_LOGOUT_KEY, JSON.stringify([{ apiUrl: API, token }]));

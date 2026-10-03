@@ -168,6 +168,7 @@ async function notifyUnseen(latest: LatestBriefing[], opts: NotifyOpts): Promise
         book!.accepted(identifier);
         sent++;
       }
+      assertSessionIdentity(identity);
       for (const id of ids) seen.add(id);
       try { await saveSeen(seen, true); }
       catch { await book!.recordFailure(identifier); }
@@ -175,7 +176,7 @@ async function notifyUnseen(latest: LatestBriefing[], opts: NotifyOpts): Promise
     }
     if (!deliveries.length) await saveSeen(seen);
   } catch (error) {
-    if (!(error instanceof LocalDeliveryRecordError)) await saveSeen(seen);
+    if (!(error instanceof LocalDeliveryRecordError) && sessionIdentityVersion() === identity) await saveSeen(seen);
     throw error;
   }
   // 빈 목록이어도 기준을 적은 것으로 — 다음에 생기는 첫 브리핑을 알린다

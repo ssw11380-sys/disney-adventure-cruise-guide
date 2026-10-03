@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LatestBriefing } from "@/api/types";
 
-const h = vi.hoisted(() => ({ store: new Map<string, string>(), failSeen: false, failAllWrites: false, failInspect: false, failSchedule: false, delivered: [] as { identifier?: string }[], presented: [] as { request: { identifier: string } }[], pending: [] as { identifier: string }[], inspections: 0 }));
+const h = vi.hoisted(() => ({ store: new Map<string, string>(), failSeen: false, failAllWrites: false, failInspect: false, failSchedule: false, scheduleWait: null as null | (() => Promise<void>), delivered: [] as { identifier?: string }[], presented: [] as { request: { identifier: string } }[], pending: [] as { identifier: string }[], inspections: 0 }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: {
   getItem: async (key: string) => h.store.get(key) ?? null,
   setItem: async (key: string, value: string) => { if (h.failAllWrites || (h.failSeen && key === "briefings.notified")) throw new Error("주입한 기록 실패"); h.store.set(key, value); },
@@ -11,6 +11,7 @@ vi.mock("expo-notifications", () => ({
   getPresentedNotificationsAsync: async () => { h.inspections++; if (h.failInspect) throw new Error("주입한 OS 조회 실패"); return h.presented; },
   getAllScheduledNotificationsAsync: async () => { h.inspections++; if (h.failInspect) throw new Error("주입한 OS 조회 실패"); return h.pending; },
   scheduleNotificationAsync: async (input: { identifier?: string }) => {
+    await h.scheduleWait?.();
     if (h.failSchedule) throw new Error("주입한 OS 예약 실패");
     h.delivered.push(input);
     h.presented.push({ request: { identifier: input.identifier ?? "무작위-옛식별자" } });
@@ -34,6 +35,7 @@ const item: LatestBriefing = { code: "005930", name: "가짜", latest: { id: 2, 
 beforeEach(() => {
   vi.resetModules(); h.store.clear(); h.store.set("briefings.notifyInit", "1"); h.store.set("briefings.notified", "[90]");
   h.failSeen = false; h.failAllWrites = false; h.failInspect = false; h.failSchedule = false;
+  h.scheduleWait = null;
   h.delivered = []; h.presented = []; h.pending = []; h.inspections = 0;
   vi.useFakeTimers(); vi.setSystemTime(NOW);
 });
@@ -41,6 +43,22 @@ afterEach(() => vi.useRealTimers());
 const notify = async () => (await import("@/lib/backgroundBriefings")).notifyNewBriefings([item], { now: NOW });
 
 describe("OS 접수 뒤 알림 기록 실패의 복구", () => {
+  it.each([false, true])("OS 응답 실패 %s: 기다리는 중 계정이 바뀌면 앞 계정의 발송 목록으로 덮어쓰지 않는다", async (fail) => {
+    const { saveSession } = await import("@/lib/session");
+    let entered!: () => void, release!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const paused = new Promise<void>((resolve) => { release = resolve; });
+    h.scheduleWait = async () => { entered(); await paused; };
+    const pending = notify().then(() => null, (error: unknown) => error);
+    await started;
+    await saveSession({ apiUrl: "https://delivery-risk.test", token: "new-user-fixture", remember: true, user: { id: 2, loginId: "새 가짜", email: null, isOwner: true, usingInitialPassword: false } });
+    h.store.set("briefings.notified", "[777]");
+    h.failSchedule = fail;
+    release();
+    expect(await pending).toBeInstanceOf(Error);
+    expect(JSON.parse(h.store.get("briefings.notified")!)).toEqual([777]);
+  });
+
   it("기록 실패를 성공으로 숨기지 않고 OS에 남은 같은 알림을 새 실행에서 다시 예약하지 않는다", async () => {
     h.failAllWrites = true;
     await expect(notify()).rejects.toThrow("알림");

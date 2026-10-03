@@ -120,6 +120,12 @@ export class SessionPersistenceError extends Error {
 }
 
 const tokenKey = (s: { apiUrl: string; token: string }) => `${clean(s.apiUrl)}\0${s.token}`;
+/** 아직 디스크에 남은 인증값의 폐기 표식은 최근 항목 제한으로 밀어내지 않는다. */
+function boundedLogouts(list: typeof pendingLogouts, held: StoredSession | null): typeof pendingLogouts {
+  const protectedEntry = held ? list.find((p) => tokenKey(p) === tokenKey(held)) : undefined;
+  const recent = list.filter((p) => p !== protectedEntry).slice(-(PENDING_MAX - (protectedEntry ? 1 : 0)));
+  return protectedEntry ? [protectedEntry, ...recent] : recent;
+}
 
 /** 비동기 작업이 시작한 로그인 경계. 사용자 정보 갱신은 유지하고 로그인·로그아웃·저장소 교체만 바뀐다. */
 export function sessionIdentityVersion(): number { return identityVersion; }
@@ -204,17 +210,12 @@ function readSession(signal?: AbortSignal): Promise<void> {
       try {
         const [rawSession, rawDevice, rawPending] = await Promise.all([s.getItem(SESSION_KEY), s.getItem(DEVICE_KEY), s.getItem(PENDING_LOGOUT_KEY)]);
         if (loading !== attempt) return;
-        try {
-          const list = JSON.parse(rawPending ?? "[]") as unknown;
-          if (Array.isArray(list)) {
-            const read = list.filter((x): x is { apiUrl: string; token: string } => !!x && typeof x.apiUrl === "string" && typeof x.token === "string" && !!x.token);
-            pendingLogouts = [...pendingLogouts, ...read.filter((x) => !pendingLogouts.some((p) => p.token === x.token))].slice(-PENDING_MAX);
-          }
-        } catch {
-          /* 깨진 값은 무시 */
-        }
-        // 읽는 사이 로그인했으면 그 세션을 둔다
         const restored = parseSession(rawSession);
+        const list: unknown = JSON.parse(rawPending ?? "[]");
+        if (!Array.isArray(list) || list.some((x) => !x || typeof x.apiUrl !== "string" || typeof x.token !== "string" || !x.token)) throw new SessionReadError();
+        const read = list as typeof pendingLogouts;
+        pendingLogouts = boundedLogouts([...pendingLogouts, ...read.filter((x) => !pendingLogouts.some((p) => tokenKey(p) === tokenKey(x)))], restored);
+        // 읽는 사이 로그인했으면 그 세션을 둔다. 폐기 근거 손상은 빈 목록으로 해석하지 않는다.
         const discarded = restored && (discardedTokens.has(tokenKey(restored)) || pendingLogouts.some((p) => sameServer(p.apiUrl, restored.apiUrl) && p.token === restored.token));
         if (discarded) {
           discardedTokens.add(tokenKey(restored));
@@ -477,10 +478,14 @@ export function dismissInitialPasswordPrompt(): void {
 /** 서버에 알리지 못한 로그아웃을 적어 둔다 (lib/logout — 인터넷 오류·서버 오류로 POST /api/auth/logout 이 닿지 않았을 때) */
 export async function addPendingLogout(apiUrl: string, token: string): Promise<void> {
   if (token) discardedTokens.add(tokenKey({ apiUrl, token }));
-  if (!token || pendingLogouts.some((p) => p.token === token)) return;
-  pendingLogouts = [...pendingLogouts, { apiUrl: clean(apiUrl), token }].slice(-PENDING_MAX);
-  const saved = pendingLogouts;
-  await write((st) => st.setItem(PENDING_LOGOUT_KEY, JSON.stringify(saved)));
+  if (!token || pendingLogouts.some((p) => tokenKey(p) === tokenKey({ apiUrl, token }))) return;
+  pendingLogouts = [...pendingLogouts, { apiUrl: clean(apiUrl), token }];
+  if (!storage) { pendingLogouts = boundedLogouts(pendingLogouts, null); return; }
+  await writeSession(async (st) => {
+    const held = parseSession(await st.getItem(SESSION_KEY));
+    pendingLogouts = boundedLogouts(pendingLogouts, held);
+    await st.setItem(PENDING_LOGOUT_KEY, JSON.stringify(pendingLogouts));
+  });
 }
 
 /** 이 서버에 다시 알려야 할 로그아웃 세션 토큰 (읽기가 끝나길 기다린다) */
@@ -492,16 +497,18 @@ export async function pendingLogoutsFor(apiUrl: string): Promise<string[]> {
 /** 서버가 받았다(또는 이미 끝난 세션) → 지운다 */
 export async function dropPendingLogout(token: string): Promise<void> {
   if (!pendingLogouts.some((p) => p.token === token)) return;
+  if (!storage) { pendingLogouts = pendingLogouts.filter((p) => p.token !== token); return; }
   // 서버가 받았어도 로컬의 앞 인증값이 남아 있으면 유일한 폐기 표식을 먼저 지우지 않는다.
   // 로그인 저장과 같은 큐 안에서 읽고 지워, 그 사이 저장된 새 계정을 지우지 않게 한다.
-  const safe = await writeSession(async (st) => {
+  await writeSession(async (st) => {
     const held = parseSession(await st.getItem(SESSION_KEY));
     if (held?.token === token && pendingLogouts.some((p) => p.token === token && sameServer(p.apiUrl, held.apiUrl))) await discardStoredSession(st);
+    const saved = pendingLogouts.filter((p) => p.token !== token);
+    if (saved.length) await st.setItem(PENDING_LOGOUT_KEY, JSON.stringify(saved));
+    else await st.removeItem(PENDING_LOGOUT_KEY);
+    // 저장 성공 뒤 메모리에서도 지운다. 그 사이 추가된 다른 폐기 표식은 보존한다.
+    pendingLogouts = pendingLogouts.filter((p) => p.token !== token);
   });
-  if (!safe) return;
-  pendingLogouts = pendingLogouts.filter((p) => p.token !== token);
-  const saved = pendingLogouts;
-  await write((st) => (saved.length ? st.setItem(PENDING_LOGOUT_KEY, JSON.stringify(saved)) : st.removeItem(PENDING_LOGOUT_KEY)));
 }
 
 /** useSyncExternalStore 용 */
