@@ -79,25 +79,32 @@ async function isolated(kind: "sqlite" | "postgres") {
 }
 
 describe.each(["sqlite", ...(pgUrl ? ["postgres"] : [])] as const)("실제 별도 프로세스 중단과 복원 (%s), 모델·푸시는 가짜", (kind) => {
-  it.each(["analysis", "briefing"])("미해결 결함 재현: 프로세스 간 같은 %s 요청의 모델 생성 중복을 관측한다", async (command) => {
+  it.each(["analysis", "briefing"])("프로세스 간 같은 %s 요청이 한 번의 생성과 같은 결과에 합류한다", async (command) => {
     const env = await isolated(kind);
     try {
       const a = await env.worker(); const b = await env.worker();
       const first = a.command(command, "shared-request");
+      await a.wait("model");
+      if (command === "briefing") {
+        const other = (await b.command("progress").done).result;
+        expect(other.settings.running).toBe(true);
+        expect(other.progress).toMatchObject({ session: "morning", date: "2026-12-28", total: 1, done: 0 });
+      }
       const second = b.command(command, "shared-request");
-      await Promise.all([a.wait("model"), b.wait("model")]);
+      if (command === "analysis") expect((await b.command("state", "shared-request").done).result.request.status).toBe("pending");
       a.release(); b.release();
       const results = await Promise.all([first.done, second.done]);
       expect(results.map((r) => r.error)).toEqual([undefined, undefined]);
       const modelCalls = [...a.messages, ...b.messages].filter((m) => m.event === "model").length;
       const rows = await env.db.selectFrom(command === "analysis" ? "analyses" : "briefings").selectAll().execute();
-      // 정상 기준은 분석 1회/브리핑 2회다. 아래는 현재 미해결 결함의 실제 관측이며 정상 검사가 아니다.
-      expect(modelCalls).toBe(command === "analysis" ? 2 : 4);
-      expect(rows).toHaveLength(command === "analysis" ? 2 : 1);
-      console.info(JSON.stringify({ evidence: "M01 미해결 결함 관측", database: kind, command, processes: 2, modelCalls, normalCalls: command === "analysis" ? 1 : 2, storedRows: rows.length }));
+      expect(modelCalls).toBe(command === "analysis" ? 1 : 2);
+      expect(rows).toHaveLength(1);
+      if (command === "analysis") expect(results[0]!.result.id).toBe(results[1]!.result.id);
+      else expect(results[0]!.result.results).toEqual(results[1]!.result.results);
+      console.info(JSON.stringify({ evidence: "M01 수정 후 중복 없음", database: kind, command, processes: 2, modelCalls, storedRows: rows.length }));
     } finally { await env.close(); }
   }, 30_000);
-  it("SIGKILL 뒤 이전 저장 결과는 보존하고 끊긴 요청은 unknown으로 표시하며 재요청을 완료한다", async () => {
+  it("SIGKILL 뒤 이전 저장 결과를 보존하고 만료된 작업을 실패로 구분한 뒤 명시적 재요청을 완료한다", async () => {
     const env = await isolated(kind);
     try {
       const before = await env.worker(); before.release();
@@ -108,16 +115,42 @@ describe.each(["sqlite", ...(pgUrl ? ["postgres"] : [])] as const)("실제 별�
       const pending = interrupted.command("analysis", "interrupted");
       void pending.done.catch(() => undefined);
       await interrupted.wait("model"); await interrupted.kill();
+      // 죽은 프로세스의 소유권 만료를 즉시 재현한다. 제품에서는 실제 임대 시간이 지나야 인계한다.
+      await env.db.updateTable("generation_jobs").set({ lease_until: new Date(Date.now() - 1).toISOString() }).where("status", "=", "running").execute();
       expect(await env.db.selectFrom("analyses").selectAll().execute()).toHaveLength(1);
       const restarted = await env.worker();
       const state = (await restarted.command("state", "interrupted").done).result;
-      expect(state).toMatchObject({ running: false, request: { status: "unknown", result: null }, latest: { id: saved.result.id } });
+      expect(state).toMatchObject({ running: false, request: { status: "failed", result: null }, latest: { id: saved.result.id } });
       restarted.release();
-      const result = await restarted.command("analysis", "interrupted").done;
+      expect((await restarted.command("analysis", "interrupted").done).error).toBeTruthy();
+      const result = await restarted.command("analysis", "explicit-retry").done;
       expect(result.error).toBeUndefined();
       expect(result.result.id).not.toBe(saved.result.id);
       expect(await env.db.selectFrom("analyses").selectAll().execute()).toHaveLength(2);
       expect(restarted.messages.filter((m) => m.event === "model")).toHaveLength(1);
+    } finally { await env.close(); }
+  }, 30_000);
+
+  it("상세 생성 완료·요약 진행 중 SIGKILL 뒤에는 같은 상세 원문을 복원하고 명시적 재요청의 요약만 생성한다", async () => {
+    const env = await isolated(kind);
+    try {
+      const first = await env.worker();
+      const run = first.command("briefing-summary-hold"); void run.done.catch(() => undefined);
+      await first.wait("summary"); await first.kill();
+      const saved = await env.db.selectFrom("generation_jobs").selectAll().where("job_key", "like", "briefing:005930:%").executeTakeFirstOrThrow();
+      const steps = JSON.parse(saved.checkpoint).steps;
+      const modelResults = Object.entries(steps).filter(([key]) => key.startsWith("model:"));
+      expect(modelResults).toHaveLength(1);
+      expect(await env.db.selectFrom("briefings").selectAll().execute()).toHaveLength(0);
+      await env.db.updateTable("generation_jobs").set({ lease_until: new Date(Date.now() - 1).toISOString() }).where("status", "=", "running").execute();
+      const next = await env.worker(); next.release();
+      expect((await next.command("briefing-force").done).error).toBeUndefined();
+      const calls = next.messages.filter((m) => m.event === "model");
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.label).toContain("briefing_summary");
+      const row = await env.db.selectFrom("briefings").selectAll().executeTakeFirstOrThrow();
+      expect(row.detail).toBe((modelResults[0]![1] as { text: string }).text);
+      console.info(JSON.stringify({ evidence: "중단 후 상세 원문 복원", database: kind, paidModel: false, newDetailCalls: 0, newSummaryCalls: 1 }));
     } finally { await env.close(); }
   }, 30_000);
 

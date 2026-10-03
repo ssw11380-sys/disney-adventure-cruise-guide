@@ -316,7 +316,7 @@ export interface BriefingStatusDeps {
   settings: () => Promise<ScheduleSettings>;
   calendar: { isTradingDate(market: "KR" | "US", date: string): Promise<boolean> } | null;
   /** 지금 도는 실행 (BriefingService.progress) */
-  progress: () => RunProgress | null;
+  progress: () => RunProgress | null | Promise<RunProgress | null>;
   llmConfigured: () => boolean;
   now: () => Date;
   log?: { warn(obj: Record<string, unknown>, msg: string): void };
@@ -364,18 +364,19 @@ export class BriefingStatusService {
   /** 지금 안내 (플래그 확인은 부르는 쪽 — 경로) */
   async status(): Promise<BriefingStatus> {
     const now = this.deps.now();
-    const [settings, runs, manualRun, liveProgress] = await Promise.all([
+    const [settings, runs, manualRun, liveProgress, progress] = await Promise.all([
       this.deps.settings(),
       this.runs(),
       this.deps.features.enabled("briefingManualRun").catch(() => false),
       this.deps.features.enabled("briefingLiveProgress").catch(() => false),
+      this.deps.progress(),
     ]);
     const llmConfigured = this.deps.llmConfigured();
     const pick = pickSession(now, settings, runs);
     const next = nextRunAt(now, settings);
     const empty = { stocks: [], rows: [], trading: { KR: false, US: false } };
     if (!llmConfigured || !pick) {
-      return this.withProgress(judgeStatus({ now, llmConfigured, pick, running: null, bootAt: this.bootAt, runs, nextRunAt: next, manualRun, ...empty }), liveProgress);
+      return this.withProgress(judgeStatus({ now, llmConfigured, pick, running: null, bootAt: this.bootAt, runs, nextRunAt: next, manualRun, ...empty }), liveProgress, progress);
     }
     const db = this.deps.db;
     const [stockRows, rows] = await Promise.all([
@@ -395,7 +396,7 @@ export class BriefingStatusService {
       now,
       llmConfigured,
       pick,
-      running: this.deps.progress(),
+      running: progress,
       bootAt: this.bootAt,
       stocks,
       rows: rows.map((r) => ({ id: r.id, code: r.code, status: r.status, error: r.error, createdAt: r.created_at })),
@@ -410,13 +411,12 @@ export class BriefingStatusService {
       const recent = await db.selectFrom("briefings").select(["id", "session"]).where("code", "=", p.code).orderBy("briefing_date", "desc").orderBy("created_at", "desc").limit(10).execute();
       p.briefingId = (recent.find((r) => r.session === pick.session) ?? recent[0])?.id ?? null;
     }
-    return this.withProgress(judged, liveProgress);
+    return this.withProgress(judged, liveProgress, progress);
   }
 
   /** 20분 지연 판정과 별개로 현재 실행을 붙인다. 예약 전·다른 회차·일부 종목 실행도 포함한다 */
-  private withProgress(status: BriefingStatus, enabled: boolean): BriefingStatus {
+  private withProgress(status: BriefingStatus, enabled: boolean, run: RunProgress | null): BriefingStatus {
     if (!enabled) return status;
-    const run = this.deps.progress();
     if (!run) return { ...status, activeRun: null };
     // 실행 중 바뀌는 원본과 응답을 분리하고 공개할 필드만 복사한다
     const { session, date, trigger, partial, startedAt, total, done } = run;

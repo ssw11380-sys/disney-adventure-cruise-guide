@@ -51,8 +51,10 @@ describe("1차 서버 경계와 저장 실패 검증", () => {
     expect(recovered.statusCode).toBe(200);
     expect(recovered.json().id).not.toBe(old.id);
     expect((await a.inject({ method: "GET", url: `${path}/state?requestId=save-recovered-002` })).json()).toMatchObject({ running: false, request: { status: "completed", result: recovered.json() } });
-    expect(generator.requests).toHaveLength(3);
-    expect(generator.requests[2]).toEqual(generator.requests[1]);
+    // 생성은 이미 끝났으므로 새 요청은 보존한 원문을 저장하고 유료 모델을 다시 부르지 않는다.
+    expect(generator.requests).toHaveLength(2);
+    expect(recovered.json().content).toBe(old.content);
+    expect(recovered.json().model).toBe(old.model);
   });
 
   it("기술 분석 캐시 만료 직전은 재사용하고 만료 시각의 동시 조회는 한 번만 생성한다", async () => {

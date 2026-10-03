@@ -6,6 +6,7 @@ import { renderTemplate, type PromptName, type PromptStore } from "../llm/prompt
 import type { AnalysisSnapshot, DataCollector } from "./collector.js";
 import { verifyReport, type ReportVerification } from "./reportVerification.js";
 import { ReportTiming, type ReportLog } from "./reportTiming.js";
+import { checkpointGenerator, GenerationJobs, type GenerationContext } from "./generationJobs.js";
 
 export type AnalysisKind = "company" | "value" | "technical";
 
@@ -56,6 +57,7 @@ export interface AnalysisServiceDeps {
   lookup?: (code: string) => Promise<{ code: string; name: string; market: string } | null>;
   now?: () => Date;
   log?: ReportLog;
+  jobs?: GenerationJobs;
 }
 
 /** 종목 상세 탭(회사 소개 / 가치투자 / 기술적 분석) 생성 + 캐시 */
@@ -65,12 +67,16 @@ export class AnalysisService {
   private readonly requests = new Map<string, TrackedAnalysisRequest>();
   private readonly activeGets = new Set<Promise<Analysis>>();
   private shuttingDown = false;
+  private readonly jobs: GenerationJobs;
+  private readonly generator: TextGenerator;
 
   constructor(private readonly deps: AnalysisServiceDeps) {
     this.now = deps.now ?? (() => new Date());
+    this.jobs = deps.jobs ?? new GenerationJobs(deps.db, { recordNow: this.now });
+    this.generator = checkpointGenerator(deps.generator);
   }
 
-  async get(code: string, kind: AnalysisKind, opts: { refresh?: boolean } = {}): Promise<Analysis> {
+  async get(code: string, kind: AnalysisKind, opts: { refresh?: boolean; requestKey?: string } = {}): Promise<Analysis> {
     if (this.shuttingDown) throw new AppError(503, "SERVER_CLOSING", "서버가 재시작 중입니다. 잠시 뒤 다시 시도해 주세요.");
     const work = this.getActive(code, kind, opts);
     this.activeGets.add(work);
@@ -87,15 +93,26 @@ export class AnalysisService {
     await Promise.allSettled(this.activeGets);
   }
 
-  private async getActive(code: string, kind: AnalysisKind, opts: { refresh?: boolean }): Promise<Analysis> {
-    if (!opts.refresh) {
-      const cached = await this.latest(code, kind);
-      if (cached && this.now().getTime() - Date.parse(cached.createdAt) < TTL_MS[kind]) return { ...cached, cached: true };
-    }
+  private async getActive(code: string, kind: AnalysisKind, opts: { refresh?: boolean; requestKey?: string }): Promise<Analysis> {
     const key = `${code}:${kind}`;
+    if (opts.requestKey) {
+      const previous = await this.jobs.request<Analysis>(opts.requestKey);
+      if (previous.status === "completed" && previous.result) return previous.result;
+      if (previous.status === "failed") throw new AppError(409, "GENERATION_INTERRUPTED", "이전 생성이 중단됐습니다. 다시 만들기로 새로 요청해 주세요.");
+    }
+    const active = this.inflight.has(key) || (!!opts.requestKey && await this.jobs.running(`analysis:${key}`));
+    if (!opts.refresh && !active) {
+      const cached = await this.latest(code, kind);
+      if (cached && this.now().getTime() - Date.parse(cached.createdAt) < TTL_MS[kind]) {
+        const result = { ...cached, cached: true };
+        if (opts.requestKey) await this.jobs.completeRequest(opts.requestKey, `analysis:${key}`, result);
+        return result;
+      }
+    }
     const existing = this.inflight.get(key);
-    if (existing) return existing;
-    const p = this.generate(code, kind).finally(() => this.inflight.delete(key));
+    if (existing && !opts.requestKey) return existing;
+    const p = this.jobs.run<Analysis>(`analysis:${key}`, { ...(opts.requestKey ? { requestKey: opts.requestKey } : {}), retryUncertain: opts.refresh === true }, (context) => this.generate(code, kind, context))
+      .finally(() => { if (this.inflight.get(key) === p) this.inflight.delete(key); });
     this.inflight.set(key, p);
     return p;
   }
@@ -109,7 +126,7 @@ export class AnalysisService {
     // 진행 중이거나 아직 회수할 수 있는 기록을 지우면 같은 요청이 AI를 다시 부를 수 있다.
     if (this.requests.size >= REQUEST_LIMIT) throw new AppError(429, "ANALYSIS_TRACKING_BUSY", "분석 결과 확인 요청이 많습니다. 잠시 뒤 다시 시도해 주세요.");
     // 다른 화면이 갱신 중이면 유효한 예전 캐시보다 그 진행 결과를 먼저 기다린다.
-    const work = this.inflight.get(`${code}:${kind}`) ?? this.get(code, kind, opts);
+    const work = this.get(code, kind, { ...opts, requestKey: key });
     const tracked: TrackedAnalysisRequest = { id: requestId, status: "pending", result: null, settledAt: null, promise: work };
     tracked.promise = work.then((result) => {
       tracked.status = "completed";
@@ -132,21 +149,21 @@ export class AnalysisService {
     }
   }
 
-  private async generate(code: string, kind: AnalysisKind): Promise<Analysis> {
+  private async generate(code: string, kind: AnalysisKind, context: GenerationContext): Promise<Analysis> {
     const timing = new ReportTiming({ report: "분석", kind }, this.deps.log);
     let success = false;
     try {
-      const stock =
+      const stock = await context.step("stock", async () =>
         (await this.deps.db.selectFrom("registered_stocks").select(["code", "name", "market"]).where("code", "=", code).executeTakeFirst()) ??
         (await this.deps.db.selectFrom("listed_stocks").select(["code", "name", "market"]).where("code", "=", code).executeTakeFirst()) ??
         // 마스터를 받은 뒤 상장한 종목도 상세 화면·뉴스 탭처럼 찾는다 (코드가 정확히 같은 종목만)
-        (await this.lookup(code));
+        (await this.lookup(code)));
       if (!stock) throw new NotFoundError(`종목 ${code} 을 찾을 수 없습니다`);
 
-      const snapshot = await this.deps.collector.collectAnalysis(stock, kind);
+      const snapshot = await context.step("snapshot", () => this.deps.collector.collectAnalysis(stock, kind));
       timing.next("프롬프트");
       const prompt = await this.deps.prompts.load(PROMPT_FOR[kind]);
-      const request: GenerateRequest = {
+      const request: GenerateRequest = await context.step("request", async () => ({
         system: prompt.system,
         user: renderTemplate(prompt.userTemplate, {
           stock_name: stock.name,
@@ -160,12 +177,13 @@ export class AnalysisService {
         maxTokens: 4096,
         effort: kind === "technical" ? "medium" : "high",
         label: `${PROMPT_FOR[kind]}:${code}`,
-      };
+      }));
       timing.next("모델 생성");
-      const result = await this.deps.generator.generate(request);
+      const result = await this.generator.generate(request);
       timing.next("저장");
-      const createdAt = seoulIso(this.now());
-      const inserted = await this.deps.db
+      const createdAt = await context.step("createdAt", async () => seoulIso(this.now()));
+      const analysis = await context.commit(async (db) => {
+      const inserted = await db
         .insertInto("analyses")
         .values({
           code,
@@ -178,7 +196,8 @@ export class AnalysisService {
         })
         .returning("id")
         .executeTakeFirstOrThrow();
-      const analysis: Analysis = { id: inserted.id, code, kind, content: result.text, missing: snapshot.missing, model: result.model, createdAt, cached: false, verification: verifyReport(result.text, snapshot) };
+      return { id: inserted.id, code, kind, content: result.text, missing: snapshot.missing, model: result.model, createdAt, cached: false, verification: verifyReport(result.text, snapshot) } satisfies Analysis;
+      });
       success = true;
       return analysis;
     } finally {
@@ -216,7 +235,7 @@ export class AnalysisService {
   /** 저장된 결과와 이 서버의 진행 여부만 확인한다. 자료 수집·AI 생성은 시작하지 않는다. */
   async state(code: string, kind: AnalysisKind, requestId?: string): Promise<{ latest: Analysis | null; running: boolean; request?: AnalysisRequestState }> {
     const latest = await this.latest(code, kind);
-    const running = this.inflight.has(`${code}:${kind}`);
+    const running = this.inflight.has(`${code}:${kind}`) || await this.jobs.running(`analysis:${code}:${kind}`);
     if (requestId === undefined) return { latest, running };
     this.pruneRequests();
     const tracked = this.requests.get(`${code}:${kind}:${requestId}`);
@@ -224,7 +243,7 @@ export class AnalysisService {
       latest, running,
       request: tracked
         ? { id: requestId, status: tracked.status, result: tracked.result }
-        : { id: requestId, status: "unknown", result: null },
+        : { id: requestId, ...await this.jobs.request<Analysis>(`${code}:${kind}:${requestId}`) },
     };
   }
 }

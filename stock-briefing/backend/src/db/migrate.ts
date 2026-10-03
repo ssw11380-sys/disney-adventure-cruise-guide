@@ -354,6 +354,39 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>, dialect: D
       await sql`create index if not exists idx_briefings_date_created on briefings (briefing_date desc, created_at desc)`.execute(db);
     },
   },
+  {
+    version: 13,
+    up: async (db) => {
+      // 기존 보고서·계좌 자료는 그대로 두고 작업 소유권·완료 단계·원 재무값을 별도 보존한다.
+      await db.schema.createTable("generation_jobs").ifNotExists()
+        .addColumn("job_key", "text", (c) => c.primaryKey())
+        .addColumn("run_id", "text", (c) => c.notNull())
+        .addColumn("owner", "text", (c) => c.notNull())
+        .addColumn("signature", "text", (c) => c.notNull())
+        .addColumn("status", "text", (c) => c.notNull())
+        .addColumn("started_at", "text", (c) => c.notNull())
+        .addColumn("updated_at", "text", (c) => c.notNull())
+        .addColumn("lease_until", "text", (c) => c.notNull())
+        .addColumn("checkpoint", "text", (c) => c.notNull())
+        .addColumn("result", "text")
+        .addColumn("error", "text").execute();
+      await sql`create index if not exists idx_generation_jobs_status_lease on generation_jobs (status, lease_until)`.execute(db);
+      await sql`create index if not exists idx_generation_jobs_status_updated on generation_jobs (status, updated_at)`.execute(db);
+      await db.schema.createTable("generation_requests").ifNotExists()
+        .addColumn("request_key", "text", (c) => c.primaryKey())
+        .addColumn("job_key", "text", (c) => c.notNull())
+        .addColumn("run_id", "text", (c) => c.notNull())
+        .addColumn("status", "text", (c) => c.notNull())
+        .addColumn("result", "text")
+        .addColumn("updated_at", "text", (c) => c.notNull()).execute();
+      await sql`create index if not exists idx_generation_requests_run on generation_requests (job_key, run_id)`.execute(db);
+      await sql`create index if not exists idx_generation_requests_updated on generation_requests (updated_at)`.execute(db);
+      await db.schema.createTable("fundamentals_cache").ifNotExists()
+        .addColumn("code", "text", (c) => c.primaryKey())
+        .addColumn("payload", "text", (c) => c.notNull())
+        .addColumn("fetched_at", "text", (c) => c.notNull()).execute();
+    },
+  },
 ];
 
 export async function migrate(db: Kysely<Database>, dialect: Dialect = "sqlite"): Promise<void> {
