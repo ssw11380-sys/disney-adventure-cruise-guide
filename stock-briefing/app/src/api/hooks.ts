@@ -282,7 +282,12 @@ export function useSearch(q: string) {
     staleTime: 5 * 60_000,
     placeholderData: keepPreviousData,
   });
-  return pickSearch(query, full, local);
+  return {
+    ...pickSearch(query, full, local),
+    isFetching: full.isFetching || local.isFetching,
+    // 오류 뒤 사용자가 요청할 때만 두 기존 조회를 다시 보낸다. 연타 중 진행 중인 요청은 취소·중복 생성하지 않는다.
+    refetch: () => query.length ? Promise.all([full.refetch({ cancelRefetch: false }), local.refetch({ cancelRefetch: false })]) : Promise.resolve([]),
+  };
 }
 
 /**

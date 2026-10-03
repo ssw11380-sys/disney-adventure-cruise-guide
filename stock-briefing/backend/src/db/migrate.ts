@@ -347,6 +347,13 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>, dialect: D
       await sql`create unique index if not exists uq_value_references_market_date on value_references (market, ref_date)`.execute(db);
     },
   },
+  {
+    version: 12,
+    up: async (db) => {
+      // 종목을 지정하지 않은 최신 목록도 전체 보고서를 정렬하지 않고 조회한다. 기존 내용과 이력은 보존한다.
+      await sql`create index if not exists idx_briefings_date_created on briefings (briefing_date desc, created_at desc)`.execute(db);
+    },
+  },
 ];
 
 export async function migrate(db: Kysely<Database>, dialect: Dialect = "sqlite"): Promise<void> {

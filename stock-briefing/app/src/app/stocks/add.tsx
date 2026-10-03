@@ -45,6 +45,9 @@ export default function AddStockScreen() {
   // 입력이 멈추기 전(150ms)에도 "결과 없음"을 띄우지 않게
   const typing = q.trim() !== debounced.trim();
   const pending = search.pending || typing;
+  const retrySearch = () => {
+    if (!typing && q.trim() && search.isError && !search.isFetching) void search.refetch();
+  };
 
   const open = (s: RecentStock) => {
     recent.add(s);
@@ -116,6 +119,7 @@ export default function AddStockScreen() {
           accessibilityLabel="종목 검색"
           style={[styles.input, { color: t.ink }]}
           returnKeyType="search"
+          onSubmitEditing={retrySearch}
         />
         {q ? (
           <Pressable onPress={() => setQ("")} accessibilityRole="button" accessibilityLabel="검색어 지우기" hitSlop={slopFor(ICON, space.xs)}>
@@ -184,12 +188,14 @@ export default function AddStockScreen() {
           <Muted style={{ paddingHorizontal: space.lg }}>한국·미국 종목을 한글 이름(테슬라, 애플), 티커(TSLA, AAPL), 6자리 코드로 검색합니다. 토스증권 검색을 쓰므로 토스에서 보이는 이름 그대로 치면 됩니다.</Muted>
         )
       ) : search.isError ? (
-        <ConnectionLine
-          error={search.error}
-          {...guideProps}
-          style={{ paddingHorizontal: space.lg }}
-          fallback={<Text style={{ color: t.danger, paddingHorizontal: space.lg }}>{search.error instanceof Error ? search.error.message : "검색 실패"}</Text>}
-        />
+        <View style={{ paddingHorizontal: space.lg, gap: space.md, alignItems: "flex-start" }}>
+          <ConnectionLine
+            error={search.error}
+            {...guideProps}
+            fallback={<Text style={{ color: t.danger }}>{search.error instanceof Error ? search.error.message : "검색 실패"}</Text>}
+          />
+          <Button title="다시 검색" accessibilityLabel="다시 검색" variant="secondary" compact onPress={retrySearch} disabled={typing} loading={search.isFetching} />
+        </View>
       ) : (
         <FlatList
           data={search.data?.results ?? []}
