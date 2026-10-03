@@ -13,6 +13,7 @@ import { useAccountView } from "@/lib/account";
 import { holdingInput, NO_AVG_NOTE } from "@/lib/holdingForm";
 import { useRecentSearches, type RecentStock } from "@/lib/recentSearch";
 import { useSettingsGuide } from "@/lib/settingsLink";
+import { useSearchKeyboardInset } from "@/lib/useSearchKeyboardInset";
 import { changeColor, font, radius, slopFor, space, useTheme } from "@/theme";
 
 /**
@@ -21,6 +22,7 @@ import { changeColor, font, radius, slopFor, space, useTheme } from "@/theme";
  */
 export default function AddStockScreen() {
   const t = useTheme();
+  const { viewportRef, keyboardInset, onViewportLayout } = useSearchKeyboardInset();
   const [q, setQ] = useState("");
   const [debounced, setDebounced] = useState("");
   const [selected, setSelected] = useState<ListedStock | null>(null);
@@ -103,6 +105,7 @@ export default function AddStockScreen() {
 
   return (
     // 결과 줄은 다른 목록(잔고·발견)과 같은 공용 줄이라 화면 가장자리까지 (3-21). 검색칸·안내만 안쪽 여백
+    <View ref={viewportRef} onLayout={onViewportLayout} collapsable={false} style={{ flex: 1, paddingBottom: keyboardInset, backgroundColor: t.bg }}>
     <Screen scroll={false} contentStyle={{ paddingVertical: space.lg, gap: space.md }}>
       <View style={[styles.search, { borderColor: t.line, backgroundColor: t.surface, marginHorizontal: space.lg }]}>
         <Ionicons name="search" size={18} color={t.muted} />
@@ -221,6 +224,7 @@ export default function AddStockScreen() {
         />
       )}
     </Screen>
+    </View>
   );
 }
 

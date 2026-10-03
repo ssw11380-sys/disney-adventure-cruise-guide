@@ -13,6 +13,7 @@ vi.mock("react-native", async () => {
   const R = await import("react");
   return {
     View: "View", Text: "Text", TextInput: "TextInput", Pressable: "Pressable",
+    Keyboard: { metrics: () => undefined, addListener: () => ({ remove() {} }) },
     FlatList: ({ data, renderItem, ListEmptyComponent }: { data: unknown[]; renderItem: (arg: { item: unknown }) => React.ReactNode; ListEmptyComponent: React.ReactNode }) =>
       R.createElement("FlatList", null, data.length ? data.map((item, i) => R.createElement(R.Fragment, { key: i }, renderItem({ item }))) : ListEmptyComponent),
     StyleSheet: { create: <T,>(s: T) => s, hairlineWidth: 1 },
