@@ -4,7 +4,7 @@ import { sql } from "kysely";
 import { describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
-import { createDb, createMigratedDb, type Db } from "../src/db/index.js";
+import { createDb, createMigratedDb, migrate, type Db } from "../src/db/index.js";
 import type { PushMessage, PushSender, PushSendResult } from "../src/notifications/push.js";
 import { restoreBackup, type BackupPayload } from "../src/services/backupService.js";
 import { RUN_LOG_KEY } from "../src/services/briefingStatus.js";
@@ -196,14 +196,16 @@ const pgUrl = process.env["TEST_PG_URL"];
 it.runIf(process.env["REQUIRE_PG"] === "1")("2차 복구 CI에는 PostgreSQL 연결이 반드시 설정된다", () => {
   expect(Boolean(pgUrl), "2차 복구 PostgreSQL 연결 설정 없음").toBe(true);
 });
-describe.skipIf(!pgUrl)("2차 실제 PostgreSQL 복구 경계 — 전용 임시 schema", () => {
+describe.skipIf(!pgUrl)("2차 실제 PostgreSQL 복구 경계 — 전용 임시 database", () => {
   it("201번째 행 저장 실패는 200행을 롤백하고 기존 자료를 보존하며 재시도 뒤 원래 ID와 다음 ID가 이어진다", async () => {
     if (!pgUrl) throw new Error("격리 PostgreSQL 검사 주소가 필요합니다");
     const url = new URL(pgUrl);
-    if (!["localhost", "127.0.0.1", "[::1]", "postgres"].includes(url.hostname)) throw new Error("복구 검사는 로컬 또는 CI 전용 PostgreSQL에서만 실행합니다");
-    const schema = `round2_persistence_${randomUUID().replaceAll("-", "")}`;
+    if (!["localhost", "127.0.0.1", "[::1]", "postgres"].includes(url.hostname) || url.searchParams.has("host")) throw new Error("복구 검사는 로컬 또는 CI 전용 PostgreSQL에서만 실행합니다");
+    // 기존 PG 검사의 information_schema 조회는 다른 schema도 읽으므로 DB 자체를 분리한다.
+    const database = `round2_persistence_${randomUUID().replaceAll("-", "")}`;
     const admin = createDb(pgUrl).db;
     let db: Db | null = null;
+    let created = false;
     const ts = AT.toISOString();
     const stock = { code: "005930", name: "복구 전 종목", market: "KOSPI", quantity: 1.234567, avg_price: 12345.67, memo: "보존", created_at: ts, updated_at: ts };
     const sentinel = { key: "round2_sentinel", value: "기존 자료 보존" };
@@ -219,10 +221,14 @@ describe.skipIf(!pgUrl)("2차 실제 PostgreSQL 복구 경계 — 전용 임시 
       registered_stocks: [{ ...stock, memo: "덮어쓰면 안 됨" }], meta: [{ ...sentinel, value: "덮어쓰면 안 됨" }], briefings: rows,
     } };
     try {
-      await sql`create schema ${sql.id(schema)}`.execute(admin);
-      url.searchParams.set("options", `-c search_path=${schema}`);
-      db = await createMigratedDb(url.toString());
-      expect((await sql<{ schema: string }>`select current_schema() as schema`.execute(db)).rows[0]?.schema).toBe(schema);
+      await sql`create database ${sql.id(database)}`.execute(admin);
+      created = true;
+      url.pathname = `/${database}`;
+      url.searchParams.set("options", "-c search_path=public");
+      db = createDb(url.toString()).db;
+      expect((await sql<{ database: string }>`select current_database() as database`.execute(db)).rows[0]?.database).toBe(database);
+      // 마이그레이션 중 실패해도 finally에서 이미 만든 연결을 정리한다.
+      await migrate(db, "postgres");
       await db.insertInto("registered_stocks").values(stock).execute();
       await db.insertInto("meta").values(sentinel).execute();
       const originalStocks = await db.selectFrom("registered_stocks").selectAll().execute();
@@ -249,10 +255,16 @@ describe.skipIf(!pgUrl)("2차 실제 PostgreSQL 복구 경계 — 전용 임시 
       expect(await db.selectFrom("registered_stocks").selectAll().execute()).toEqual(originalStocks);
       expect(await db.selectFrom("meta").selectAll().execute()).toEqual(originalMeta);
     } finally {
-      await db?.destroy();
-      // 이 검사에서 만든 이름만 정리한다. public이나 기존 스키마는 건드리지 않는다.
-      if (/^round2_persistence_[0-9a-f]{32}$/.test(schema)) await sql`drop schema if exists ${sql.id(schema)} cascade`.execute(admin);
-      await admin.destroy();
+      try {
+        await db?.destroy();
+      } finally {
+        try {
+          // 생성 성공한 이 검사의 DB만 연결을 닫은 뒤 정리한다. 기존 DB는 건드리지 않는다.
+          if (created && /^round2_persistence_[0-9a-f]{32}$/.test(database)) await sql`drop database ${sql.id(database)}`.execute(admin);
+        } finally {
+          await admin.destroy();
+        }
+      }
     }
   });
 });
