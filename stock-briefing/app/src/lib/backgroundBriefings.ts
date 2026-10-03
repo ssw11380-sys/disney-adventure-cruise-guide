@@ -67,8 +67,8 @@ async function noteWidgetFailure(data: WidgetData): Promise<void> {
  * accountIds(3-31): 위젯 응답의 최근 계좌 브리핑 id — 종목 브리핑이 모두 실패하고 계좌 브리핑만 생긴 세션도 알아보게 (서버 푸시와 같게)
  */
 export async function hasUnseen(ids: number[], accountIds: readonly number[] = []): Promise<boolean> {
-  const seen = await seenIds();
-  return !(await initialized(seen)) || ids.some((id) => !seen.has(id)) || accountIds.some((id) => !seen.has(-id));
+  const seen = await seenIds(true);
+  return !(await initialized(seen, true)) || ids.some((id) => !seen.has(id)) || accountIds.some((id) => !seen.has(-id));
 }
 
 /**
@@ -109,8 +109,9 @@ export function notifyNewBriefings(latest: LatestBriefing[], opts: NotifyOpts = 
 }
 
 async function notifyUnseen(latest: LatestBriefing[], opts: NotifyOpts): Promise<number> {
-  const seen = await seenIds();
-  const isFirst = opts.first ?? !(await initialized(seen));
+  // 켜기 직후의 명시적 기준 설정은 알림을 보내지 않으며, 예전처럼 현재 목록으로 다시 시작한다.
+  const seen = await seenIds(opts.first !== true);
+  const isFirst = opts.first ?? !(await initialized(seen, true));
   const now = opts.now ?? new Date();
   const fresh: Parameters<typeof planNotifications>[0] = [];
   for (const item of latest) {
@@ -124,7 +125,7 @@ async function notifyUnseen(latest: LatestBriefing[], opts: NotifyOpts): Promise
   }
   // 3-31: 아직 알리지 않은 계좌 브리핑. 계좌 브리핑 기준을 처음 적을 때는 알리지 않는다(옛 계좌 브리핑이 따로 울리지 않게)
   const accountInfo = opts.accounts !== undefined || opts.accountIds !== undefined;
-  const accountFirst = isFirst || (accountInfo && (await AsyncStorage.getItem(ACCOUNT_INIT_KEY).catch(() => null)) !== "1");
+  const accountFirst = isFirst || (accountInfo && (await AsyncStorage.getItem(ACCOUNT_INIT_KEY)) !== "1");
   const newAccountIds: number[] = [];
   for (const a of opts.accounts ?? []) {
     if (a.status !== "ok" || seen.has(-a.id)) continue;
@@ -284,8 +285,9 @@ export async function enableLocalBriefingAlerts(): Promise<void> {
   await AsyncStorage.removeItem(SEEN_KEY).catch(() => undefined);
   await AsyncStorage.removeItem(INIT_KEY).catch(() => undefined);
   await AsyncStorage.removeItem(ACCOUNT_INIT_KEY).catch(() => undefined);
-  await AsyncStorage.setItem(LOCAL_MODE_KEY, "1");
   await BackgroundTask.registerTaskAsync(BRIEFING_TASK, { minimumInterval: BG_INTERVAL_MIN });
+  // 작업 등록이 실패하면 다음 화면에서도 켜짐으로 오인하지 않게 성공 뒤에만 저장한다.
+  await AsyncStorage.setItem(LOCAL_MODE_KEY, "1");
   await AsyncStorage.setItem(INTERVAL_KEY, String(BG_INTERVAL_MIN)).catch(() => undefined);
   // 현재 브리핑 목록 전체를 "이미 본 것"으로 기록해 켜자마자 옛 브리핑이 쏟아지지 않게 한다
   // (위젯 응답의 브리핑은 상위 3종목뿐이라 전체 목록을 따로 받는다)
@@ -295,7 +297,12 @@ export async function enableLocalBriefingAlerts(): Promise<void> {
 
 /** 백그라운드 확인 알림만 끈다. 같은 태스크가 위젯도 15분마다 갱신하므로 Android 에서는 태스크를 남긴다 (N2) */
 export async function disableLocalBriefingAlerts(): Promise<void> {
-  await AsyncStorage.removeItem(LOCAL_MODE_KEY).catch(() => undefined);
+  try {
+    await AsyncStorage.removeItem(LOCAL_MODE_KEY);
+  } catch {
+    // 공용 위젯 작업은 계속 돌기 때문에 이 표시가 남으면 실제로 알림도 계속된다.
+    throw new Error("알림을 끄지 못해 아직 켜져 있습니다. 기기 저장 상태를 확인하고 다시 꺼 주세요.");
+  }
   if (Platform.OS === "android") return ensureBackgroundTaskRegistered();
   // 위젯이 없는 기기는 알림 때문에만 등록했으므로 해제
   try {

@@ -131,8 +131,13 @@ export class NotificationService {
       } else {
         summary.failed++;
         if (!this.stopped && (r.error === "DeviceNotRegistered" || r.error === "InvalidToken")) {
-          await this.deps.devices.disable(r.token, r.error);
-          summary.disabled.push(r.token);
+          try {
+            await this.deps.devices.disable(r.token, r.error);
+            summary.disabled.push(r.token);
+          } catch {
+            // 이미 보낸 다른 기기의 결과·영수증은 계속 처리한다. 발송 자체는 다시 하지 않는다.
+            this.deps.log?.warn({}, "푸시 기기 비활성화 저장 실패");
+          }
         }
         this.deps.log?.warn({ token: mask(r.token), err: r.error }, "푸시 전송 실패");
       }

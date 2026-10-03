@@ -60,7 +60,9 @@ const NOT_FOUND_STATUS = new Set([400, 404, 409]);
 export class NaverFundamentals {
   readonly name = "naver-fundamentals";
   private readonly cache = new Map<string, { at: number; ttl: number; value: Fundamentals | null }>();
+  private readonly inFlight = new Map<string, Promise<Fundamentals | null>>();
   private fx: { at: number; rate: number; source: "toss" | "naver" } | null = null;
+  private fxInFlight: Promise<{ rate: number; source: "toss" | "naver"; asOf: string } | null> | null = null;
 
   /** 우선 쓸 환율 소스(토스 Open API 등). 토스 앱의 평가금과 같은 숫자를 내기 위해 토스 환율을 먼저 쓴다 */
   fxPrimary: (() => Promise<number | null>) | null = null;
@@ -98,18 +100,27 @@ export class NaverFundamentals {
     const t = this.now().getTime();
     const quote = (fx: { at: number; rate: number; source: "toss" | "naver" }) => ({ rate: fx.rate, source: fx.source, asOf: seoulIso(new Date(fx.at)) });
     if (this.fx && t - this.fx.at < 60_000) return quote(this.fx);
-    if (this.fxPrimary) {
-      const primary = await this.fxPrimary().catch(() => null);
-      if (primary && primary > 0) {
-        this.fx = { at: t, rate: primary, source: "toss" };
-        return quote(this.fx);
+    if (this.fxInFlight) return this.fxInFlight;
+    const pending = (async () => {
+      if (this.fxPrimary) {
+        const primary = await this.fxPrimary().catch(() => null);
+        if (primary && primary > 0) {
+          this.fx = { at: t, rate: primary, source: "toss" };
+          return quote(this.fx);
+        }
       }
+      const j = await this.getJson("https://api.stock.naver.com/marketindex/exchange/FX_USDKRW");
+      const rate = j === FAILED ? null : parseNum((j?.["exchangeInfo"] as Json | undefined)?.["closePrice"]);
+      if (rate === null || rate <= 0) return this.fx ? quote(this.fx) : null;
+      this.fx = { at: t, rate, source: "naver" };
+      return quote(this.fx);
+    })();
+    this.fxInFlight = pending;
+    try {
+      return await pending;
+    } finally {
+      if (this.fxInFlight === pending) this.fxInFlight = null;
     }
-    const j = await this.getJson("https://api.stock.naver.com/marketindex/exchange/FX_USDKRW");
-    const rate = j === FAILED ? null : parseNum((j?.["exchangeInfo"] as Json | undefined)?.["closePrice"]);
-    if (rate === null || rate <= 0) return this.fx ? quote(this.fx) : null;
-    this.fx = { at: t, rate, source: "naver" };
-    return quote(this.fx);
   }
 
   async get(code: string, market?: string | null): Promise<Fundamentals | null> {
@@ -117,12 +128,23 @@ export class NaverFundamentals {
     const t = this.now().getTime();
     const hit = this.cache.get(code);
     if (hit && t - hit.at < hit.ttl) return hit.value;
-    const got = isKrCode(code) ? await this.getKr(code) : await this.getUs(code, market);
-    // 받기 실패는 "값 없음"이 아니다: 직전 값이 있으면 그대로 두고, 짧게만 기억했다가 다시 받는다 (BH-43)
-    const failed = got === FAILED;
-    const value = failed ? (hit?.value ?? null) : got;
-    this.cache.set(code, { at: t, ttl: failed ? this.failTtlMs : this.ttlMs, value });
-    return value;
+    const running = this.inFlight.get(code);
+    if (running) return running;
+    // 같은 공개 자료의 갱신을 공유해 늦은 실패가 새 정상 값을 덮지 않게 한다.
+    const pending = (async () => {
+      const got = isKrCode(code) ? await this.getKr(code) : await this.getUs(code, market);
+      // 받기 실패는 "값 없음"이 아니다: 직전 값이 있으면 그대로 두고, 짧게만 기억했다가 다시 받는다 (BH-43)
+      const failed = got === FAILED;
+      const value = failed ? (hit?.value ?? null) : got;
+      this.cache.set(code, { at: t, ttl: failed ? this.failTtlMs : this.ttlMs, value });
+      return value;
+    })();
+    this.inFlight.set(code, pending);
+    try {
+      return await pending;
+    } finally {
+      if (this.inFlight.get(code) === pending) this.inFlight.delete(code);
+    }
   }
 
   private async getKr(code: string): Promise<Fetched<Fundamentals>> {

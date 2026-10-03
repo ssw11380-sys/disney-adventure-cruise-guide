@@ -1,7 +1,7 @@
 import type { Db } from "../db/index.js";
 import type { RegisteredStock } from "../domain/types.js";
 import { isKrCode, type Currency } from "../lib/codes.js";
-import { NotFoundError } from "../lib/errors.js";
+import { AppError, NotFoundError } from "../lib/errors.js";
 import { seoulDate, seoulIso } from "../lib/time.js";
 import { GenerationError, type GenerateRequest, type TextGenerator } from "../llm/generator.js";
 import { renderTemplate, type PromptStore } from "../llm/prompts.js";
@@ -44,6 +44,8 @@ export interface RunResult {
   startedAt: string;
   finishedAt: string;
 }
+
+type RunOptions = { codes?: string[]; force?: boolean; trigger?: "schedule" | "manual"; wait?: boolean; staleBefore?: Date; firedAt?: Date; scheduledAt?: string | null };
 
 /** 마지막 실행 요약 (/health 와 앱 상태 배너용) */
 export interface LastRun {
@@ -129,6 +131,8 @@ export class BriefingService {
   private readonly startListeners: SessionStartListener[] = [];
   private readonly runDoneListeners: RunDoneListener[] = [];
   private running = false;
+  private readonly activeRuns = new Set<Promise<unknown>>();
+  private shuttingDown = false;
   /** 지금 실행이 끝나기를 기다리는 정기 실행 (wait) */
   private idleWaiters: Array<() => void> = [];
   private _lastRun: LastRun | null = null;
@@ -181,8 +185,28 @@ export class BriefingService {
    */
   async runSession(
     session: BriefingSession,
-    opts: { codes?: string[]; force?: boolean; trigger?: "schedule" | "manual"; wait?: boolean; staleBefore?: Date; firedAt?: Date; scheduledAt?: string | null } = {},
+    opts: RunOptions = {},
   ): Promise<RunResult> {
+    if (this.shuttingDown) throw new AppError(503, "SERVER_CLOSING", "서버가 재시작 중입니다. 잠시 뒤 다시 시도해 주세요.");
+    return this.track(this.runSessionActive(session, opts));
+  }
+
+  /** 수동 요청의 연결이 끊겨도 이미 시작했거나 합류한 실행의 저장·완료 처리를 회수한다. */
+  async shutdown(): Promise<void> {
+    this.shuttingDown = true;
+    await Promise.allSettled(this.activeRuns);
+  }
+
+  private async track<T>(work: Promise<T>): Promise<T> {
+    this.activeRuns.add(work);
+    try {
+      return await work;
+    } finally {
+      this.activeRuns.delete(work);
+    }
+  }
+
+  private async runSessionActive(session: BriefingSession, opts: RunOptions): Promise<RunResult> {
     if (this.running && !opts.wait) throw new Error("브리핑이 이미 실행 중입니다");
     // 끝나는 순간 여럿이 깨어나도 먼저 잡은 쪽만 돌고 나머지는 다시 기다린다 (검사와 잡기 사이에 await 없음)
     while (this.running) await new Promise<void>((r) => this.idleWaiters.push(r));
@@ -338,7 +362,8 @@ export class BriefingService {
   }
 
   async generateOne(stock: RegisteredStock, session: BriefingSession, date = seoulDate(this.now())): Promise<Briefing> {
-    return (await this.generate(stock, session, date)).briefing;
+    if (this.shuttingDown) throw new AppError(503, "SERVER_CLOSING", "서버가 재시작 중입니다. 잠시 뒤 다시 시도해 주세요.");
+    return this.track(this.generate(stock, session, date).then((result) => result.briefing));
   }
 
   /**

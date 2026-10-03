@@ -63,12 +63,31 @@ export class AnalysisService {
   private readonly now: () => Date;
   private readonly inflight = new Map<string, Promise<Analysis>>();
   private readonly requests = new Map<string, TrackedAnalysisRequest>();
+  private readonly activeGets = new Set<Promise<Analysis>>();
+  private shuttingDown = false;
 
   constructor(private readonly deps: AnalysisServiceDeps) {
     this.now = deps.now ?? (() => new Date());
   }
 
   async get(code: string, kind: AnalysisKind, opts: { refresh?: boolean } = {}): Promise<Analysis> {
+    if (this.shuttingDown) throw new AppError(503, "SERVER_CLOSING", "서버가 재시작 중입니다. 잠시 뒤 다시 시도해 주세요.");
+    const work = this.getActive(code, kind, opts);
+    this.activeGets.add(work);
+    try {
+      return await work;
+    } finally {
+      this.activeGets.delete(work);
+    }
+  }
+
+  /** 연결이 끊겨도 시작한 조회·생성·저장은 DB 정리 전에 끝낸다. */
+  async shutdown(): Promise<void> {
+    this.shuttingDown = true;
+    await Promise.allSettled(this.activeGets);
+  }
+
+  private async getActive(code: string, kind: AnalysisKind, opts: { refresh?: boolean }): Promise<Analysis> {
     if (!opts.refresh) {
       const cached = await this.latest(code, kind);
       if (cached && this.now().getTime() - Date.parse(cached.createdAt) < TTL_MS[kind]) return { ...cached, cached: true };
