@@ -145,6 +145,7 @@ function LegacyAnalysisPeek({ code, kind, title, lines, requested, onRequest, to
             </Text>
           ) : null}
           <ReportVerificationNotice verification={d.verification} />
+          {d.missing.length ? <Muted>데이터 미확인: {d.missing.join(", ")}</Muted> : null}
           {lines !== null ? (
             <Text style={{ color: t.ink, fontSize: font.body, lineHeight: foldDetail.previewLineH }} numberOfLines={lines}>
               {markdownPreview(d.content)}
@@ -152,7 +153,6 @@ function LegacyAnalysisPeek({ code, kind, title, lines, requested, onRequest, to
           ) : (
             <>
               <MarkdownView>{d.content}</MarkdownView>
-              {d.missing.length ? <Muted>데이터 미확인: {d.missing.join(", ")}</Muted> : null}
               <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: space.xs }}>
                 <Muted>보고서 생성 {formatDateKo(d.createdAt, true)}</Muted>
                 <Button title={refreshError ? "다시 시도" : "갱신"} variant="secondary" icon="refresh" compact onPress={() => refreshAnalysis.mutate({ code, kind })} />
@@ -198,12 +198,12 @@ function AnalysisWaitBody({ code, kind, requested, onRequest, title, lines = nul
             </View>
           ) : !d ? <Loading label="저장된 분석 확인 중" /> : null}
           {d ? <ReportVerificationNotice verification={d.verification} /> : null}
+          {d?.missing.length ? <Muted>데이터 미확인: {d.missing.join(", ")}</Muted> : null}
           {d ? lines !== null ? (
             <Text style={{ color: t.ink, fontSize: font.body, lineHeight: foldDetail.previewLineH }} numberOfLines={lines}>{markdownPreview(d.content)}</Text>
           ) : (
             <>
               <MarkdownView>{d.content}</MarkdownView>
-              {d.missing.length ? <Muted>데이터 미확인: {d.missing.join(", ")}</Muted> : null}
               <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: space.xs }}>
                 <Muted>보고서 생성 {formatDateKo(d.createdAt, true)}</Muted>
                 {!unknown ? <Button title={a.busy ? "처리 중" : "갱신"} variant="secondary" icon="refresh" compact disabled={a.busy} onPress={a.refresh} /> : null}
