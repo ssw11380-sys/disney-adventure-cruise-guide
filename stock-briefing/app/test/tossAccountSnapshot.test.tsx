@@ -3,8 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TossAccountSnapshotBody } from "@/api/types";
 import { cleanupRenders, render, type HostNode } from "./miniRender";
 
-const h = vi.hoisted(() => ({ data: undefined as TossAccountSnapshotBody | undefined, error: null as unknown, afterCost: true, showKrw: true, params: {} as { valuation?: string }, setParams: vi.fn() }));
-vi.mock("expo-router", () => ({ useLocalSearchParams: () => h.params, router: { setParams: h.setParams } }));
+const h = vi.hoisted(() => ({ data: undefined as TossAccountSnapshotBody | undefined, error: null as unknown, afterCost: true, showKrw: true, params: {} as { valuation?: string }, setParams: vi.fn(), navReady: true, readyListeners: new Set<() => void>() }));
+const navigation = {
+  isReady: () => h.navReady,
+  addListener: (_event: string, listener: () => void) => { h.readyListeners.add(listener); return () => { h.readyListeners.delete(listener); }; },
+};
+vi.mock("expo-router", () => ({ useLocalSearchParams: () => h.params, useNavigationContainerRef: () => navigation, router: { setParams: h.setParams } }));
 vi.mock("react-native", () => ({ View: "View", Text: "Text", Pressable: "Pressable", StyleSheet: { create: <T,>(v: T) => v, hairlineWidth: 1 } }));
 vi.mock("@/theme", async () => ({ ...(await import("@/tokens")), useTheme: () => ({}), }));
 vi.mock("@/api/hooks", () => ({ useTossAccountSnapshot: () => ({ data: h.data, error: h.error, isError: !!h.error }) }));
@@ -29,9 +33,50 @@ const mount = (body: TossAccountSnapshotBody | undefined = BODY, failed = false,
   <TossAccountSummaryView body={body} failed={failed} afterCost={afterCost} showKrw now={NOW}><TextStub>기존 실시간 숫자와 비중</TextStub></TossAccountSummaryView>,
 );
 function TextStub({ children }: { children: React.ReactNode }) { return React.createElement("Text", {}, children); }
-beforeEach(() => { cleanupRenders(); h.data = BODY; h.error = null; h.afterCost = true; h.showKrw = true; h.params = {}; h.setParams.mockClear(); });
+beforeEach(() => {
+  cleanupRenders(); h.data = BODY; h.error = null; h.afterCost = true; h.showKrw = true; h.params = {}; h.navReady = true; h.readyListeners.clear();
+  h.setParams.mockReset().mockImplementation(() => {
+    if (!h.navReady) throw new Error("Attempted to navigate before mounting the Root Layout component. Ensure the Root Layout component is rendering a Slot, or other navigator on the first render.");
+  });
+});
 
 describe("토스 원본 계좌와 실시간 평가 분리", () => {
+  it("큰 글씨 변경 등으로 위젯 링크가 재시작되어도 루트 준비 전에 이동하지 않고 준비 즉시 한 번 소비한다", () => {
+    h.params = { valuation: "live" }; h.navReady = false;
+    let r!: ReturnType<typeof render>;
+    expect(() => { r = render(<TossAccountSummary><TextStub>위젯과 같은 실시간 평가</TextStub></TossAccountSummary>); }).not.toThrow();
+    expect(text(r.tree)).toContain("위젯과 같은 실시간 평가");
+    expect(h.setParams).not.toHaveBeenCalled();
+    for (const listener of h.readyListeners) listener();
+    expect(h.setParams).not.toHaveBeenCalled();
+    h.navReady = true;
+    for (const listener of h.readyListeners) listener();
+    expect(h.setParams).toHaveBeenCalledExactlyOnceWith({ valuation: undefined });
+    for (const listener of h.readyListeners) listener();
+    expect(h.setParams).toHaveBeenCalledTimes(1);
+  });
+  it("준비 전에 화면을 닫으면 구독과 이전 링크 소비가 남지 않고 새 화면에서만 한 번 소비한다", () => {
+    h.params = { valuation: "live" }; h.navReady = false;
+    const el = <TossAccountSummary><TextStub>실시간 평가</TextStub></TossAccountSummary>;
+    const first = render(el); const old = [...h.readyListeners];
+    first.unmount(); expect(h.readyListeners.size).toBe(0);
+    const next = render(el); h.navReady = true;
+    for (const listener of old) listener();
+    expect(h.setParams).not.toHaveBeenCalled();
+    for (const listener of h.readyListeners) listener();
+    expect(h.setParams).toHaveBeenCalledExactlyOnceWith({ valuation: undefined });
+    expect(text(next.tree)).toContain("실시간 평가");
+  });
+  it("준비를 기다리던 링크가 바뀌면 취소한 요청으로 주소를 뒤늦게 고치지 않는다", () => {
+    h.params = { valuation: "live" }; h.navReady = false;
+    const el = <TossAccountSummary><TextStub>실시간 평가</TextStub></TossAccountSummary>;
+    const r = render(el); const old = [...h.readyListeners];
+    h.params = {}; r.rerender(); expect(h.readyListeners.size).toBe(0);
+    h.navReady = true; for (const listener of old) listener();
+    expect(h.setParams).not.toHaveBeenCalled();
+    h.params = { valuation: "live" }; r.rerender();
+    expect(h.setParams).toHaveBeenCalledExactlyOnceWith({ valuation: undefined });
+  });
   it("위젯 금액 링크는 같은 실시간 평가를 열고, 다시 누르면 사용자가 고른 토스 탭에서도 돌아온다", () => {
     h.params = { valuation: "live" };
     const el = <TossAccountSummary><TextStub>위젯과 같은 실시간 평가</TextStub></TossAccountSummary>;

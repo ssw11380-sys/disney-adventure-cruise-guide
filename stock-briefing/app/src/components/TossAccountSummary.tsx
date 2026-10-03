@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { router, useLocalSearchParams } from "expo-router";
+import { router, useLocalSearchParams, useNavigationContainerRef } from "expo-router";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useTossAccountSnapshot } from "@/api/hooks";
 import { ApiRequestError } from "@/api/client";
@@ -31,6 +31,7 @@ export function TossAccountSummaryView({ body, failed, afterCost, showKrw, now, 
   requestedView?: "live";
 }) {
   const t = useTheme();
+  const navigation = useNavigationContainerRef();
   const [view, setView] = useState<"toss" | "live">(requestedView ?? "toss");
   const [lastRequest, setLastRequest] = useState(requestedView);
   // 새 링크의 기준을 그리는 순간 반영해 이전 탭의 금액이 한 번 나타나지 않게 한다.
@@ -40,9 +41,18 @@ export function TossAccountSummaryView({ body, failed, afterCost, showKrw, now, 
   }
   useEffect(() => {
     if (!requestedView) return;
-    // 요청을 소비해야 같은 위젯을 다시 눌러도 현재 선택과 관계없이 같은 평가 기준으로 열린다.
-    router.setParams({ valuation: undefined });
-  }, [requestedView]);
+    let active = true;
+    let consumed = false;
+    const consume = () => {
+      if (!active || consumed || !navigation.isReady()) return;
+      consumed = true;
+      // 같은 위젯을 다시 눌러도 평가 기준을 적용한다. 앱 재시작 직후에는 루트 준비 뒤에만 요청을 지운다.
+      router.setParams({ valuation: undefined });
+    };
+    const unsubscribe = navigation.addListener("ready", consume);
+    consume();
+    return () => { active = false; unsubscribe(); };
+  }, [requestedView, navigation]);
   const snap = body?.on ? body.snapshot : null;
   const notice = tossSnapshotNotice(body, failed, now);
   const amount = snap ? (afterCost ? snap.net : snap.gross) : null;
