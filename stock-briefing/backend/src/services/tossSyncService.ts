@@ -28,6 +28,8 @@ export interface ImportResult {
   removed: string[];
   /** 토스에는 있지만 사용자가 동기화에서 뺀 종목 (건드리지 않음) */
   excluded: string[];
+  /** 일부 계좌 응답이 불완전해 수량·평단 또는 전량 매도 판정을 보류하고 이전 상태를 유지한 종목 */
+  deferred?: string[];
   holdings: Array<TossHolding & { market: string }>;
 }
 
@@ -362,6 +364,7 @@ export class TossSyncService {
     }
     if (pending.length || frozen.length)
       this.log?.warn({ codes: pending, frozen, doubt: next.doubt }, "토스 계좌 응답이 목록·요약과 맞지 않아 그 계좌 종목의 전량 매도·수량 반영을 미룸");
+    if (pending.length || frozen.length) result.deferred = [...new Set([...pending, ...frozen])];
     await this.saveSnapshot([...nowCodes, ...pending]);
     // 토스에서 전량 매도된(확정된) 종목은 제외 목록에서도 뺀다 — 나중에 다시 사면 다시 가져온다
     const keep = [...excluded].filter((c) => nowCodes.has(c) || guarded.has(c));

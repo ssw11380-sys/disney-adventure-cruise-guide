@@ -128,6 +128,10 @@ export interface TossImportResult {
   unchanged: string[];
   /** 전량 매도로 관심 종목으로 바뀐 종목 (구버전 서버에는 없음) */
   removed?: string[];
+  /** 사용자가 삭제하여 계좌 동기화에서 제외한 종목. holdings에는 계속 포함된다. */
+  excluded?: string[];
+  /** 일부 계좌 응답을 확인하지 못해 수량·평단 반영을 보류한 종목. */
+  deferred?: string[];
   holdings: { code: string; name: string; currency: Currency; quantity: number; avgPrice: number | null; lastPrice: number | null; market: string }[];
 }
 

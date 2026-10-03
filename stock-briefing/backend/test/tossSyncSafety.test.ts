@@ -55,7 +55,7 @@ class FakeToss {
 const kr = (code: string, quantity: number, avgPrice: number): TossHolding => ({ code, name: code, currency: "KRW", quantity, avgPrice, lastPrice: null });
 const us = (code: string, quantity: number, avgPrice: number): TossHolding => ({ code, name: code, currency: "USD", quantity, avgPrice, lastPrice: null });
 
-async function setup(opts: { syncMinutes?: number } = {}) {
+async function setup(opts: { syncMinutes?: number; search?: FakeSearchProvider } = {}) {
   const db = await createMigratedDb(":memory:");
   let t = NOW().getTime();
   const now = () => new Date(t);
@@ -64,7 +64,7 @@ async function setup(opts: { syncMinutes?: number } = {}) {
   const stocks = new StockService({
     db,
     quotes: new FakeQuoteProvider("x"),
-    search: new FakeSearchProvider(),
+    search: opts.search ?? new FakeSearchProvider(),
     master: new FakeMasterProvider(),
     tossOpenApi: { baseFallbacks: 0 },
     tossSyncMinutes: opts.syncMinutes ?? 10,
@@ -113,6 +113,8 @@ describe("BH-34 보유 응답이 한 번 비거나 계좌가 잠깐 빠져도 �
     toss.glitch[1] = []; // 요약(달러 3,000·원화 210,000)은 그대로인데 목록만 빔
     const r2 = await sync.importHoldings();
     expect(r2.removed).toEqual([]);
+    expect(r2.holdings).toEqual([]);
+    expect(r2.deferred).toEqual(["005930", "SOXL"]);
     expect(await stocks.get("SOXL")).toMatchObject({ quantity: 100, avgPrice: 30 });
     expect(await excluded()).toBe('["005930"]');
     expect((await stocks.tossSynced()).has("SOXL")).toBe(true); // 잠금도 그대로
@@ -121,6 +123,7 @@ describe("BH-34 보유 응답이 한 번 비거나 계좌가 잠깐 빠져도 �
     const r3 = await sync.importHoldings();
     expect(r3.added).toEqual([]);
     expect(r3.excluded).toEqual(["005930"]);
+    expect(r3.deferred).toBeUndefined();
     expect(await codes()).toEqual(["SOXL"]);
     await db.destroy();
   });
@@ -315,6 +318,9 @@ describe("BH-34 보유 응답이 한 번 비거나 계좌가 잠깐 빠져도 �
     toss.glitch[2] = []; // 계좌 2 응답만 잠깐 빔 (요약은 그대로)
     const r = await sync.importHoldings();
     expect(r).toMatchObject({ updated: [], removed: [] });
+    expect(r.deferred).toEqual(["005930", "NVDA"]);
+    expect(r.unchanged).toContain("NVDA");
+    expect(r.holdings.find((h) => h.code === "NVDA")).toMatchObject({ quantity: 5, avgPrice: 120 });
     expect(await stocks.get("NVDA")).toMatchObject({ quantity: 15, avgPrice: 106.67 });
     expect(await stocks.get("005930")).toMatchObject({ quantity: 3 });
     expect((await detail())["NVDA"]).toMatchObject({ quantity: 15 });
@@ -322,6 +328,7 @@ describe("BH-34 보유 응답이 한 번 비거나 계좌가 잠깐 빠져도 �
     delete toss.glitch[2];
     const r2 = await sync.importHoldings();
     expect(r2).toMatchObject({ updated: [], removed: [] });
+    expect(r2.deferred).toBeUndefined();
     expect(await stocks.get("NVDA")).toMatchObject({ quantity: 15, avgPrice: 106.67 });
     await db.destroy();
   });
@@ -385,6 +392,118 @@ describe("BH-46 동기화가 3시간 넘게 멈춘 사이 지운 토스 종목",
     await auto.run("manual");
     expect(await stocks.get("005930")).toMatchObject({ quantity: 3, avgPrice: 70000 });
     await db.destroy();
+  });
+});
+
+describe("가져오기에서 제외한 종목을 개별 복원", () => {
+  it("삭제 중 제외 저장이 실패하면 기존 보유를 유지하고 재시도한 삭제만 다음 동기화에서 제외한다", async () => {
+    const { db, toss, stocks, sync, excluded, codes } = await setup();
+    try {
+      toss.holdings[1] = [us("APH", 7.5, 130), us("TSLA", 4, 320)];
+      await sync.importHoldings();
+      await stocks.remove("TSLA");
+      await sql.raw(`CREATE TRIGGER delete_exclusion_failure BEFORE UPDATE OF value ON meta
+        WHEN OLD.key = 'toss_sync_excluded'
+        BEGIN SELECT RAISE(ABORT, '제외 목록 저장 실패'); END`).execute(db);
+
+      await expect(stocks.remove("APH")).rejects.toThrow("제외 목록 저장 실패");
+      expect(await excluded()).toBe('["TSLA"]');
+      expect(await stocks.get("APH")).toMatchObject({ quantity: 7.5, avgPrice: 130 });
+
+      await sql.raw("DROP TRIGGER delete_exclusion_failure").execute(db);
+      expect(await stocks.remove("APH")).toEqual({ tossExcluded: true });
+      const after = await sync.importHoldings();
+      expect(after.excluded.sort()).toEqual(["APH", "TSLA"]);
+      expect(after.added).toEqual([]);
+      expect(await codes()).toEqual([]);
+    } finally {
+      await db.destroy();
+    }
+  });
+
+  it("제외 해제 저장이 실패하면 등록도 되돌려 다른 제외를 보존하고 다시 복원할 수 있다", async () => {
+    const { db, toss, stocks, sync, excluded, codes } = await setup({ search: new FakeSearchProvider([{ code: "APH", name: "암페놀", market: "NYSE" }]) });
+    try {
+      toss.holdings[1] = [us("APH", 7.5, 130), us("TSLA", 4, 320)];
+      await sync.importHoldings();
+      await stocks.remove("APH");
+      await stocks.remove("TSLA");
+      // 실제 SQLite 쓰기 오류를 흉내 낸다. 종목 삽입은 허용하고 제외 목록 변경만 막는다.
+      await sql.raw(`CREATE TRIGGER restore_exclusion_failure BEFORE UPDATE OF value ON meta
+        WHEN OLD.key = 'toss_sync_excluded'
+        BEGIN SELECT RAISE(ABORT, '제외 목록 저장 실패'); END`).execute(db);
+
+      await expect(stocks.register({ code: "APH" })).rejects.toThrow("제외 목록 저장 실패");
+      expect(await excluded()).toBe('["APH","TSLA"]');
+      expect(await codes()).toEqual([]);
+
+      await sql.raw("DROP TRIGGER restore_exclusion_failure").execute(db);
+      await stocks.register({ code: "APH" });
+      const retried = await sync.importHoldings();
+      expect(retried).toMatchObject({ updated: ["APH"], excluded: ["TSLA"] });
+      expect(await stocks.get("APH")).toMatchObject({ quantity: 7.5, avgPrice: 130 });
+    } finally {
+      await db.destroy();
+    }
+  });
+
+  it("두 제외 종목 중 하나만 다시 등록하면 다른 제외와 기존 보유는 유지하고 최신 수량·평단을 가져온다", async () => {
+    const { db, toss, stocks, sync, excluded, codes } = await setup({ search: new FakeSearchProvider([{ code: "APH", name: "암페놀", market: "NYSE" }]) });
+    try {
+      toss.holdings[1] = [us("APH", 7.5, 130), us("TSLA", 4, 320), kr("005930", 3, 70000)];
+      await sync.importHoldings();
+      await stocks.remove("APH");
+      await stocks.remove("TSLA");
+      const before = await sync.importHoldings();
+      expect(before.holdings.map((h) => h.code).sort()).toEqual(["005930", "APH", "TSLA"]);
+      expect(before.excluded.sort()).toEqual(["APH", "TSLA"]);
+      expect(await codes()).toEqual(["005930"]);
+
+      await stocks.register({ code: "APH" });
+      expect(await excluded()).toBe('["TSLA"]');
+      expect(await stocks.get("APH")).toMatchObject({ quantity: null, avgPrice: null });
+      toss.holdings[1] = [us("APH", 8.25, 131.5), us("TSLA", 4, 320), kr("005930", 3, 70000)];
+      const after = await sync.importHoldings();
+      expect(after.updated).toEqual(["APH"]);
+      expect(after.excluded).toEqual(["TSLA"]);
+      expect(after.unchanged).toEqual(["005930"]);
+      expect(await stocks.get("APH")).toMatchObject({ quantity: 8.25, avgPrice: 131.5 });
+      expect(await stocks.get("005930")).toMatchObject({ quantity: 3, avgPrice: 70000 });
+      expect(await codes()).toEqual(["005930", "APH"]);
+      await expect(stocks.register({ code: "APH" })).rejects.toMatchObject({ statusCode: 409 });
+      expect(await excluded()).toBe('["TSLA"]');
+    } finally {
+      await db.destroy();
+    }
+  });
+
+  it("등록 후 계좌 조회가 실패하면 빈 관심 상태와 다른 제외를 지키고 재조회 성공 때만 보유 수량이 반영된다", async () => {
+    const { db, toss, stocks, sync, excluded, codes } = await setup({ search: new FakeSearchProvider([{ code: "APH", name: "암페놀", market: "NYSE" }]) });
+    try {
+      toss.holdings[1] = [us("APH", 7.5, 130), us("TSLA", 4, 320)];
+      const auto = new HoldingsAutoSync({ sync, intervalMin: 10, now: NOW });
+      await auto.run("manual");
+      await stocks.remove("APH");
+      await stocks.remove("TSLA");
+      await stocks.register({ code: "APH" });
+      vi.spyOn(toss, "holdingsWithOverview").mockRejectedValueOnce(new Error("계좌 조회 일시 실패"));
+
+      await expect(auto.run("manual")).rejects.toThrow("계좌 조회 일시 실패");
+      expect(auto.status().lastError).toContain("계좌 조회 일시 실패");
+      expect(await excluded()).toBe('["TSLA"]');
+      expect(await codes()).toEqual(["APH"]);
+      expect(await stocks.get("APH")).toMatchObject({ quantity: null, avgPrice: null });
+
+      toss.holdings[1] = [us("APH", 8.25, 131.5), us("TSLA", 4, 320)];
+      const retry = await auto.run("manual");
+      expect(retry).toMatchObject({ added: [], updated: ["APH"], excluded: ["TSLA"] });
+      expect(auto.status().lastError).toBeNull();
+      expect(await stocks.get("APH")).toMatchObject({ quantity: 8.25, avgPrice: 131.5 });
+      expect(await codes()).toEqual(["APH"]);
+      expect(await excluded()).toBe('["TSLA"]');
+    } finally {
+      await db.destroy();
+    }
   });
 });
 

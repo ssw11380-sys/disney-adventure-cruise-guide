@@ -1,11 +1,10 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import React, { useState } from "react";
+import React from "react";
 import { Alert, Linking, Pressable, Share, Text, View } from "react-native";
-import { useApi, useFeature, useTossStatus } from "@/api/hooks";
+import { useFeature, useTossStatus } from "@/api/hooks";
 import { gated } from "@/lib/features";
 import type { TossOpenApiStatus } from "@/api/types";
-import { useSettings } from "@/lib/settings";
-import { formatDateKo, formatPrice } from "@/lib/format";
+import { formatDateKo } from "@/lib/format";
+import { useTossImportFlow } from "@/lib/useTossImportFlow";
 import { reconcileLabel } from "@/lib/freshness";
 import { font, slopFor, space, useTheme } from "@/theme";
 import { Badge, Button, Card, Muted, Row, SectionTitle } from "./ui";
@@ -25,28 +24,10 @@ async function openTossWts(): Promise<void> {
  */
 export function TossOpenApiCard() {
   const t = useTheme();
-  const api = useApi();
-  const qc = useQueryClient();
-  const { apiUrl } = useSettings();
+  const importHoldings = useTossImportFlow();
   const status = useTossStatus();
   // 이미 나간 기능(3-13)이라 서버 값을 못 받았으면 켜진 것으로
   const reconcileOn = useFeature("tossReconcile", true);
-  const [lastImport, setLastImport] = useState<string | null>(null);
-  const importHoldings = useMutation({
-    mutationFn: api.importTossHoldings,
-    onSuccess: (r) => {
-      void qc.invalidateQueries({ queryKey: [apiUrl, "stocks"] });
-      void qc.invalidateQueries({ queryKey: [apiUrl, "briefings"] });
-      void qc.invalidateQueries({ queryKey: [apiUrl, "tossAccountSnapshot"] });
-      const lines = r.holdings.map((h) => `${h.name} ${h.quantity}주 · 평단 ${formatPrice(h.avgPrice, h.currency)}`);
-      const removed = r.removed ?? [];
-      if (removed.length) lines.push(`전량 매도 → 관심 종목: ${removed.join(", ")}`);
-      setLastImport(`${r.accounts}개 계좌에서 ${r.holdings.length}종목 (새로 ${r.added.length}, 갱신 ${r.updated.length}${removed.length ? `, 매도 ${removed.length}` : ""})`);
-      void status.refetch();
-      Alert.alert("보유 종목 가져오기 완료", lines.length ? lines.join("\n") : "보유 중인 주식이 없습니다.");
-    },
-    onError: (e) => Alert.alert("가져오기 실패", e instanceof Error ? e.message : String(e)),
-  });
 
   const s = status.data;
   // 대조 기능이 꺼져 있으면 서버가 준 대조 값도 쓰지 않는다 (3-15)
@@ -122,8 +103,8 @@ export function TossOpenApiCard() {
           ) : null}
           {s.client?.lastError && !s.client.ipBlocked ? <Text style={{ color: t.danger, fontSize: font.small }}>{s.client.lastError}</Text> : null}
           {s.realtime?.lastError ? <Muted>실시간: {s.realtime.lastError}</Muted> : null}
-          <Button title="지금 계좌 동기화" icon="sync" onPress={() => importHoldings.mutate()} loading={importHoldings.isPending} />
-          {lastImport ? <Muted>{lastImport}</Muted> : null}
+          <Button title="지금 계좌 동기화" icon="sync" onPress={() => void importHoldings.run()} loading={importHoldings.pending} />
+          {importHoldings.lastImport ? <Muted>{importHoldings.lastImport}</Muted> : null}
         </View>
       )}
       <Button title="상태 새로고침" variant="secondary" compact icon="refresh" onPress={() => void status.refetch()} loading={status.isFetching} />
