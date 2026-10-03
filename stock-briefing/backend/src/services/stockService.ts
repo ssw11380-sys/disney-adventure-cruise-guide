@@ -440,21 +440,23 @@ export class StockService {
     if (exists) throw new ConflictError(`이미 등록된 종목입니다: ${input.code}`);
     const listed = await this.resolveListed(input.code);
     const ts = seoulIso(this.now());
-    await this.deps.db
-      .insertInto("registered_stocks")
-      .values({
-        code: listed.code,
-        name: listed.name,
-        market: listed.market,
-        quantity: input.quantity ?? null,
-        avg_price: input.avgPrice ?? null,
-        memo: input.memo ?? null,
-        created_at: ts,
-        updated_at: ts,
-      })
-      .execute();
-    // 동기화에서 뺐던 종목을 다시 등록하면 다시 토스 계좌에서 맞춘다 (등록이 된 뒤에)
-    await this.setExcluded(listed.code, false);
+    // 등록과 제외 해제를 함께 저장한다. 한쪽만 실패해 재등록도 동기화도 막히는 상태를 남기지 않는다.
+    await this.deps.db.transaction().execute(async (trx) => {
+      await trx
+        .insertInto("registered_stocks")
+        .values({
+          code: listed.code,
+          name: listed.name,
+          market: listed.market,
+          quantity: input.quantity ?? null,
+          avg_price: input.avgPrice ?? null,
+          memo: input.memo ?? null,
+          created_at: ts,
+          updated_at: ts,
+        })
+        .execute();
+      await this.setExcluded(listed.code, false, trx);
+    });
     // 잠금 밖에서 지웠다가 다시 등록한 종목도 직접 넣은 수량·평단으로 평가 (잠긴 종목은 다음 동기화가 토스 값으로 맞춘다)
     if (!(await this.tossSynced()).has(listed.code)) await forgetTossDetail(this.deps.db, listed.code);
     void this.refreshQuotes([listed.code]); // 등록 직후 잔고 화면이 시세를 기다리지 않게 바로 받기 시작
@@ -505,9 +507,12 @@ export class StockService {
   private async removeNow(code: string): Promise<{ tossExcluded: boolean }> {
     // 동기화가 오래 멈췄거나 자동 동기화가 꺼져 잠그지 않아도 마지막 토스 스냅샷에 있던 종목이면 뺀다 (다음 동기화가 지운 종목을 다시 넣지 않게)
     const synced = (await this.tossSynced(true)).has(code);
-    const r = await this.deps.db.deleteFrom("registered_stocks").where("code", "=", code).executeTakeFirst();
-    if (Number(r.numDeletedRows) === 0) throw new NotFoundError(`등록되지 않은 종목입니다: ${code}`);
-    if (synced) await this.setExcluded(code, true);
+    // 제외 저장이 실패하면 삭제도 취소해 사용자가 안전하게 다시 시도할 수 있게 한다.
+    await this.deps.db.transaction().execute(async (trx) => {
+      const r = await trx.deleteFrom("registered_stocks").where("code", "=", code).executeTakeFirst();
+      if (Number(r.numDeletedRows) === 0) throw new NotFoundError(`등록되지 않은 종목입니다: ${code}`);
+      if (synced) await this.setExcluded(code, true, trx);
+    });
     await this.syncLive();
     return { tossExcluded: synced };
   }
@@ -569,14 +574,14 @@ export class StockService {
     return this.syncedFrom(v(SNAPSHOT_KEY), v(EXCLUDED_KEY), v(TOSS_DETAIL_KEY), evenIfStale);
   }
 
-  private async setExcluded(code: string, on: boolean): Promise<void> {
-    const row = await this.deps.db.selectFrom("meta").select("value").where("key", "=", EXCLUDED_KEY).executeTakeFirst();
+  private async setExcluded(code: string, on: boolean, db: Db = this.deps.db): Promise<void> {
+    const row = await db.selectFrom("meta").select("value").where("key", "=", EXCLUDED_KEY).executeTakeFirst();
     const set = new Set(parseCodes(row?.value));
     if (on === set.has(code)) return;
     if (on) set.add(code);
     else set.delete(code);
     const value = JSON.stringify([...set].sort());
-    await this.deps.db.insertInto("meta").values({ key: EXCLUDED_KEY, value }).onConflict((oc) => oc.column("key").doUpdateSet({ value })).execute();
+    await db.insertInto("meta").values({ key: EXCLUDED_KEY, value }).onConflict((oc) => oc.column("key").doUpdateSet({ value })).execute();
   }
 
   /**
