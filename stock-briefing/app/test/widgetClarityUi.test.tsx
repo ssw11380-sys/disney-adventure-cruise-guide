@@ -76,6 +76,7 @@ describe("위젯 정보 기준과 작은 화면", () => {
     const t = build(<HoldingsWidget {...props} {...clarity} width={508} height={223} fontScale={1.15} pnlToggle />);
     expect(nodes(t).some((n) => n.type === "ListWidget")).toBe(true);
     expect(words(t)).toContain("+100,000원 (+16.67%)");
+    expect(nodes(t).some((n) => n.type === "TextWidget" && String(n.props.text).startsWith("시세 ") && String(n.props.text).includes("종목 전일 대비"))).toBe(true);
     const list = nodes(t).find((n) => n.type === "ListWidget")!;
     const row = list.children?.[0];
     expect(Number(row?.props.height)).toBeGreaterThanOrEqual(48);
@@ -108,6 +109,20 @@ describe("위젯 정보 기준과 작은 화면", () => {
     expect(textNodes.every((n) => Number(n.props.fontSize) >= 10)).toBe(true);
     expect(lineHeight(12, 2)).toBeGreaterThan(0);
   });
+  it("508×223·115% 시장 위젯은 글자 크기를 유지하면서 6개 전체와 추가 3개 스크롤을 보존", () => {
+    const board = ["KOSPI", "NASDAQ", "USDKRW", "KOSDAQ", "SPX", "JPYKRW", "DJI", "SOX", "CNYKRW"].map((code) => ({ code, name: code, value: 27190.86, change: 319.27, changeRate: 1.19, open: false }));
+    const t = build(<MarketWidget {...clarity} board={board} boardAt={NOW} enabled error={null} now={NOW} width={508} height={223} fontScale={1.15} />);
+    const all = nodes(t), list = all.find((n) => n.type === "ListWidget")!;
+    expect(list.children).toHaveLength(3);
+    expect(list.children?.every((row) => row.children?.length === 3)).toBe(true);
+    const metadata = all.slice(0, all.indexOf(list)).filter((n) => n.type === "TextWidget" && /조회|아래로/.test(String(n.props.text)));
+    expect(metadata).toHaveLength(1);
+    expect(String(metadata[0]?.props.text)).toMatch(/조회.*아래로/);
+    const metaH = metadata.reduce((sum, n) => sum + lineHeight(Number(n.props.fontSize), 1.15), 0);
+    expect(48 + metaH + Number(list.children?.[0]?.props.height) * 2 + 8 + 2).toBeLessThanOrEqual(223);
+    const firstTile = list.children?.[0]?.children?.[0];
+    expect(firstTile?.children?.map((n) => n.props.fontSize)).toEqual([12, 18, 12]);
+  });
   it("큰 자산 카드의 누적손익과 전일 대비를 보존하고 좁을 때도 낭독에 둘 다 포함", () => {
     const big = build(<AssetWidget {...props} {...clarity} width={500} height={180} />);
     expect(words(big)).toContain("누적 +100,000원"); expect(words(big)).toContain("전일 대비 +10,000원");
@@ -126,5 +141,14 @@ describe("위젯 정보 기준과 작은 화면", () => {
     const t = build(<HoldingsWidget {...props} {...clarity} width={600} height={350} indexLine indices={indices} />);
     expect(words(t)).toContain("지연");
     expect(nodes(t).some((n) => String(n.props.accessibilityLabel).includes("나스닥") && String(n.props.accessibilityLabel).includes("지연"))).toBe(true);
+  });
+  it("시장줄을 켠 508×223·115%에서는 여러 지수가 한 줄에 안 들어가도 일부와 종목 목록을 표시", () => {
+    const indices = ["KOSPI", "KOSDAQ", "NASDAQ", "SPX", "USDKRW"].map((code) => ({ code, name: code, value: 27190.86, change: 319.27, changeRate: 1.19, open: false, stale: true }));
+    const t = build(<HoldingsWidget {...props} {...clarity} width={508} height={223} fontScale={1.15} indexLine indices={indices} />);
+    expect(nodes(t).some((n) => n.type === "ListWidget")).toBe(true);
+    const line = nodes(t).find((n) => n.type === "TextWidget" && /코스피|나스닥/.test(String(n.props.text)));
+    expect(line).toBeTruthy();
+    expect(String(line?.props.text)).toContain("+1.19%");
+    expect(String(line?.props.text)).toContain("지연");
   });
 });

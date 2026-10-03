@@ -110,6 +110,7 @@ export default function WidgetSettingsScreen() {
         <Chip label="이름순" active={prefs.sort === "name"} onPress={() => change({ sort: "name" })} />
       </View>
       <View style={{ flexDirection: "row", alignItems: "center", gap: space.md }}><Text style={{ color: t.ink, fontSize: font.body, flex: 1 }}>시장 요약 줄 표시</Text><Toggle value={prefs.showMarketLine} onValueChange={(value) => change({ showMarketLine: value })} accessibilityLabel="이 위젯 시장 요약 줄 표시" /></View>
+      <Muted>위젯 크기와 글자 크기에 따라 일부 지수만 표시하거나 요약 줄을 숨길 수 있습니다. 전체 지수는 ‘지수·환율’ 위젯에서 확인해 주세요.</Muted>
       <SectionTitle>상단 고정 종목</SectionTitle>
       <Muted>최대 20개를 누른 순서대로 먼저 표시합니다. 다시 누르면 고정이 풀립니다. 화면에 들어가는 종목 수는 위젯 크기에 따라 달라집니다.</Muted>
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.s }}>
