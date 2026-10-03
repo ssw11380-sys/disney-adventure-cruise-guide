@@ -305,6 +305,12 @@ async function writeSession(fn: (s: KeyValueStorage) => Promise<void>): Promise<
   await pending;
 }
 
+/** 삭제만 실패한 저장소에서는 인증값 없는 JSON으로 폐기한다. 둘 다 실패하면 바깥에서 현재 메모리 상태를 유지한다. */
+async function discardStoredSession(st: KeyValueStorage): Promise<void> {
+  try { await st.removeItem(SESSION_KEY); }
+  catch { await st.setItem(SESSION_KEY, "null"); }
+}
+
 /** 로그인·가입 성공: 자동 로그인 켬이면 기기에 저장, 끔이면 메모리에만 (전에 저장한 세션은 지운다) */
 export async function saveSession(s: Omit<StoredSession, "savedAt"> & { savedAt?: number }): Promise<void> {
   invalidateSessionRead();
@@ -319,9 +325,20 @@ export async function saveSession(s: Omit<StoredSession, "savedAt"> & { savedAt?
   seen = { apiUrl: clean(s.apiUrl), on: true };
   emit();
   const saved = current;
+  const identity = identityVersion;
   await writeSession(async (st) => {
-    if (saved.remember) await st.setItem(SESSION_KEY, JSON.stringify(saved));
-    else await st.removeItem(SESSION_KEY);
+    if (saved.remember) {
+      try { await st.setItem(SESSION_KEY, JSON.stringify(saved)); }
+      catch {
+        // 자동 로그인 저장 실패를 성공으로 취급하면 위젯이 앞 계정의 저장값을 읽는다.
+        // 이 로그인은 메모리에서만 유지하고, 기존 계정의 인증값을 가능한 경로로 폐기한다.
+        if (identity === identityVersion && current?.token === saved.token) {
+          current = { ...current, remember: false };
+          emit();
+        }
+        await discardStoredSession(st);
+      }
+    } else await discardStoredSession(st);
   });
   // 기기 표시는 인증값이 아니므로 이 쓰기를 기다리느라 다음 로그아웃의 세션 삭제가 밀리지 않게 한다.
   if (current?.token === saved.token && sameServer(current.apiUrl, saved.apiUrl)) {
@@ -351,7 +368,7 @@ export async function clearSession(reason: EndReason): Promise<void> {
   ended = reason;
   accountChanged(prev, null);
   emit();
-  await writeSession((st) => st.removeItem(SESSION_KEY));
+  await writeSession(discardStoredSession);
 }
 
 /**
