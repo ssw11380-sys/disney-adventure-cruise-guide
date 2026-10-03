@@ -89,6 +89,8 @@ async function noteAuth(res: Response, apiUrl: string, sent: string | null): Pro
  */
 
 export interface WidgetData {
+  /** 이번 실행에서 자료를 읽은 서버·로그인 경계. 기기에 저장한 이전 실행의 값은 재사용하지 않는다. */
+  renderScope?: { apiUrl: string; identity: number };
   stocks: RegisteredWithQuote[];
   briefings: LatestBriefing[];
   showKrw: boolean;
@@ -143,6 +145,10 @@ export interface WidgetData {
    * 주인 아닌 계정의 지수·환율 판을 이번에 공유 경로(/api/market/indices)로 새로 받았는지 (검증 6차 — 백그라운드 작업이 판 위젯을 다시 그리게). 저장하지 않는다
    */
   boardFresh?: boolean;
+}
+
+function withRenderScope(data: WidgetData, apiUrl: string, identity: number): WidgetData {
+  return data.features.clarity === true ? { ...data, renderScope: { apiUrl, identity } } : data;
 }
 
 const LAST_KEY = "widget.lastStocks";
@@ -357,7 +363,7 @@ function clearRetry(apiUrl: string, started: number, identity = sessionIdentityV
 }
 
 /** 마지막으로 그린 데이터 (표시 설정 제외). 손익 전환·↻ 직후에 서버를 부르지 않고 바로 다시 그릴 때 쓴다 */
-type StoredView = Omit<WidgetData, "showKrw" | "afterCost" | "rowKrw">;
+type StoredView = Omit<WidgetData, "showKrw" | "afterCost" | "rowKrw" | "renderScope">;
 
 /** 브리핑 위젯은 앞의 3개 요약 첫 줄만 쓰므로 그만큼만 적는다 (예전 서버의 전체 목록·상세를 저장하지 않게) */
 function slimBriefings(list: LatestBriefing[]): LatestBriefing[] {
@@ -368,7 +374,7 @@ function slimBriefings(list: LatestBriefing[]): LatestBriefing[] {
 }
 
 export async function saveWidgetView(data: WidgetData, apiUrl: string, identity = sessionIdentityVersion()): Promise<void> {
-  const { showKrw: _k, afterCost: _a, rowKrw: _r, asked: _q, recovered: _v, boardFresh: _f, ...rest } = data;
+  const { showKrw: _k, afterCost: _a, rowKrw: _r, asked: _q, recovered: _v, boardFresh: _f, renderScope: _scope, ...rest } = data;
   const view: StoredView = { ...rest, briefings: slimBriefings(data.briefings) };
   try {
     await writePersonal(VIEW_KEY, JSON.stringify({ apiUrl, accountUserId: personalOwner(apiUrl), view }), identity);
@@ -452,11 +458,11 @@ export async function loadCachedWidgetData(): Promise<WidgetData> {
   catch { return signedOutWidgetData(); }
   const view = await readWidgetView(apiUrl);
   if (personalClears || identity !== sessionIdentityVersion()) return signedOutWidgetData();
-  if (view) return { ...view, showKrw, afterCost, rowKrw };
+  if (view) return withRenderScope({ ...view, showKrw, afterCost, rowKrw }, apiUrl, identity);
   const [last, cached] = await Promise.all([readLastStocks(apiUrl), readCachedPayload(apiUrl)]);
   if (personalClears || identity !== sessionIdentityVersion()) return signedOutWidgetData();
   const p = cached ? fromPayload(cached.body) : null;
-  return {
+  return withRenderScope({
     stocks: last?.stocks ?? p?.stocks ?? [],
     briefings: p?.briefings ?? [],
     showKrw,
@@ -475,7 +481,7 @@ export async function loadCachedWidgetData(): Promise<WidgetData> {
     ...(p?.board && cached ? { boardAt: cached.at } : {}),
     features: p?.features ?? NO_FEATURES,
     ...(cached ? { featuresAt: cached.at } : {}),
-  };
+  }, apiUrl, identity);
 }
 
 /** 받은 시각이 가장 늦은 것 (같으면 앞의 것) */
@@ -576,7 +582,7 @@ export async function pushWidgetData(o: {
   // 자동 갱신 기록 (위젯 리뷰 2): 앱이 바로 그린 것만 app 으로 — 앱(WidgetBridge)은 늘 rowKrw 를 넘기고, 백그라운드 작업은 넘기지 않는다
   // (refresh.tsx 의 약속. 백그라운드 작업은 lib/backgroundBriefings 가 background 로 따로 적는다). 시각은 넘긴 때
   if (o.rowKrw !== undefined) await logWidgetRefresh("app", "ok", { at: now });
-  return data;
+  return withRenderScope(data, apiUrl, identity);
 }
 
 /** 마지막으로 그린 판과 받은 시각 (없으면 null) */
@@ -915,7 +921,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
     if (identity !== sessionIdentityVersion()) return signedOutWidgetData(out.fetchedAt);
     out.error = e instanceof Error ? e.message : String(e);
     // 누구의 세션인지 읽지 못했을 때는 개인 캐시로 대신 그리거나 지우지 않는다. 다음 갱신에서 다시 읽는다.
-    if (e instanceof SessionReadError) { keepBoard(out, prevView); return out; }
+    if (e instanceof SessionReadError) { keepBoard(out, prevView); return withRenderScope(out, apiUrl, identity); }
     if (e instanceof LoginNeededError) {
       // 로그인이 필요함: 앞 사람(주인)의 잔고·브리핑으로 그리지 않고 적어 둔 개인 데이터를 지운다. 지수·환율 판·플래그는 개인 데이터가 아니라 남긴다
       await clearWidgetAccountData();
@@ -930,7 +936,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       if (e.reason === "personal" && opts.board) await sharedBoard(out, apiUrl, apiToken);
       keepBoard(out, prevView);
       await saveWidgetView(out, apiUrl, identity);
-      return identity === sessionIdentityVersion() ? out : signedOutWidgetData(out.fetchedAt);
+      return identity === sessionIdentityVersion() ? withRenderScope(out, apiUrl, identity) : signedOutWidgetData(out.fetchedAt);
     }
     const cached = await readCachedPayload(apiUrl);
     // 칩: 받아 둔 응답의 것(플래그로 거름), 없으면(업데이트 직후 등) 마지막으로 그린 것 — 실패했다고 칩이 사라지지 않게
@@ -986,7 +992,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       out.briefings = view.briefings;
     }
   }
-  return identity === sessionIdentityVersion() ? out : signedOutWidgetData(out.fetchedAt);
+  return identity === sessionIdentityVersion() ? withRenderScope(out, apiUrl, identity) : signedOutWidgetData(out.fetchedAt);
 }
 
 /**

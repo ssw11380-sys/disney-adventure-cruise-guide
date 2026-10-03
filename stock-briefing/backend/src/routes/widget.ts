@@ -87,7 +87,9 @@ export const widgetRoutes: FastifyPluginAsync<{
       : null;
     // 숫자 기준 (3-32): 시장 요약과 같은 방식 — 지금 앱(&ms=1)이 물을 때만 플래그를 본다
     const basisOn = wantsSummary && deps.features ? deps.features.enabled("numberBasis").catch(() => false) : null;
-    const [list, latest, status, f, idx, accountIds, sched, msOn, ms, basis] = await Promise.all([
+    // 새 서버가 먼저 배포되어도 예전 요청·플래그 꺼짐 응답의 본문과 ETag 는 같다. 추가 외부 자료 조회 없음.
+    const clarityOn = wantsSummary && deps.features ? deps.features.enabled("widgetClarity").catch(() => false) : null;
+    const [list, latest, status, f, idx, accountIds, sched, msOn, ms, basis, clarity] = await Promise.all([
       deps.stocks.listWithQuotes(),
       deps.briefings.latestPerStock(),
       deps.calendar.status().catch(() => null),
@@ -98,12 +100,14 @@ export const widgetRoutes: FastifyPluginAsync<{
       summaryOn,
       summary,
       basisOn,
+      clarityOn,
     ]);
     // marketSummary 는 새 앱(&ms=1)에만 — 예전 앱의 features 칸은 그대로. numberBasis 는 켜져 있을 때만 칸을 더한다
     const withSummary = f && msOn !== null ? { ...f, marketSummary: msOn } : f;
+    const withBasis = withSummary && basis === true ? { ...withSummary, numberBasis: true } : withSummary;
     const body = JSON.stringify(
       buildWidgetPayload(list, latest, status, {
-        features: withSummary && basis === true ? { ...withSummary, numberBasis: true } : withSummary,
+        features: withBasis && clarity === true ? { ...withBasis, widgetClarity: true } : withBasis,
         indices: wantsIndices ? idx : null,
         board: wantsBoard ? idx : null,
         accountIds,

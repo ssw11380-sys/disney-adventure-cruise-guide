@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TossAccountSnapshotBody } from "@/api/types";
 import { cleanupRenders, render, type HostNode } from "./miniRender";
 
-const h = vi.hoisted(() => ({ data: undefined as TossAccountSnapshotBody | undefined, error: null as unknown, afterCost: true, showKrw: true }));
+const h = vi.hoisted(() => ({ data: undefined as TossAccountSnapshotBody | undefined, error: null as unknown, afterCost: true, showKrw: true, params: {} as { valuation?: string }, setParams: vi.fn() }));
+vi.mock("expo-router", () => ({ useLocalSearchParams: () => h.params, router: { setParams: h.setParams } }));
 vi.mock("react-native", () => ({ View: "View", Text: "Text", Pressable: "Pressable", StyleSheet: { create: <T,>(v: T) => v, hairlineWidth: 1 } }));
 vi.mock("@/theme", async () => ({ ...(await import("@/tokens")), useTheme: () => ({}), }));
 vi.mock("@/api/hooks", () => ({ useTossAccountSnapshot: () => ({ data: h.data, error: h.error, isError: !!h.error }) }));
@@ -28,9 +29,26 @@ const mount = (body: TossAccountSnapshotBody | undefined = BODY, failed = false,
   <TossAccountSummaryView body={body} failed={failed} afterCost={afterCost} showKrw now={NOW}><TextStub>기존 실시간 숫자와 비중</TextStub></TossAccountSummaryView>,
 );
 function TextStub({ children }: { children: React.ReactNode }) { return React.createElement("Text", {}, children); }
-beforeEach(() => { cleanupRenders(); h.data = BODY; h.error = null; h.afterCost = true; h.showKrw = true; });
+beforeEach(() => { cleanupRenders(); h.data = BODY; h.error = null; h.afterCost = true; h.showKrw = true; h.params = {}; h.setParams.mockClear(); });
 
 describe("토스 원본 계좌와 실시간 평가 분리", () => {
+  it("위젯 금액 링크는 같은 실시간 평가를 열고, 다시 누르면 사용자가 고른 토스 탭에서도 돌아온다", () => {
+    h.params = { valuation: "live" };
+    const el = <TossAccountSummary><TextStub>위젯과 같은 실시간 평가</TextStub></TossAccountSummary>;
+    const r = render(el);
+    expect(text(r.tree)).toContain("위젯과 같은 실시간 평가");
+    expect(text(r.tree)).not.toContain("토스 주식 평가금액");
+    expect(h.setParams).toHaveBeenCalledWith({ valuation: undefined });
+    h.params = {};
+    r.rerender(el);
+    const tab = all(r.tree).find((x) => x.props.accessibilityLabel === "토스 계좌 보기")!;
+    r.act(() => (tab.props.onPress as () => void)());
+    expect(text(r.tree)).toContain("토스 주식 평가금액");
+    h.params = { valuation: "live" };
+    r.rerender(el);
+    expect(text(r.tree)).toContain("위젯과 같은 실시간 평가");
+    expect(h.setParams).toHaveBeenCalledTimes(2);
+  });
   it("기본은 비용 차감 후 원본 통화별 금액, 전체 범위·예수금 제외·수신과 환산 한계를 함께 표시", () => {
     const r = mount();
     const s = text(r.tree);

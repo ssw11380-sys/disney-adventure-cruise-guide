@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
+import { router, useLocalSearchParams } from "expo-router";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useTossAccountSnapshot } from "@/api/hooks";
 import { ApiRequestError } from "@/api/client";
@@ -11,23 +12,37 @@ import { font, fontCap, space, touch, useTheme } from "@/theme";
 
 /** 기능이 켜진 주인의 홈에서만 장착한다. 원본 계좌와 앱 시세 합계를 섞지 않는다. */
 export function TossAccountSummary({ children }: { children: React.ReactNode }) {
+  const { valuation } = useLocalSearchParams<{ valuation?: string }>();
   const q = useTossAccountSnapshot();
   const { afterCost, showKrw } = useSettings();
   const now = useNow(30_000);
   const denied = q.error instanceof ApiRequestError && (q.error.status === 401 || q.error.status === 403);
-  return <TossAccountSummaryView body={denied ? undefined : q.data} failed={q.isError} afterCost={afterCost} showKrw={showKrw} now={now}>{children}</TossAccountSummaryView>;
+  return <TossAccountSummaryView body={denied ? undefined : q.data} failed={q.isError} afterCost={afterCost} showKrw={showKrw} now={now}
+    requestedView={valuation === "live" ? "live" : undefined}>{children}</TossAccountSummaryView>;
 }
 
-export function TossAccountSummaryView({ body, failed, afterCost, showKrw, now, children }: {
+export function TossAccountSummaryView({ body, failed, afterCost, showKrw, now, children, requestedView }: {
   body: TossAccountSnapshotBody | undefined;
   failed: boolean;
   afterCost: boolean;
   showKrw: boolean;
   now: number;
   children: React.ReactNode;
+  requestedView?: "live";
 }) {
   const t = useTheme();
-  const [view, setView] = useState<"toss" | "live">("toss");
+  const [view, setView] = useState<"toss" | "live">(requestedView ?? "toss");
+  const [lastRequest, setLastRequest] = useState(requestedView);
+  // 새 링크의 기준을 그리는 순간 반영해 이전 탭의 금액이 한 번 나타나지 않게 한다.
+  if (requestedView !== lastRequest) {
+    setLastRequest(requestedView);
+    if (requestedView) setView(requestedView);
+  }
+  useEffect(() => {
+    if (!requestedView) return;
+    // 요청을 소비해야 같은 위젯을 다시 눌러도 현재 선택과 관계없이 같은 평가 기준으로 열린다.
+    router.setParams({ valuation: undefined });
+  }, [requestedView]);
   const snap = body?.on ? body.snapshot : null;
   const notice = tossSnapshotNotice(body, failed, now);
   const amount = snap ? (afterCost ? snap.net : snap.gross) : null;

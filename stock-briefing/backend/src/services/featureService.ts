@@ -8,6 +8,7 @@ import { seoulIso } from "../lib/time.js";
  *  - 새 기능(3-19·3-24 의 새 동작, P2 전부)은 플래그 뒤에 둔다
  */
 export const FEATURES = {
+  widgetClarity: { default: true, description: "위젯 정보 기준 개선: 앱 실시간 평가·시세와 조회 시각·합계 제외와 지난 값 경고·전일 대비·개인화. 끄면 기존 위젯" },
   tossAccountSnapshot: { default: true, description: "토스 원본 계좌 평가: 동기화 때 받은 전체 주식 평가를 통화별로 보존하고 잔고의 기본 기준으로 표시. 끄면 기록·조회·표시 없이 기존 실시간 평가" },
   briefingParallel: { default: true, description: "보고서 속도 개선: 종목 두 개의 자료 수집·분석을 동시에 진행하며 각 종목의 분석 뒤 요약, 저장 순서와 세션 알림을 유지. 끄면 기존 순차 처리" },
   analysisWaitRecovery: { default: true, description: "분석 대기 개선: 갱신 중 이전 보고서를 유지하고 조회 전용 상태 경로로 서버에서 완성된 결과를 회수. 끄면 기존 대기·오류 화면, 상태 경로 404" },

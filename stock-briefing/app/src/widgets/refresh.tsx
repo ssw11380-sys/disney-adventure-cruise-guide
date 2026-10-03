@@ -1,12 +1,12 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
-import type { WidgetInfo } from "react-native-android-widget";
 import type { LatestBriefing, RegisteredWithQuote } from "@/api/types";
 import { defaultApiUrl, STORAGE_KEYS } from "@/lib/settings";
+import { assertSessionIdentity, sessionIdentityVersion } from "@/lib/session";
 import { carryBriefingsIntoPayload, loadCachedWidgetData, pushWidgetData, readCachedPayload, readPnlMode, saveWidgetView, withLastGood } from "./data";
 import { fontScaleNow } from "./fontScale";
 import type { WidgetFeatures, WidgetIndex, WidgetMarket } from "./payload";
-import { renderFor } from "./render";
+import { drawWidgetsForIdentity } from "./redraw";
 import { WIDGET_NAMES } from "./widgets";
 
 /** 환율을 모르는 달러 시세의 원화 환산 (서버 widgetPayload krwValue 와 같은 값) */
@@ -77,23 +77,28 @@ async function storedApiUrl(): Promise<string> {
  * 위젯이 없으면 그리지 않는다(저장값만 바뀐다). Android 전용
  */
 export async function refreshBriefingWidget(app: { at: number; list: readonly LatestBriefing[] } | null | undefined): Promise<void> {
+  const identity = sessionIdentityVersion();
   if (Platform.OS !== "android" || !app) return;
   try {
-    const { requestWidgetUpdate } = await import("react-native-android-widget");
     const shown = await loadCachedWidgetData();
+    assertSessionIdentity(identity);
     if (!shown.features.polish) return;
     const picked = await appBriefingsToDraw(app, shown.stocks);
+    assertSessionIdentity(identity);
     if (!picked) return;
     // 고르는 동안 다른 갱신이 새 그림을 적었을 수 있으니 적기 직전에 다시 읽어 브리핑만 바꾼다
     const data = { ...(await loadCachedWidgetData()), briefings: picked };
-    await saveWidgetView(data, await storedApiUrl());
+    assertSessionIdentity(identity);
+    const apiUrl = await storedApiUrl();
+    assertSessionIdentity(identity);
+    await saveWidgetView(data, apiUrl, identity);
+    assertSessionIdentity(identity);
     await carryBriefingsIntoPayload(picked, app.at);
+    assertSessionIdentity(identity);
     const pnlMode = await readPnlMode();
+    assertSessionIdentity(identity);
     const fontScale = fontScaleNow();
-    await requestWidgetUpdate({
-      widgetName: WIDGET_NAMES.briefing,
-      renderWidget: (info: WidgetInfo) => renderFor(WIDGET_NAMES.briefing, data, info, { fontScale, now: Date.now(), pnlMode }),
-    });
+    await drawWidgetsForIdentity(WIDGET_NAMES.briefing, data, identity, { fontScale, now: Date.now(), pnlMode });
   } catch {
     /* 위젯 모듈이 없는 빌드(개발 클라이언트 등)에서는 무시 */
   }
@@ -148,14 +153,15 @@ export async function refreshWidgets({
   /** 지수·환율 위젯 판 9개 (앱 지수 띠 또는 백그라운드 작업이 받은 판, 받은 시각과 함께). 위젯이 받아 둔 것과 견줘 새것을 쓴다 */
   board?: { at: number; list: WidgetIndex[] } | null;
 }): Promise<void> {
+  const identity = sessionIdentityVersion();
   if (Platform.OS !== "android") return;
   try {
-    const { requestWidgetUpdate } = await import("react-native-android-widget");
     const now = Date.now();
     // 기준 시각은 잔고를 받은 시각 (미래 시각은 지금으로)
     const fetchedAt = dataAt !== undefined && dataAt > 0 ? Math.min(dataAt, now) : now;
     // 시세가 빠진 종목은 마지막 값으로 채우고(위젯이 직접 받을 때와 같은 규칙), 다음 실패 대비로 적어 둔다 (더 새 마지막 잔고는 덮지 않는다)
     const { stocks, filled } = given ? { stocks: raw, filled: given } : await withLastGood(raw, fetchedAt);
+    assertSessionIdentity(identity);
     const push = {
       stocks,
       filled,
@@ -170,24 +176,26 @@ export async function refreshWidgets({
       ...(rowKrw !== undefined ? { rowKrw } : {}),
     };
     let data = await pushWidgetData({ ...push, briefings });
+    assertSessionIdentity(identity);
     // 앱이 받은 최신 브리핑 (위젯 검토 7번): 위젯이 실제로 쓰는 플래그(위에서 앱·위젯 중 늦게 받은 쪽으로 고름)가 다듬은 모습일 때만.
     // 꺼져 있으면 예전처럼 브리핑 위젯은 백그라운드 작업·위젯이 받은 것만 그리고, 저장해 둔 브리핑도 바꾸지 않는다.
     // 켜져 있으면 브리핑까지 넣어 다시 적는다 (같은 입력이라 지수·플래그·칩은 첫 번과 같게 고른다)
     const fromApp = !briefings && data.features.polish ? await appBriefingsToDraw(appBriefings, raw) : null;
+    assertSessionIdentity(identity);
     if (fromApp && appBriefings) {
       data = await pushWidgetData({ ...push, briefings: fromApp });
+      assertSessionIdentity(identity);
       // 위젯이 스스로 갱신할 때(받아 둔 응답 재사용·조회 실패) 옛 브리핑으로 되돌아가지 않게 받아 둔 응답에도 적는다 (검증 지적)
       await carryBriefingsIntoPayload(fromApp, appBriefings.at);
+      assertSessionIdentity(identity);
     }
     const pnlMode = await readPnlMode();
+    assertSessionIdentity(identity);
     const fontScale = fontScaleNow();
     // 그리는 시각은 지금 ('지연'·칩 만료·오늘 날짜 판단) — 잔고를 받은 시각이 아니다
-    const draw = (name: string) => (info: WidgetInfo) => renderFor(name, data, info, { fontScale, now, pnlMode });
-    await requestWidgetUpdate({ widgetName: WIDGET_NAMES.holdings, renderWidget: draw(WIDGET_NAMES.holdings) });
-    await requestWidgetUpdate({ widgetName: WIDGET_NAMES.asset, renderWidget: draw(WIDGET_NAMES.asset) });
-    if (briefings || fromApp) await requestWidgetUpdate({ widgetName: WIDGET_NAMES.briefing, renderWidget: draw(WIDGET_NAMES.briefing) });
     // 지수·환율 위젯: 판·플래그는 앱이 받은 것과 위젯이 받아 둔 것 중 늦게 받은 쪽 (위젯이 없으면 아무 일도 없다)
-    await requestWidgetUpdate({ widgetName: WIDGET_NAMES.market, renderWidget: draw(WIDGET_NAMES.market) });
+    const names = [WIDGET_NAMES.holdings, WIDGET_NAMES.asset, ...(briefings || fromApp ? [WIDGET_NAMES.briefing] : []), WIDGET_NAMES.market];
+    await Promise.allSettled(names.map((name) => drawWidgetsForIdentity(name, data, identity, { fontScale, now, pnlMode })));
   } catch {
     /* 위젯 모듈이 없는 빌드(개발 클라이언트 등)에서는 무시 */
   }

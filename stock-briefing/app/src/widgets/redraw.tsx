@@ -1,8 +1,36 @@
 import { Platform } from "react-native";
-import type { WidgetInfo } from "react-native-android-widget";
 import { clearWidgetAccountData, readPnlMode, signedOutWidgetData, type WidgetData } from "./data";
 import { fontScaleNow } from "./fontScale";
 import { assertSessionIdentity, sessionIdentityVersion } from "@/lib/session";
+import type { RenderOpts } from "./render";
+
+const loadDrawingModules = () => Promise.all([import("react-native-android-widget"), import("./render")]);
+let drawingModules: ReturnType<typeof loadDrawingModules> | null = null;
+/** 여러 종류를 함께 그릴 때도 모듈 준비는 한 번만 한다. 실패하면 다음 갱신에서 다시 준비한다. */
+function readyDrawingModules(): ReturnType<typeof loadDrawingModules> {
+  return drawingModules ??= loadDrawingModules().catch((error: unknown) => { drawingModules = null; throw error; });
+}
+
+/**
+ * 자료를 고른 계정 경계를 네이티브 콜백까지 지킨다. 여러 위젯은 동시에 준비한다.
+ * requestWidgetUpdate 는 비동기 콜백을 기다리지 않으므로, 취소 오류를 회수할 수 있는 ById 를 쓴다.
+ */
+export async function drawWidgetsForIdentity(name: string, data: WidgetData, identity: number, opts: Omit<RenderOpts, "width" | "height">): Promise<void> {
+  assertSessionIdentity(identity);
+  const [{ getWidgetInfo, requestWidgetUpdateById }, { renderFor }] = await readyDrawingModules();
+  assertSessionIdentity(identity);
+  const infos = await getWidgetInfo(name);
+  assertSessionIdentity(identity);
+  await Promise.allSettled(infos.map((info) => requestWidgetUpdateById({
+    widgetName: name, widgetId: info.widgetId,
+    renderWidget: async (box) => {
+      assertSessionIdentity(identity);
+      const rendered = await renderFor(name, data, box, opts);
+      assertSessionIdentity(identity);
+      return rendered;
+    },
+  })));
+}
 
 /** 계정 변경의 빈 그림은 기기 저장 정리를 기다리지 않는다. 늦은 빈 그림도 다음 로그인 뒤에는 버린다. */
 export function resetWidgetsForAccountChange(): void {
@@ -44,15 +72,17 @@ export function resetWidgetsForAccountChange(): void {
  * 그리는 모듈은 부를 때 읽는다 — 백그라운드 작업 모듈(lib/backgroundBriefings)이 위젯 부품을 미리 읽지 않게
  */
 export async function redrawAllWidgets(data: WidgetData, now = Date.now()): Promise<void> {
+  const identity = sessionIdentityVersion();
   if (Platform.OS !== "android") return;
   try {
-    const [{ requestWidgetUpdate }, { renderFor }, { WIDGET_NAMES }] = await Promise.all([import("react-native-android-widget"), import("./render"), import("./widgets")]);
+    const { WIDGET_NAMES } = await import("./widgets");
+    assertSessionIdentity(identity);
     const pnlMode = await readPnlMode();
+    assertSessionIdentity(identity);
     const fontScale = fontScaleNow();
-    for (const name of [WIDGET_NAMES.holdings, WIDGET_NAMES.asset, WIDGET_NAMES.briefing, WIDGET_NAMES.market]) {
-      await requestWidgetUpdate({ widgetName: name, renderWidget: (info: WidgetInfo) => renderFor(name, data, info, { fontScale, now, pnlMode }) });
-    }
+    await Promise.allSettled([WIDGET_NAMES.holdings, WIDGET_NAMES.asset, WIDGET_NAMES.briefing, WIDGET_NAMES.market]
+      .map((name) => drawWidgetsForIdentity(name, data, identity, { fontScale, now, pnlMode })));
   } catch {
-    /* 위젯 모듈이 없는 빌드(개발 클라이언트 등)에서는 무시 */
+    /* 계정이 바뀌면 새 계정의 빈 그림·새 그림에 맡긴다. 오류 그림으로도 덮지 않는다. */
   }
 }

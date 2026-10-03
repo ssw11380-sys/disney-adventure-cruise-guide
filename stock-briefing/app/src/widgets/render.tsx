@@ -1,5 +1,7 @@
 import React from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { FlexWidget, TextWidget } from "react-native-android-widget";
+import { defaultApiUrl, STORAGE_KEYS } from "@/lib/settings";
 import { space } from "@/tokens";
 import type { WidgetData } from "./data";
 import { wideExtrasOk } from "./layout";
@@ -9,6 +11,8 @@ import { MarketWidget } from "./marketWidget";
 import { agedIndices } from "./payload";
 import { noteWidgetSize, type SizeBox, type SizeSource } from "./sizeLog";
 import { AssetWidget, BriefingWidget, HoldingsWidget, WIDGET_NAMES } from "./widgets";
+import { defaultWidgetPreferences, readWidgetPreferences, WidgetPreferenceScopeError, type WidgetPreferenceScope, type WidgetPreferences } from "./preferences";
+import { assertSessionIdentity, sessionFor, sessionIdentityVersion } from "@/lib/session";
 
 /**
  * 위젯 한 개를 라이트·다크 두 벌로 그린다 (3-23). 안드로이드가 시스템 테마에 맞는 쪽을 보여 주므로
@@ -29,6 +33,8 @@ export interface RenderOpts {
   pnlMode: PnlMode;
   /** ↻ 를 누른 직후 "갱신 중" */
   refreshing?: boolean;
+  widgetId?: number;
+  preferences?: WidgetPreferences;
 }
 
 export interface Rendered {
@@ -40,7 +46,9 @@ export function renderOne(name: string, data: WidgetData, o: RenderOpts, palette
   // 숫자 기준 (numberBasis, 3-32): 켜져 있을 때만 칸을 더한다 (꺼져 있으면 넘기는 값이 예전과 같아 그림도 같다). 잔고·자산 위젯만
   const basis = data.features.basis === true ? { basis: true } : {};
   // 폭 규칙이 막을 때만 칸을 더한다 (막지 않으면 넘기는 값이 예전과 같아 그림도 같다)
-  const frame = { width: o.width, height: o.height, fontScale: o.fontScale, palette, ...(wideExtrasOk(o.width, data.features.foldFit === true) ? {} : { wideExtras: false }) };
+  const clarity = data.features.clarity === true;
+  const prefs = o.preferences ?? defaultWidgetPreferences(o.pnlMode);
+  const frame = { width: o.width, height: o.height, fontScale: o.fontScale, palette, ...(clarity ? { clarity: true, widgetId: o.widgetId } : {}), ...(wideExtrasOk(o.width, data.features.foldFit === true) ? {} : { wideExtras: false }) };
   switch (name) {
     case WIDGET_NAMES.briefing:
       // 제목·안내 문구를 누르면 브리핑 탭은 다듬은 모습(widgetPolish)에서만 (위젯 검토 7번 — 꺼져 있으면 지금처럼 잔고 탭).
@@ -89,8 +97,9 @@ export function renderOne(name: string, data: WidgetData, o: RenderOpts, palette
           now={o.now}
           market={data.market}
           pnlToggle={data.features.pnlToggle}
-          pnlMode={o.pnlMode}
-          indexLine={data.features.indexLine}
+          pnlMode={clarity ? prefs.pnlMode : o.pnlMode}
+          indexLine={data.features.indexLine && (!clarity || prefs.showMarketLine)}
+          {...(clarity ? { order: { sort: prefs.sort, pinnedCodes: prefs.pinnedCodes } } : {})}
           indices={agedIndices(data.indices, data.indicesAt, o.now)}
           refreshing={o.refreshing}
           polish={data.features.polish}
@@ -112,9 +121,31 @@ export function renderBoth(name: string, data: WidgetData, o: RenderOpts): Rende
  * by: 크기를 알게 된 길 (없으면 app — 앱 즉시 갱신·백그라운드 작업·다시 그리기)
  */
 export async function renderFor(name: string, data: WidgetData, box: SizeBox, opts: Omit<RenderOpts, "width" | "height"> & { by?: SizeSource }): Promise<Rendered> {
+  const identity = sessionIdentityVersion();
+  const source = data.features.clarity === true ? data.renderScope : undefined;
+  const preferenceScope = source ? await assertRenderSource(source) : undefined;
   const { by, ...o } = opts;
   if (data.features.foldFit === true) await noteWidgetSize(box, by ?? "app", o.now);
-  return renderBoth(name, data, { ...o, width: box.width, height: box.height });
+  let preferences: WidgetPreferences | undefined;
+  if (data.features.clarity === true && box.widgetId !== undefined) {
+    // 개인 설정을 읽지 못하면 고정 종목을 가져오지 않는다. 같은 결과를 두 테마에 함께 쓴다.
+    preferences = await readWidgetPreferences(box.widgetId, o.pnlMode, preferenceScope).catch((error: unknown) => {
+      if (error instanceof WidgetPreferenceScopeError) throw error;
+      return defaultWidgetPreferences(o.pnlMode);
+    });
+  }
+  if (source) await assertRenderSource(source);
+  assertSessionIdentity(identity);
+  return renderBoth(name, data, { ...o, width: box.width, height: box.height, ...(data.features.clarity === true ? { widgetId: box.widgetId, preferences } : {}) });
+}
+
+/** 자료를 받은 뒤 늦게 시작한 콜백도 그 자료의 서버·계정에 속하는지 확인한다. 외부 조회는 하지 않는다. */
+async function assertRenderSource(source: NonNullable<WidgetData["renderScope"]>): Promise<WidgetPreferenceScope> {
+  assertSessionIdentity(source.identity);
+  const apiUrl = (await AsyncStorage.getItem(STORAGE_KEYS.apiUrl)) || defaultApiUrl();
+  assertSessionIdentity(source.identity);
+  if (apiUrl !== source.apiUrl) throw new WidgetPreferenceScopeError();
+  return { apiUrl, identity: source.identity, owner: sessionFor(apiUrl)?.user.id ?? null };
 }
 
 function ErrorView({ message, c }: { message: string; c: WidgetPalette }) {

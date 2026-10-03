@@ -39,6 +39,8 @@ export interface WidgetStock {
   e: [number, number, number | null, number | null, "exact" | "estimated" | null] | null;
   /** 시세 기준 원문 (quote.priceBasis — 'KRX+NXT 통합' 등). 서버 numberBasis 가 켜져 있고 &ms=1 로 물었을 때만, 기준이 있는 종목만 (3-32) */
   b?: string;
+  /** 새 위젯의 종목별 거래 대상 판정. 시장 전체가 열려도 미지원 종목은 지연으로 단정하지 않는다. */
+  ss?: QuoteSession;
 }
 
 export interface WidgetBriefing {
@@ -142,6 +144,8 @@ export interface WidgetFeatures {
    * (foldFit 과 같은 규칙 — 꺼짐·모름·예전 서버는 칸이 없어 예전에 적어 둔 값·예전 그림과 같다)
    */
   basis?: boolean;
+  /** 위젯 정보 기준·경고·개인화. 꺼짐·예전 서버는 칸이 없어 예전 모습과 같다 (fallback false) */
+  clarity?: boolean;
 }
 
 export const NO_FEATURES: WidgetFeatures = { pnlToggle: false, indexLine: false, market: false, polish: false };
@@ -158,6 +162,7 @@ export function widgetFeatures(features: Record<string, boolean> | null | undefi
     ...(featureOn(flags, "widgetFoldFit", false) ? { foldFit: true } : {}),
     ...(featureOn(flags, "marketSummary", false) ? { marketSummary: true } : {}),
     ...(featureOn(flags, "numberBasis", false) ? { basis: true } : {}),
+    ...(featureOn(flags, "widgetClarity", false) ? { clarity: true } : {}),
   };
 }
 
@@ -278,6 +283,7 @@ export function fromPayload(p: WidgetPayload): {
           open: null, high: null, low: null, prevClose: null, volume: null, marketCap: null, per: null, pbr: null, eps: null, bps: null, high52w: null, low52w: null, source: "widget",
           ...(s.q[6] ? { stale: true } : {}),
           ...(s.b ? { priceBasis: s.b } : {}),
+          ...(s.ss ? { session: s.ss } : {}),
         } as Quote)
       : null;
     const e = s.e;
