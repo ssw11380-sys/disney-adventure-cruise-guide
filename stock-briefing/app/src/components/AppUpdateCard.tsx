@@ -99,7 +99,7 @@ export function AppUpdateCard() {
     <SectionTitle right={busy ? <Badge>{phaseText}</Badge> : newer ? <Badge tone="warn">새 설치 버전 {newer.version}</Badge>
       : pending ? <Badge tone="warn">적용 대기</Badge> : status.badge ? <Badge tone={status.badge.tone}>{status.badge.text}</Badge> : null}>앱 업데이트</SectionTitle>
     <Row label="설치 버전" value={currentVersion} />
-    <Row label="적용 업데이트" value={running.createdAt ? `${formatDateKo(running.createdAt, true)} · ${running.updateId}` : running.updateId} />
+    <Row label="적용 업데이트" value={running.createdAt ? `${formatDateKo(running.createdAt, true)} · ${running.updateId}` : running.updateId} valueStyle={{ flexShrink: 1, marginLeft: space.s, textAlign: "right" }} />
     <Muted>설치 버전이 같아도 화면·기능 업데이트는 별도로 적용됩니다. 위 시각은 현재 실행 중인 수정본입니다.</Muted>
     {checkedAt ? <Row label="확인 시각" value={formatDateKo(checkedAt, true)} /> : null}
     {newer ? <View style={{ gap: space.xs }}>
