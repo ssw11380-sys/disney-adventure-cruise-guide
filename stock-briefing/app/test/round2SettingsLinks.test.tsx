@@ -2,12 +2,13 @@ import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupRenders, render } from "./miniRender";
 
-const h = vi.hoisted(() => ({ openURL: vi.fn(), alert: vi.fn(), check: vi.fn(), refetch: vi.fn(), apply: vi.fn() }));
+const h = vi.hoisted(() => ({ openURL: vi.fn(), alert: vi.fn(), check: vi.fn(), refetch: vi.fn(), apply: vi.fn(), showNewApk: true }));
 const release = { version: "1.6.0", apkUrl: "https://example.test/app.apk", notes: null, publishedAt: null };
 vi.mock("react-native", () => ({ View: "View", Text: "Text", Pressable: "Pressable", Alert: { alert: h.alert }, Linking: { openURL: h.openURL }, Share: { share: vi.fn() } }));
 vi.mock("@/theme", async () => { const t = await import("@/tokens"); return { ...t, useTheme: () => t.dark }; });
 vi.mock("@/components/ui", () => ({ Badge: "Badge", Button: "Button", Card: "Card", Muted: "Muted", Row: "Row", SectionTitle: "SectionTitle" }));
-vi.mock("@tanstack/react-query", () => ({ useQuery: () => ({ data: release, refetch: h.refetch }), useQueryClient: () => ({ invalidateQueries: vi.fn() }), useMutation: () => ({ mutate: vi.fn(), isPending: false }) }));
+vi.mock("@tanstack/react-query", () => ({ useQuery: () => ({ data: h.showNewApk ? release : null, refetch: h.refetch }), useQueryClient: () => ({ invalidateQueries: vi.fn(), fetchQuery: vi.fn() }), useMutation: () => ({ mutate: vi.fn(), isPending: false }) }));
+vi.mock("expo-updates", () => ({ useUpdates: () => ({ isChecking: false, isDownloading: false, isRestarting: false, isUpdatePending: false, currentlyRunning: { updateId: "현재" } }) }));
 vi.mock("@/lib/appUpdate", () => ({
   applyOtaUpdate: h.apply, checkForAppUpdate: h.check, compareVersions: () => 1, currentVersion: "1.5.0", describeRunningUpdate: () => ({ createdAt: null, updateId: "내장 번들" }),
   fetchRelease: vi.fn(), updateStatus: () => ({ badge: null, message: null, failed: false }),
@@ -34,7 +35,7 @@ async function linkPress(path: Path): Promise<() => void> {
   h.alert.mockClear();
   return press;
 }
-beforeEach(() => { h.openURL.mockReset(); h.alert.mockReset(); h.check.mockReset(); h.refetch.mockReset(); h.apply.mockReset(); h.check.mockResolvedValue({ kind: "apk", release }); });
+beforeEach(() => { h.showNewApk = true; h.openURL.mockReset(); h.alert.mockReset(); h.check.mockReset(); h.refetch.mockReset(); h.apply.mockReset(); h.check.mockResolvedValue({ kind: "apk", release }); });
 afterEach(cleanupRenders);
 
 describe("2차 설정 화면 외부 링크 검증", () => {
@@ -68,6 +69,7 @@ describe("2차 설정 화면 외부 링크 검증", () => {
 });
 
 async function otaPress(path: "OTA 카드" | "OTA 확인창"): Promise<() => void> {
+  h.showNewApk = false;
   h.check.mockResolvedValue({ kind: "ota", updateId: "검증용-업데이트" });
   const r = render(<AppUpdateCard />);
   r.act(() => (r.all().find((n) => n.props.title === "업데이트 확인")!.props.onPress as () => void)());
