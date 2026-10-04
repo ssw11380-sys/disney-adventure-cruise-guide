@@ -732,6 +732,8 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
     items: TossHolding[];
     overview: { purchaseKrw: number; purchaseUsd: number | null; afterCostKrw: number; afterCostUsd: number; rateAfterCost: number | null };
     accountEvaluation: TossAccountTotals | null;
+    /** 원본의 양수 보유를 빠짐없이 해석했을 때만 계좌 손익 원금을 합산할 수 있다. */
+    costBasisComplete: boolean;
   }> {
     const r = await this.client.get<Json>("/api/v1/holdings", {}, { "X-Tossinvest-Account": String(accountSeq) });
     // 본문이 빈 200 은 일시 오류로 본다 (빈 목록으로 받아들이면 전량 매도로 처리돼 보유·원화 장부가 지워진다)
@@ -739,9 +741,13 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
     const purchase = (r["totalPurchaseAmount"] as Json | undefined) ?? null;
     const after = (((r["marketValue"] as Json | undefined) ?? {})["amountAfterCost"] as Json | undefined) ?? null;
     const rate = num(((r["profitLoss"] as Json | undefined) ?? {})["rateAfterCost"]);
+    const items = parseHoldingItems(r["items"] as Json[]);
+    const accountEvaluation = parseTossAccountTotals(r);
+    const heldCount = (r["items"] as Json[]).filter((it) => (num(it?.["quantity"]) ?? 0) > 0).length;
     return {
-      items: parseHoldingItems(r["items"] as Json[]),
-      accountEvaluation: parseTossAccountTotals(r),
+      items,
+      accountEvaluation,
+      costBasisComplete: accountEvaluation !== null && heldCount === items.length,
       overview: {
         purchaseKrw: num(purchase?.["krw"]) ?? 0,
         // 모르면 null (0 이면 "달러 종목 없음"으로 읽혀 원화 장부가 지워진다)

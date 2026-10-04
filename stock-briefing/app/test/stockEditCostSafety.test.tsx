@@ -24,6 +24,7 @@ vi.mock("@/components/RouteError", () => ({ RouteErrorBoundary: "RouteErrorBound
 vi.mock("@/components/ui", () => ({ Button: "Button", Card: "Card", ErrorView: "ErrorView", Loading: "Loading", Muted: "Muted", Row: "Row", SectionTitle: "SectionTitle", Segmented: "Segmented" }));
 vi.mock("@/api/hooks", () => ({
   useApi: () => ({ setKrwCost: h.setKrwCost }),
+  useFeature: (_key: string, fallback = false) => fallback,
   useStock: () => ({ data: h.stock, isError: false }),
   useStockMutations: () => ({ update: { mutate: h.update, isPending: false }, remove: { mutate: vi.fn(), isPending: false } }),
 }));

@@ -24,6 +24,7 @@ const h = vi.hoisted(() => ({
   alert: vi.fn(),
   /** 서버 플래그 accounts (계정 A단계) */
   accounts: false,
+  tossSnapshotOn: false,
   keyboard: {} as Record<string, (e: { endCoordinates: { screenY: number; height: number } }) => void>,
   keyboardMetrics: undefined as { screenY: number; height: number } | undefined,
   viewport: { y: 105, height: 585 },
@@ -96,7 +97,7 @@ vi.mock("@/components/StockLine", async () => {
 vi.mock("@/api/hooks", () => ({
   useApi: () => ({ setKrwCost: h.setKrwCost }),
   // 계정 A단계: 검색 화면이 주인 아닌 계정인지 본다 (플래그 accounts — 여기서는 꺼짐 = 지금 화면 그대로)
-  useFeature: (key: string, fallback = false) => (key === "accounts" ? h.accounts : fallback),
+  useFeature: (key: string, fallback = false) => (key === "accounts" ? h.accounts : key === "tossAccountSnapshot" ? h.tossSnapshotOn : fallback),
   useStock: (code: string) => {
     h.stockCodes.push(code);
     return { data: code ? h.stock : undefined, isError: false, error: null, refetch: vi.fn() };
@@ -149,6 +150,7 @@ afterEach(() => {
   cleanupRenders();
   vi.useRealTimers();
   h.accounts = false;
+  h.tossSnapshotOn = false;
   resetSessionForTests();
 });
 
@@ -503,6 +505,15 @@ describe("PF-07: 보유 수정 — 같은 종목의 서버 값이 바뀌어도 �
       const [title, body] = await saveKrw(usHeld({ tossSynced: false }), { applied: ["TSLA"], skipped: [] });
       expect(title).toBe("저장됨");
       expect(body).toBe("원화 손익이 토스 앱과 같은 기준으로 계산됩니다.");
+    });
+
+    it("계좌 기준 손익은 다음 동기화 때 반영되므로 원화 원가 저장의 즉시 적용 범위를 알린다", async () => {
+      h.tossSnapshotOn = true;
+      const [title, body] = await saveKrw(usHeld({ tossSynced: false }), { applied: ["TSLA"], skipped: [] });
+      expect(title).toBe("저장됨");
+      expect(body).toContain("실시간 평가에 반영했습니다");
+      expect(body).toContain("토스 계좌 손익에는 다음 계좌 동기화 뒤 반영됩니다");
+      expect(body).not.toContain("같은 기준으로 계산됩니다");
     });
 
     it("다른 이유로 못 했으면 지금처럼 저장 실패와 이유", async () => {

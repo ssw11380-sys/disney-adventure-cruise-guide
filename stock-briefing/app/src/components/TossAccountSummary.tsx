@@ -4,11 +4,12 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useTossAccountSnapshot } from "@/api/hooks";
 import { ApiRequestError } from "@/api/client";
 import type { TossAccountSnapshotBody } from "@/api/types";
-import { formatNumber, formatPrice } from "@/lib/format";
+import { formatNumber, formatPct, formatPrice } from "@/lib/format";
+import { sentence, speakProfit, speakRate } from "@/lib/a11y";
 import { useSettings } from "@/lib/settings";
-import { tossSnapshotNotice, tossSnapshotRange, tossSnapshotTime } from "@/lib/tossAccountSnapshot";
+import { tossSnapshotNotice, tossSnapshotRange, tossSnapshotTime, tossSnapshotValuation } from "@/lib/tossAccountSnapshot";
 import { useNow } from "@/lib/useNow";
-import { font, fontCap, space, touch, useTheme } from "@/theme";
+import { changeColor, font, fontCap, space, touch, useTheme } from "@/theme";
 
 /** 기능이 켜진 주인의 홈에서만 장착한다. 원본 계좌와 앱 시세 합계를 섞지 않는다. */
 export function TossAccountSummary({ children }: { children: React.ReactNode }) {
@@ -56,8 +57,7 @@ export function TossAccountSummaryView({ body, failed, afterCost, showKrw, now, 
   const snap = body?.on ? body.snapshot : null;
   const notice = tossSnapshotNotice(body, failed, now);
   const amount = snap ? (afterCost ? snap.net : snap.gross) : null;
-  const reference = amount && snap?.displayFx && Number.isFinite(snap.displayFx.usdKrw) && snap.displayFx.usdKrw > 0
-    ? amount.krw + amount.usd * snap.displayFx.usdKrw : null;
+  const valuation = snap ? tossSnapshotValuation(snap, afterCost) : null;
   return (
     <View style={{ backgroundColor: t.surface }}>
       <View style={styles.tabs}>
@@ -75,21 +75,34 @@ export function TossAccountSummaryView({ body, failed, afterCost, showKrw, now, 
           {notice ? <Text style={{ color: failed || snap ? t.warn : t.muted, fontSize: font.small }}>{notice}</Text> : null}
           {snap && amount ? <>
             <Text style={{ color: t.muted, fontSize: font.small }}>{afterCost ? "토스 수수료·세금 차감 후" : "토스 수수료·세금 차감 전"}</Text>
+            {showKrw && valuation ? <View style={{ gap: space.s }}>
+              {valuation.evaluationKrw !== null ? <Text maxFontSizeMultiplier={fontCap.row} style={{ color: t.ink, fontSize: font.title, fontWeight: "700", fontVariant: ["tabular-nums"] }}>원화 환산(참고) {formatPrice(valuation.evaluationKrw, "KRW")}</Text> : null}
+              <View style={{ gap: space.xxs }} accessible accessibilityLabel={sentence([
+                "계좌 기준 평가손익 참고", valuation.profitKrw === null ? "확인 불가" : speakProfit(formatPrice(valuation.profitKrw, "KRW"), valuation.profitKrw),
+                valuation.profitRate === null ? null : `수익률 ${speakRate(valuation.profitRate)}`,
+              ])}>
+                <Text style={{ color: t.sub, fontSize: font.small }}>계좌 기준 평가손익(참고)</Text>
+                <Text maxFontSizeMultiplier={fontCap.row} style={{ color: valuation.profitKrw === null ? t.muted : changeColor(t, valuation.profitKrw), fontSize: font.title, fontWeight: "700", fontVariant: ["tabular-nums"] }}>{valuation.profitKrw === null ? "확인 불가" : formatPrice(valuation.profitKrw, "KRW", { sign: true })}</Text>
+                {valuation.profitKrw !== null ? <Text style={{ color: t.sub, fontSize: font.small }}>수익률 {valuation.profitRate === null ? "계산 불가 (매입금액 0원)" : formatPct(valuation.profitRate)}</Text> : null}
+              </View>
+              {valuation.costKrw !== null ? <Text style={{ color: t.sub, fontSize: font.small }}>매입금액 {formatPrice(valuation.costKrw, "KRW")}</Text> : null}
+              {valuation.unavailable ? <Text style={{ color: t.warn, fontSize: font.small }}>{valuation.unavailable}</Text> : <Text style={{ color: t.muted, fontSize: font.tiny }}>같은 계좌 동기화의 평가금액 − 원화 매입금액입니다.{valuation.estimatedHoldingCount ? ` ${valuation.estimatedHoldingCount}종목의 추정 원가를 포함합니다.` : ""} 환율·원가·비용·반올림 기준에 따라 토스 화면의 원화 손익과 다를 수 있습니다.</Text>}
+            </View> : !showKrw ? <Text style={{ color: t.muted, fontSize: font.small }}>계좌 기준 원화 손익은 설정에서 원화 환산을 켜면 확인할 수 있습니다.</Text> : null}
             <View style={styles.amounts}>
               <Amount label="원화" value={formatPrice(amount.krw, "KRW")} />
               <Amount label="달러" value={formatPrice(amount.usd, "USD")} />
             </View>
-            {showKrw && reference !== null ? <View style={{ gap: space.xxs }}>
-              <Text style={{ color: t.sub, fontSize: font.body }}>원화 환산(참고) {formatPrice(reference, "KRW")}</Text>
-              <Text style={{ color: t.muted, fontSize: font.tiny }}>앱 표시 환율 {formatNumber(snap.displayFx!.usdKrw, 2)}원 · {tossSnapshotTime(snap.displayFx!.receivedAt)} 확인. 토스 앱의 최종 원화 합계와 다를 수 있습니다.</Text>
-            </View> : showKrw && amount.usd !== 0 ? <Text style={{ color: t.muted, fontSize: font.small }}>환율을 확인하지 못해 통화별 원본 금액만 표시합니다.</Text> : null}
+            {showKrw && amount.usd !== 0 ? valuation?.evaluationKrw !== null && snap.displayFx ?
+              <Text style={{ color: t.muted, fontSize: font.tiny }}>앱 표시 환율 {formatNumber(snap.displayFx.usdKrw, 2)}원 · {tossSnapshotTime(snap.displayFx.receivedAt)} 확인. 토스 앱의 최종 원화 합계와 다를 수 있습니다.</Text>
+              : <Text style={{ color: t.muted, fontSize: font.small }}>환율을 확인하지 못해 통화별 원본 금액만 표시합니다.</Text> : null}
+            <Text style={{ color: t.muted, fontSize: font.small }}>토스 계좌에서 받은 시세 기준입니다. 실시간 평가는 시간외 시세를 포함해 손익이 다를 수 있습니다.</Text>
             <Text style={{ color: t.sub, fontSize: font.small }}>전체 연동 {snap.accountCount}개 계좌 · 보유 {snap.holdingCount}종목 · 현금·예수금 제외</Text>
             {snap.excludedHoldingCount > 0 ? <Text style={{ color: t.sub, fontSize: font.small }}>앱 동기화에서 제외한 {snap.excludedHoldingCount}종목도 포함합니다.</Text> : null}
             <Text style={{ color: t.muted, fontSize: font.tiny }}>토스 계좌 수신: {tossSnapshotRange(snap.receivedFrom, snap.receivedAt)} (한국 시각). 시세 기준 시각과는 다릅니다.</Text>
             <Text style={{ color: t.muted, fontSize: font.tiny }}>아래 종목·비중·위젯·보고서는 앱 시세 기준입니다. 토스 계좌 평가와 범위·금액이 다를 수 있습니다.</Text>
           </> : null}
         </View>
-      ) : <View style={styles.liveNote}><Text style={{ color: t.muted, fontSize: font.small }}>앱에 등록한 보유 종목을 현재 시세로 평가합니다.</Text></View>}
+      ) : <View style={styles.liveNote}><Text style={{ color: t.muted, fontSize: font.small }}>앱에 등록한 보유 종목을 현재 시세로 평가합니다. 시간외 시세를 포함하므로 토스와 비교할 때는 ‘토스 계좌’를 확인해 주세요.</Text></View>}
       {view === "live" || !snap ? children : null}
     </View>
   );

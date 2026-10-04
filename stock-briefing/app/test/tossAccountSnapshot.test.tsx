@@ -15,7 +15,7 @@ vi.mock("@/api/hooks", () => ({ useTossAccountSnapshot: () => ({ data: h.data, e
 vi.mock("@/lib/settings", () => ({ useSettings: () => h }));
 vi.mock("@/lib/useNow", () => ({ useNow: () => Date.parse("2026-10-04T12:10:00+09:00") }));
 const { TossAccountSummary, TossAccountSummaryView } = await import("@/components/TossAccountSummary");
-const { tossSnapshotNotice, tossSnapshotRange, tossSnapshotTime } = await import("@/lib/tossAccountSnapshot");
+const { tossSnapshotNotice, tossSnapshotRange, tossSnapshotTime, tossSnapshotValuation } = await import("@/lib/tossAccountSnapshot");
 const { ApiRequestError } = await import("@/api/client");
 const AT = "2026-10-04T12:00:00+09:00";
 const NOW = Date.parse("2026-10-04T12:10:00+09:00");
@@ -41,6 +41,27 @@ beforeEach(() => {
 });
 
 describe("토스 원본 계좌와 실시간 평가 분리", () => {
+  it("계좌 손익은 같은 수신 평가와 원화 원가로 표시하고 시간외 실시간 손익과 구분한다", () => {
+    const body: TossAccountSnapshotBody = { ...BODY, snapshot: { ...BODY.snapshot!,
+      net: { krw: 30_000, usd: 50 },
+      costBasis: { krw: 120_000, holdingCount: 20, estimatedHoldingCount: 0, source: "synced-holdings-cost-book" },
+    } };
+    const r = render(<TossAccountSummaryView body={body} failed={false} afterCost showKrw now={NOW}><TextStub>실시간 평가손익 +5,000원</TextStub></TossAccountSummaryView>);
+    expect(text(r.tree)).toContain("원화 환산(참고) 100,000원");
+    expect(text(r.tree)).toContain("계좌 기준 평가손익(참고)");
+    expect(text(r.tree)).toContain("-20,000원");
+    expect(text(r.tree)).toContain("수익률 -16.67%");
+    expect(text(r.tree)).toContain("매입금액 120,000원");
+    expect(text(r.tree)).not.toContain("+5,000원");
+    const tab = all(r.tree).find((x) => x.props.accessibilityLabel === "실시간 평가 보기")!;
+    r.act(() => (tab.props.onPress as () => void)());
+    expect(text(r.tree)).toContain("시간외 시세를 포함");
+    expect(text(r.tree)).toContain("실시간 평가손익 +5,000원");
+    expect(text(r.tree)).not.toContain("-20,000원");
+    const back = all(r.tree).find((x) => x.props.accessibilityLabel === "토스 계좌 보기")!;
+    r.act(() => (back.props.onPress as () => void)());
+    expect(text(r.tree)).toContain("-20,000원");
+  });
   it("큰 글씨 변경 등으로 위젯 링크가 재시작되어도 루트 준비 전에 이동하지 않고 준비 즉시 한 번 소비한다", () => {
     h.params = { valuation: "live" }; h.navReady = false;
     let r!: ReturnType<typeof render>;
@@ -160,5 +181,72 @@ describe("토스 수신 금액 최신성", () => {
   it("동기화 실패·꺼짐을 원본 값이 있어도 표시", () => {
     expect(tossSnapshotNotice({ ...BODY, sync: { ...BODY.sync!, lastError: "외부 오류" } }, false, NOW)).toContain("동기화 실패");
     expect(tossSnapshotNotice({ ...BODY, sync: { ...BODY.sync!, enabled: false } }, false, NOW)).toContain("동기화 꺼짐");
+  });
+});
+
+describe("같은 계좌 동기화의 평가손익", () => {
+  const snap = () => ({ ...BODY.snapshot!, costBasis: {
+    krw: 400_000, holdingCount: 20, estimatedHoldingCount: 3, source: "synced-holdings-cost-book" as const,
+  } });
+  it("비용 전후 평가·손익은 같은 원금을 사용하고 참고 원가 여부를 표시한다", () => {
+    const snapshot = snap();
+    expect(tossSnapshotValuation(snapshot, true)).toMatchObject({ evaluationKrw: 379_520, costKrw: 400_000, profitKrw: -20_480, profitRate: -5.12, estimatedHoldingCount: 3, unavailable: null });
+    expect(tossSnapshotValuation(snapshot, false)).toMatchObject({ evaluationKrw: 380_000, costKrw: 400_000, profitKrw: -20_000, profitRate: -5 });
+    const r = mount({ ...BODY, snapshot });
+    expect(text(r.tree)).toContain("3종목의 추정 원가를 포함");
+    expect(all(r.tree).some((x) => String(x.props.accessibilityLabel).includes("20,480원 손실"))).toBe(true);
+    r.rerender(<TossAccountSummaryView body={{ ...BODY, snapshot }} failed={false} afterCost={false} showKrw now={NOW}><TextStub>실시간</TextStub></TossAccountSummaryView>);
+    expect(text(r.tree)).toContain("수수료·세금 차감 전");
+    expect(text(r.tree)).toContain("-20,000원");
+    expect(text(r.tree)).not.toContain("-20,480원");
+  });
+  it("원화로 표시한 평가금액과 매입금액의 뺄셈이 손익과 정확히 일치한다", () => {
+    const snapshot = { ...snap(), net: { krw: 300_000.4, usd: 0 }, costBasis: { ...snap().costBasis, krw: 299_999.6 } };
+    expect(tossSnapshotValuation(snapshot, true)).toMatchObject({ evaluationKrw: 300_000, costKrw: 300_000, profitKrw: 0, profitRate: 0 });
+  });
+  it("원가 없는 예전 서버·기록은 평가금액은 유지하고 손익 0원 대신 다음 동기화를 안내한다", () => {
+    const r = mount();
+    expect(text(r.tree)).toContain("원화 환산(참고) 379,520원");
+    expect(text(r.tree)).toContain("계좌 기준 평가손익(참고)확인 불가");
+    expect(text(r.tree)).toContain("같은 수신 시점의 매입금액을 확인하지 못했습니다");
+    expect(text(r.tree)).toContain("다음 계좌 동기화 후");
+    expect(text(r.tree)).not.toContain("매입금액 0원");
+  });
+  it.each([
+    null,
+    { ...snap().costBasis, krw: -1 },
+    { ...snap().costBasis, krw: NaN },
+    { ...snap().costBasis, krw: Infinity },
+    { ...snap().costBasis, holdingCount: 19 },
+    { ...snap().costBasis, estimatedHoldingCount: 21 },
+    { ...snap().costBasis, estimatedHoldingCount: -1 },
+  ])("원가가 누락·부정·부분 금액이면 전체 손익으로 표시하지 않는다: %j", (costBasis) => {
+    expect(tossSnapshotValuation({ ...snap(), costBasis }, true)).toMatchObject({ evaluationKrw: 379_520, costKrw: null, profitKrw: null, profitRate: null });
+  });
+  it("해외 평가의 환율이 없거나 잘못됐으면 손익은 확인 불가지만 국내만 있으면 계산할 수 있다", () => {
+    for (const displayFx of [null, { ...BODY.snapshot!.displayFx!, usdKrw: 0 }, { ...BODY.snapshot!.displayFx!, usdKrw: NaN }]) {
+      expect(tossSnapshotValuation({ ...snap(), displayFx }, true)).toMatchObject({ evaluationKrw: null, profitKrw: null });
+      expect(tossSnapshotValuation({ ...snap(), net: { krw: 380_000, usd: 0 }, displayFx }, true)).toMatchObject({ evaluationKrw: 380_000, profitKrw: -20_000 });
+    }
+  });
+  it("실제 빈 계좌만 손익 0원을 표시하고 원가 0일 때 수익률은 계산하지 않는다", () => {
+    const empty = { ...snap(), holdingCount: 0, net: { krw: 0, usd: 0 }, displayFx: null,
+      costBasis: { ...snap().costBasis, krw: 0, holdingCount: 0, estimatedHoldingCount: 0 } };
+    expect(tossSnapshotValuation(empty, true)).toMatchObject({ evaluationKrw: 0, costKrw: 0, profitKrw: 0, profitRate: null });
+    const r = mount({ ...BODY, snapshot: empty });
+    expect(text(r.tree)).toContain("계좌 기준 평가손익(참고)0원");
+    expect(text(r.tree)).toContain("계산 불가 (매입금액 0원)");
+    expect(text(r.tree)).not.toContain("0.00%");
+  });
+  it("보유 0종목인데 양수 원가가 남은 손상 기록은 가짜 손실로 표시하지 않는다", () => {
+    expect(tossSnapshotValuation({ ...snap(), holdingCount: 0, net: { krw: 0, usd: 0 }, displayFx: null,
+      costBasis: { ...snap().costBasis, krw: 10_000, holdingCount: 0, estimatedHoldingCount: 0 } }, true))
+      .toMatchObject({ evaluationKrw: 0, costKrw: null, profitKrw: null, profitRate: null });
+  });
+  it("원화 환산을 끈 설정을 존중하고 계좌 손익의 표시 방법을 안내한다", () => {
+    const r = render(<TossAccountSummaryView body={{ ...BODY, snapshot: snap() }} failed={false} afterCost showKrw={false} now={NOW}><TextStub>실시간</TextStub></TossAccountSummaryView>);
+    expect(text(r.tree)).toContain("원화 환산을 켜면 확인");
+    expect(text(r.tree)).not.toContain("-20,480원");
+    expect(text(r.tree)).toContain("$199.80");
   });
 });
