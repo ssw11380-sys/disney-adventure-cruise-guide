@@ -1,8 +1,35 @@
-import type { TossAccountSnapshotBody } from "@/api/types";
+import type { TossAccountSnapshot, TossAccountSnapshotBody } from "@/api/types";
 
 export const TOSS_SNAPSHOT_OFF: TossAccountSnapshotBody = { on: false, snapshot: null, sync: null };
 export const TOSS_SNAPSHOT_POLL_MS = 30_000;
 const GRACE_MS = 5 * 60_000;
+
+/** 동기화 한 회차의 평가와 원가만 비교한다. 달러 손익에 현재 환율을 곱하면 매입 당시 원화 원가가 사라진다. */
+export function tossSnapshotValuation(snapshot: TossAccountSnapshot, afterCost: boolean) {
+  const amount = afterCost ? snapshot.net : snapshot.gross;
+  const fx = snapshot.displayFx?.usdKrw;
+  const amountsValid = Number.isFinite(amount.krw) && amount.krw >= 0 && Number.isFinite(amount.usd) && amount.usd >= 0;
+  const hasFx = fx !== undefined && Number.isFinite(fx) && fx > 0;
+  const sum = amountsValid && (amount.usd === 0 || hasFx) ? amount.krw + (amount.usd === 0 ? 0 : amount.usd * fx!) : NaN;
+  const evaluationKrw = Number.isFinite(sum) && Number.isSafeInteger(Math.round(sum)) ? Math.round(sum) : null;
+  const basis = snapshot.costBasis;
+  const complete = basis?.source === "synced-holdings-cost-book" && Number.isFinite(basis.krw) && basis.krw >= 0
+    && Number.isSafeInteger(Math.round(basis.krw)) && Number.isInteger(snapshot.holdingCount) && snapshot.holdingCount >= 0
+    && basis.holdingCount === snapshot.holdingCount && (snapshot.holdingCount !== 0 || basis.krw === 0) && Number.isInteger(basis.estimatedHoldingCount)
+    && basis.estimatedHoldingCount >= 0 && basis.estimatedHoldingCount <= basis.holdingCount;
+  const costKrw = complete ? Math.round(basis.krw) : null;
+  // 보이는 평가금액과 매입금액을 뺀다. 각각 반올림한 표시 숫자와 손익이 일치한다.
+  const profitKrw = evaluationKrw !== null && costKrw !== null ? evaluationKrw - costKrw : null;
+  return {
+    evaluationKrw, costKrw, profitKrw,
+    profitRate: profitKrw !== null && costKrw !== null && costKrw > 0 ? profitKrw / costKrw * 100 : null,
+    estimatedHoldingCount: complete ? basis.estimatedHoldingCount : null,
+    unavailable: evaluationKrw === null
+      ? amount.usd !== 0 && !hasFx ? "환율을 확인하지 못해 계좌 기준 손익을 계산할 수 없습니다. 다음 동기화 후 확인해 주세요."
+        : "계좌 평가금액을 확인하지 못해 손익을 계산할 수 없습니다. 다음 동기화 후 확인해 주세요."
+      : costKrw === null ? "같은 수신 시점의 매입금액을 확인하지 못했습니다. 다음 계좌 동기화 후 확인해 주세요." : null,
+  };
+}
 
 /** 장기 보존 기록도 연도를 생략하지 않는다. 사용자 기기 시간대와 무관하게 한국 시각이다. */
 export function tossSnapshotTime(iso: string): string {

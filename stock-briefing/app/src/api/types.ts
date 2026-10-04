@@ -1214,6 +1214,8 @@ export interface TossAccountSnapshot {
   excludedHoldingCount: number;
   gross: { krw: number; usd: number };
   net: { krw: number; usd: number };
+  /** 같은 동기화에서 확보한 원화 매입금액. 예전 서버·미확보 기록에는 없다. */
+  costBasis?: { krw: number; estimatedHoldingCount: number; holdingCount: number; source: "synced-holdings-cost-book" } | null;
   displayFx: { usdKrw: number; receivedAt: string; source: "app-display-fx"; kind: "reference" } | null;
 }
 export interface TossAccountSnapshotBody {
