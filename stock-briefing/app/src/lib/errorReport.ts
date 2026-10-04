@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import Constants from "expo-constants";
+import { version as appVersion } from "@/releaseVersion.json";
 import * as Updates from "expo-updates";
 import { Platform } from "react-native";
 import { ApiRequestError, createApi } from "@/api/client";
@@ -33,7 +33,7 @@ export function setCurrentScreen(path: string | null): void {
 function meta() {
   return {
     screen,
-    appVersion: Constants.expoConfig?.version ?? null,
+    appVersion,
     updateId: Updates.updateId ?? null,
     platform: Platform.OS,
   };

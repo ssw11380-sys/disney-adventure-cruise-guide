@@ -1,5 +1,5 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
-import Constants from "expo-constants";
+import { version as appVersion } from "@/releaseVersion.json";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
 import { Alert, Pressable, StyleSheet, Text, View, type LayoutChangeEvent, type ScrollView } from "react-native";
@@ -368,7 +368,7 @@ export default function SettingsScreen() {
   const info = (
     <Card>
       <SectionTitle>정보</SectionTitle>
-      <Row label="앱 버전" value={Constants.expoConfig?.version ?? "-"} />
+      <Row label="앱 버전" value={appVersion} />
       <Row label="시세" value="토스증권 · 네이버 증권" />
       <Row label="공시" value="DART · SEC EDGAR" />
       {ux.firstRun && owner ? (

@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupRenders, render } from "./miniRender";
 import type { UseUpdatesReturnType } from "expo-updates";
+import { version as appVersion } from "@/releaseVersion.json";
 
 const h = vi.hoisted(() => ({ alert: vi.fn(), open: vi.fn(), check: vi.fn(), download: vi.fn(), reload: vi.fn(), sdk: {} as Partial<UseUpdatesReturnType> }));
 vi.mock("react-native", () => ({ View: "View", Text: "Text", Alert: {alert:h.alert}, Linking:{openURL:h.open} }));
@@ -36,7 +37,8 @@ afterEach(()=>{cleanupRenders();for(const q of clients)q.clear();clients.length=
 describe("설정 업데이트 화면과 실제 조회 캐시 연결",()=>{
   it("설치 버전과 적용 수정본을 구분하고 수동 확인은 배포 정보를 한 번만 읽는다",async()=>{
     const f=fixture();f.check();await flush();f.r.act(()=>{});
-    expect(f.r.all().some(x=>x.props.label==="설치 버전"&&x.props.value==="1.5.0")).toBe(true);
+    expect(f.r.all().some(x=>x.props.label==="앱 버전"&&x.props.value===appVersion)).toBe(true);
+    expect(f.r.text()).toContain("설치 기반 1.5.0");
     expect(f.r.all().some(x=>x.props.label==="적용 업데이트"&&String(x.props.value).includes("running-"))).toBe(true);
     expect(f.r.text()).toContain("최신 버전입니다");
     expect(f.r.all().some(x=>x.props.label==="확인 시각")).toBe(true);
@@ -85,6 +87,12 @@ describe("설정 업데이트 화면과 실제 조회 캐시 연결",()=>{
     const f=fixture();f.check();await flush();f.r.act(()=>{});
     expect(f.r.text()).toContain("다운로드 주소를 확인하지 못했습니다");expect(f.r.text()).not.toContain("최신 버전입니다");
     expect(f.r.all().some(x=>String(x.props.title).includes("설치 (APK)"))).toBe(false);
+  });
+  it("표시 중인 앱 버전과 같아도 설치 기반보다 높은 APK는 설치를 안내한다",async()=>{
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({...info,version:appVersion,apkUrl:"https://example.test/new.apk"})));
+    const f=fixture();f.check();await flush();f.r.act(()=>{});
+    expect(f.button(`새 버전 ${appVersion} 설치 (APK)`)).toBeDefined();
+    expect(h.alert).toHaveBeenCalledWith(`새 버전 ${appVersion}`,expect.any(String),expect.any(Array));
   });
   it("기존 다운로드가 있어도 새로운 확인 실패 안내는 숨기지 않는다",async()=>{
     h.sdk={...h.sdk,isUpdatePending:true,downloadedUpdate:{type:"new",updateId:"previously-downloaded",createdAt:new Date(),manifest:{id:"previously-downloaded"}} as UseUpdatesReturnType["downloadedUpdate"]};
