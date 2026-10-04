@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Alert, Linking, Text, View } from "react-native";
 import { applyOtaUpdate, checkForAppUpdate, compareVersions, currentVersion, describeRunningUpdate, fetchRelease, updateStatus, type UpdateCheckResult, type UpdateCheckPhase } from "@/lib/appUpdate";
 import { formatDateKo } from "@/lib/format";
+import { version as appVersion } from "@/releaseVersion.json";
 import { font, space, useTheme } from "@/theme";
 import { Badge, Button, Card, Muted, Row, SectionTitle } from "./ui";
 
@@ -98,9 +99,9 @@ export function AppUpdateCard() {
   return <Card>
     <SectionTitle right={busy ? <Badge>{phaseText}</Badge> : newer ? <Badge tone="warn">새 설치 버전 {newer.version}</Badge>
       : pending ? <Badge tone="warn">적용 대기</Badge> : status.badge ? <Badge tone={status.badge.tone}>{status.badge.text}</Badge> : null}>앱 업데이트</SectionTitle>
-    <Row label="설치 버전" value={currentVersion} />
+    <Row label="앱 버전" value={appVersion} />
     <Row label="적용 업데이트" value={running.createdAt ? `${formatDateKo(running.createdAt, true)} · ${running.updateId}` : running.updateId} valueStyle={{ flexShrink: 1, marginLeft: space.s, textAlign: "right" }} />
-    <Muted>설치 버전이 같아도 화면·기능 업데이트는 별도로 적용됩니다. 위 시각은 현재 실행 중인 수정본입니다.</Muted>
+    <Muted>앱 버전은 수정본을 배포할 때마다 올라갑니다. 설치 기반 {currentVersion}은 재설치가 필요한 업데이트 때 바뀝니다.</Muted>
     {checkedAt ? <Row label="확인 시각" value={formatDateKo(checkedAt, true)} /> : null}
     {newer ? <View style={{ gap: space.xs }}>
       <Text style={{ color: t.ink, fontSize: font.small }}>새 설치 버전 {newer.version}{newer.publishedAt ? ` (${formatDateKo(newer.publishedAt)})` : ""}이 있습니다.{newer.notes ? ` ${newer.notes}` : ""}</Text>

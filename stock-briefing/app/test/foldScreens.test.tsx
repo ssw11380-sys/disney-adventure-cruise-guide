@@ -27,6 +27,7 @@ const h = vi.hoisted(() => ({
   flags: { allocationView: true } as Record<string, boolean>,
   dark: false,
   showKrw: false,
+  appVersion: "1.4.0",
   params: {} as Record<string, string>,
   stocks: [] as unknown[],
   /** 잔고를 아직 받는 중 */
@@ -85,6 +86,8 @@ vi.mock("react-native-svg", () => ({ Svg: "Svg", Path: "Path" }));
 vi.mock("@expo/vector-icons/Ionicons", () => ({ default: "Ionicons" }));
 vi.mock("expo-router", () => ({ router: { push: h.push }, Stack: { Screen: "StackScreen" }, useLocalSearchParams: () => h.params, usePathname: () => "/" }));
 vi.mock("expo-constants", () => ({ default: { expoConfig: { version: "1.4.0" } } }));
+// 배치 스냅숏의 버전 자료는 기존과 같게 두고, 배포 버전 연결은 별도로 검사한다.
+vi.mock("@/releaseVersion.json", () => ({ get version() { return h.appVersion; } }));
 vi.mock("@/theme", async () => {
   const tokens = await import("@/tokens");
   return {
@@ -344,6 +347,7 @@ beforeEach(() => {
   h.flags = { allocationView: true };
   h.dark = false;
   h.showKrw = false;
+  h.appVersion = "1.4.0";
   h.params = { id: "t0", market: "KR", kind: "theme", name: "조선", period: "day", rate: "3.42" };
   h.stocks = HOLD;
   h.stocksLoading = false;
@@ -375,6 +379,12 @@ function discoverShots(): Record<string, unknown> {
   out.themeHeat = shot(r);
   return out;
 }
+
+it("설정 정보의 앱 버전은 설치 기반이 아닌 적용된 배포 버전을 따른다", () => {
+  h.appVersion = "1.4.9";
+  const r = render(<SettingsScreen />);
+  expect(r.all().find(n => n.type === "Row" && n.props.label === "앱 버전")?.props.value).toBe("1.4.9");
+});
 
 describe("좁은 창·플래그 꺼짐: 3-42 이전 화면과 똑같다 (기록한 스냅숏과 비교)", () => {
   const screens: [string, () => unknown][] = [
