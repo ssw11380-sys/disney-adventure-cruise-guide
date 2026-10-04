@@ -16,7 +16,7 @@ vi.mock("@/lib/settings", () => ({ STORAGE_KEYS: { apiUrl: "apiUrl" }, defaultAp
 vi.mock("@/widgets/fontScale", () => ({ fontScaleNow: () => 1 }));
 vi.mock("@/widgets/render", () => ({ renderFor: h.render }));
 vi.mock("@/widgets/widgets", () => ({ WIDGET_NAMES: { holdings: "Holdings", asset: "Asset", briefing: "Briefing", market: "Market" } }));
-vi.mock("@/widgets/data", () => ({ loadCachedWidgetData: h.load, pushWidgetData: h.push, withLastGood: h.last, saveWidgetView: h.save, carryBriefingsIntoPayload: h.carry, readPnlMode: h.pnl, readCachedPayload: async () => null, clearWidgetAccountData: vi.fn(), signedOutWidgetData: vi.fn() }));
+vi.mock("@/widgets/data", () => ({ widgetAccountSnapshotGeneration: () => 0, assertWidgetAccountSnapshotGeneration: () => undefined, loadCachedWidgetData: h.load, pushWidgetData: h.push, withLastGood: h.last, saveWidgetView: h.save, carryBriefingsIntoPayload: h.carry, readPnlMode: h.pnl, readCachedPayload: async () => null, clearWidgetAccountData: vi.fn(), signedOutWidgetData: vi.fn() }));
 vi.mock("react-native-android-widget", () => {
   const info = (widgetName: string) => ({ widgetName, widgetId: 17, width: 420, height: 220 });
   const draw = async ({ widgetName, renderWidget }: { widgetName: string; renderWidget: (value: unknown) => unknown }) => {

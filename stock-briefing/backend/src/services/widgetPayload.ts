@@ -4,6 +4,7 @@ import type { MarketIndex } from "../providers/market/indices.js";
 import type { Briefing } from "./briefingService.js";
 import type { MarketSummary } from "./marketSummaryService.js";
 import type { RegisteredWithQuote } from "./stockService.js";
+import type { TossAccountSnapshotBody } from "../routes/admin.js";
 
 /**
  * 홈 화면 위젯 한 번에 필요한 것만 (3-16). 위젯 3종이 이 응답 하나를 같이 쓴다.
@@ -123,6 +124,8 @@ export interface WidgetFeatures {
   numberBasis?: boolean;
   /** 위젯 정보 기준 개선. &ms=1 요청이고 켜졌을 때만 넣어 예전 응답을 보존한다 */
   widgetClarity?: boolean;
+  /** 계좌 기준 합계(account=1 요청만). 꺼짐과 사용 불가를 구분한다. */
+  tossAccountSnapshot?: boolean;
 }
 
 /**
@@ -221,6 +224,8 @@ export interface WidgetPayload {
   brief?: WidgetBrief;
   /** 브리핑 위젯 첫 줄 — 가장 최근 시장 요약의 숫자 (새 앱 &ms=1 만, 플래그 marketSummary 가 켜져 있고 성공한 요약이 있을 때만) */
   ms?: WidgetSummary;
+  /** 같은 동기화의 평가·원금·시각. 종목 시세·분석 자료는 그대로 함께 전달한다. */
+  tossAccount?: TossAccountSnapshotBody;
 }
 
 /** 지수 띠 목록(stale 을 아는 앱용)에서 위젯 줄(또는 판)에 넣을 것만, 정해진 순서로. 값은 그대로 (앱 지수 띠와 같은 숫자가 되게) */
@@ -404,6 +409,7 @@ export function buildWidgetPayload(
     summary?: WidgetSummary | null | undefined;
     /** 지금 앱(&ms=1)이고 numberBasis 가 켜져 있음: 종목에 시세 기준 원문(b)을 넣는다 (3-32). 튜플 q 의 모양은 그대로 */
     basis?: boolean | undefined;
+    tossAccount?: TossAccountSnapshotBody | null | undefined;
   } = {},
 ): WidgetPayload {
   const byCode = new Map(stocks.map((s) => [s.code, s]));
@@ -444,5 +450,6 @@ export function buildWidgetPayload(
   if (extra.accountIds?.length) payload.accountIds = [...extra.accountIds];
   if (extra.brief) payload.brief = extra.brief;
   if (extra.summary) payload.ms = extra.summary;
+  if (extra.tossAccount) payload.tossAccount = extra.tossAccount;
   return payload;
 }

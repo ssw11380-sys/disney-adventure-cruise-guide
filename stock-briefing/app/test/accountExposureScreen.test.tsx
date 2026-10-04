@@ -171,7 +171,7 @@ describe("계좌 상세: 총 평가 카드의 비중 두 줄", () => {
     const inner = kids(card);
     const at = inner.findIndex((n) => n.props.accessible === true && String(n.props.accessibilityLabel).startsWith("비중,"));
     expect(at).toBeGreaterThan(0);
-    expect(rawOf(inner[at - 1]!)).toBe("보유 9종목 합계 · 앱 잔고 화면과 같은 기준");
+    expect(rawOf(inner[at - 1]!)).toBe("보유 9종목 합계 · 작성 당시 종목 시세 기준 추정");
     expect(at).toBe(inner.length - 1);
     const b = block(r);
     expect(b).toHaveLength(1);

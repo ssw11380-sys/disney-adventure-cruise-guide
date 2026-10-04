@@ -87,12 +87,12 @@ export function TossOpenApiCard() {
           <Row label="자동 동기화" value={syncLabel(s.sync)} />
           {s.sync?.lastError ? <Text style={{ color: t.danger, fontSize: font.small }}>자동 동기화 실패: {s.sync.lastError}</Text> : null}
           {rec ? (
-            <Row label="토스 대조" value={<Text style={{ color: rec?.alert ? t.warn : t.ink, fontSize: font.small, fontVariant: ["tabular-nums"] }}>{reconcileLabel(rec, (iso) => formatDateKo(iso, true))}</Text>} />
+            <Row label="시세·계좌 대조" value={<Text style={{ color: rec?.alert ? t.warn : t.ink, fontSize: font.small, fontVariant: ["tabular-nums"] }}>{reconcileLabel(rec, (iso) => formatDateKo(iso, true))}</Text>} />
           ) : null}
           {rec?.alert && (rec.qtyStreak ?? 0) >= 3 ? (
             <Text style={{ color: t.warn, fontSize: font.small }}>보유 수량이 토스와 다른 종목이 {rec.qtyStreak}회 연속 있습니다({rec.last?.qtyMismatch?.join(", ")}). 아래 &quot;지금 계좌 동기화&quot;로 다시 맞춰 보세요.</Text>
           ) : rec?.alert ? (
-            <Text style={{ color: t.warn, fontSize: font.small }}>앱 평가금이 토스 계좌와 {rec.streakOver}회 연속 0.1% 넘게 다릅니다. 앱 시세 출처·시각이 토스와 달라서일 수 있습니다.</Text>
+            <Text style={{ color: t.warn, fontSize: font.small }}>종목 시세 추정액이 토스 계좌와 {rec.streakOver}회 연속 0.1% 넘게 다릅니다. 종목 시세의 출처·시각이 토스 계좌 평가 기준과 달라서일 수 있습니다.</Text>
           ) : null}
           {rec?.week.n ? <Muted>최근 7일 {rec.week.n}회 중 {rec.week.withinPct}%가 0.1% 이내</Muted> : null}
           {s.client?.ipBlocked ? (

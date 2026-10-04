@@ -11,34 +11,36 @@ import { tossSnapshotNotice, tossSnapshotRange, tossSnapshotTime, tossSnapshotVa
 import { useNow } from "@/lib/useNow";
 import { changeColor, font, fontCap, space, touch, useTheme } from "@/theme";
 
-/** 기능이 켜진 주인의 홈에서만 장착한다. 원본 계좌와 앱 시세 합계를 섞지 않는다. */
-export function TossAccountSummary({ children }: { children: React.ReactNode }) {
+/** 계좌 대표 금액은 토스 수신 평가만 사용한다. 시세 추정은 별도로 펼쳐 본다. */
+export function TossAccountSummary({ children, onAllocation }: { children: React.ReactNode; onAllocation?: () => void }) {
   const { valuation } = useLocalSearchParams<{ valuation?: string }>();
   const q = useTossAccountSnapshot();
   const { afterCost, showKrw } = useSettings();
   const now = useNow(30_000);
   const denied = q.error instanceof ApiRequestError && (q.error.status === 401 || q.error.status === 403);
   return <TossAccountSummaryView body={denied ? undefined : q.data} failed={q.isError} afterCost={afterCost} showKrw={showKrw} now={now}
-    requestedView={valuation === "live" ? "live" : undefined}>{children}</TossAccountSummaryView>;
+    onAllocation={denied ? undefined : onAllocation}
+    requestedView={valuation === "live" || valuation === "account" ? valuation : undefined}>{denied ? null : children}</TossAccountSummaryView>;
 }
 
-export function TossAccountSummaryView({ body, failed, afterCost, showKrw, now, children, requestedView }: {
+export function TossAccountSummaryView({ body, failed, afterCost, showKrw, now, children, requestedView, onAllocation }: {
   body: TossAccountSnapshotBody | undefined;
   failed: boolean;
   afterCost: boolean;
   showKrw: boolean;
   now: number;
   children: React.ReactNode;
-  requestedView?: "live";
+  requestedView?: "live" | "account";
+  onAllocation?: () => void;
 }) {
   const t = useTheme();
   const navigation = useNavigationContainerRef();
-  const [view, setView] = useState<"toss" | "live">(requestedView ?? "toss");
+  const [estimateOpen, setEstimateOpen] = useState(false);
   const [lastRequest, setLastRequest] = useState(requestedView);
-  // 새 링크의 기준을 그리는 순간 반영해 이전 탭의 금액이 한 번 나타나지 않게 한다.
+  // 새 계좌 링크와 예전 위젯의 live 링크도 계좌 대표 금액으로 돌아온다.
   if (requestedView !== lastRequest) {
     setLastRequest(requestedView);
-    if (requestedView) setView(requestedView);
+    if (requestedView) setEstimateOpen(false);
   }
   useEffect(() => {
     if (!requestedView) return;
@@ -58,18 +60,10 @@ export function TossAccountSummaryView({ body, failed, afterCost, showKrw, now, 
   const notice = tossSnapshotNotice(body, failed, now);
   const amount = snap ? (afterCost ? snap.net : snap.gross) : null;
   const valuation = snap ? tossSnapshotValuation(snap, afterCost) : null;
+  // 서버에서 기능을 끄거나 이전 서버에 연결하면 기존 화면을 유지한다.
+  if (body?.on === false && !failed) return <>{children}</>;
   return (
     <View style={{ backgroundColor: t.surface }}>
-      <View style={styles.tabs}>
-        {(["toss", "live"] as const).map((key) => {
-          const label = key === "toss" ? "토스 계좌" : "실시간 평가";
-          return <Pressable key={key} accessibilityRole="tab" accessibilityLabel={`${label} 보기`} accessibilityState={{ selected: view === key }}
-            onPress={() => setView(key)} style={[styles.tab, { borderBottomColor: view === key ? t.accent : t.line }]}>
-            <Text maxFontSizeMultiplier={fontCap.chrome} style={{ color: view === key ? t.accent : t.muted, fontSize: font.body, fontWeight: "700" }}>{label}</Text>
-          </Pressable>;
-        })}
-      </View>
-      {view === "toss" ? (
         <View style={styles.body}>
           <Text accessibilityRole="header" style={{ color: t.ink, fontSize: font.body, fontWeight: "700" }}>토스 주식 평가금액</Text>
           {notice ? <Text style={{ color: failed || snap ? t.warn : t.muted, fontSize: font.small }}>{notice}</Text> : null}
@@ -95,15 +89,26 @@ export function TossAccountSummaryView({ body, failed, afterCost, showKrw, now, 
             {showKrw && amount.usd !== 0 ? valuation?.evaluationKrw !== null && snap.displayFx ?
               <Text style={{ color: t.muted, fontSize: font.tiny }}>앱 표시 환율 {formatNumber(snap.displayFx.usdKrw, 2)}원 · {tossSnapshotTime(snap.displayFx.receivedAt)} 확인. 토스 앱의 최종 원화 합계와 다를 수 있습니다.</Text>
               : <Text style={{ color: t.muted, fontSize: font.small }}>환율을 확인하지 못해 통화별 원본 금액만 표시합니다.</Text> : null}
-            <Text style={{ color: t.muted, fontSize: font.small }}>토스 계좌에서 받은 시세 기준입니다. 실시간 평가는 시간외 시세를 포함해 손익이 다를 수 있습니다.</Text>
+            <Text style={{ color: t.muted, fontSize: font.small }}>계좌 대표 금액은 토스에서 받은 평가 기준입니다. 시세 갱신으로 이 계좌 금액을 다시 계산하지 않습니다.</Text>
             <Text style={{ color: t.sub, fontSize: font.small }}>전체 연동 {snap.accountCount}개 계좌 · 보유 {snap.holdingCount}종목 · 현금·예수금 제외</Text>
             {snap.excludedHoldingCount > 0 ? <Text style={{ color: t.sub, fontSize: font.small }}>앱 동기화에서 제외한 {snap.excludedHoldingCount}종목도 포함합니다.</Text> : null}
             <Text style={{ color: t.muted, fontSize: font.tiny }}>토스 계좌 수신: {tossSnapshotRange(snap.receivedFrom, snap.receivedAt)} (한국 시각). 시세 기준 시각과는 다릅니다.</Text>
-            <Text style={{ color: t.muted, fontSize: font.tiny }}>아래 종목·비중·위젯·보고서는 앱 시세 기준입니다. 토스 계좌 평가와 범위·금액이 다를 수 있습니다.</Text>
+            <Text style={{ color: t.muted, fontSize: font.tiny }}>아래 종목·비중은 종목 시세 기준 추정값입니다. 보고서는 작성 당시 시세 기준이며 계좌 금액과 다를 수 있습니다.</Text>
           </> : null}
+          {onAllocation ? <Pressable accessibilityRole="button" accessibilityLabel="종목 시세 기준 비중 보기" onPress={onAllocation} style={styles.action}>
+            <Text style={{ color: t.accent, fontSize: font.small }}>종목 비중 보기 · 시세 기준</Text>
+          </Pressable> : null}
         </View>
-      ) : <View style={styles.liveNote}><Text style={{ color: t.muted, fontSize: font.small }}>앱에 등록한 보유 종목을 현재 시세로 평가합니다. 시간외 시세를 포함하므로 토스와 비교할 때는 ‘토스 계좌’를 확인해 주세요.</Text></View>}
-      {view === "live" || !snap ? children : null}
+      {children ? <View style={{ borderTopColor: t.line, borderTopWidth: StyleSheet.hairlineWidth }}>
+        <Pressable accessibilityRole="button" accessibilityLabel={estimateOpen ? "시간외 시세 기준 추정 접기" : "시간외 시세 기준 추정 보기"}
+          accessibilityState={{ expanded: estimateOpen }} onPress={() => setEstimateOpen(!estimateOpen)} style={styles.estimateButton}>
+          <Text maxFontSizeMultiplier={fontCap.chrome} style={{ color: t.sub, fontSize: font.small }}>{estimateOpen ? "시간외 시세 기준 추정 접기" : "시간외 시세 기준 추정 보기"}</Text>
+        </Pressable>
+        {estimateOpen ? <>
+          <View style={styles.liveNote}><Text style={{ color: t.warn, fontSize: font.small }}>아래는 시간외 시세를 포함해 다시 계산한 추정 평가입니다. 토스 계좌의 평가손익과 다를 수 있습니다.</Text></View>
+          {children}
+        </> : null}
+      </View> : null}
     </View>
   );
 }
@@ -117,8 +122,8 @@ function Amount({ label, value }: { label: string; value: string }) {
 }
 
 const styles = StyleSheet.create({
-  tabs: { flexDirection: "row", flexWrap: "wrap", paddingHorizontal: space.lg, gap: space.lg },
-  tab: { minHeight: touch.min, justifyContent: "center", paddingVertical: space.sm, borderBottomWidth: StyleSheet.hairlineWidth },
+  action: { minHeight: touch.min, justifyContent: "center", paddingVertical: space.sm, alignSelf: "flex-start" },
+  estimateButton: { minHeight: touch.min, justifyContent: "center", paddingHorizontal: space.lg, paddingVertical: space.sm },
   body: { paddingHorizontal: space.lg, paddingVertical: space.md, gap: space.s },
   amounts: { flexDirection: "row", flexWrap: "wrap", gap: space.xl },
   amount: { gap: space.xxs, flexShrink: 1 },

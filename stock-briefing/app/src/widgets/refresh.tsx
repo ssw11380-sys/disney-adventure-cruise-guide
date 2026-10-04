@@ -1,9 +1,9 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
-import type { LatestBriefing, RegisteredWithQuote } from "@/api/types";
+import type { LatestBriefing, RegisteredWithQuote, TossAccountSnapshotBody } from "@/api/types";
 import { defaultApiUrl, STORAGE_KEYS } from "@/lib/settings";
 import { assertSessionIdentity, sessionIdentityVersion } from "@/lib/session";
-import { carryBriefingsIntoPayload, loadCachedWidgetData, pushWidgetData, readCachedPayload, readPnlMode, saveWidgetView, withLastGood } from "./data";
+import { assertWidgetAccountSnapshotGeneration, widgetAccountSnapshotGeneration, carryBriefingsIntoPayload, loadCachedWidgetData, pushWidgetData, readCachedPayload, readPnlMode, saveWidgetView, withLastGood } from "./data";
 import { fontScaleNow } from "./fontScale";
 import type { WidgetFeatures, WidgetIndex, WidgetMarket } from "./payload";
 import { drawWidgetsForIdentity } from "./redraw";
@@ -122,7 +122,9 @@ export async function refreshWidgets({
   indices,
   board,
   rowKrw,
+  tossAccount,
 }: {
+  tossAccount?: { at: number; body: TossAccountSnapshotBody } | null;
   stocks: RegisteredWithQuote[];
   /**
    * 잔고를 받은 시각 (앱: 잔고 쿼리의 react-query dataUpdatedAt, 백그라운드 작업: 위젯 조회 시각). 위젯이 이미 가진 잔고와 어느 쪽이 새 데이터인지
@@ -153,6 +155,7 @@ export async function refreshWidgets({
   /** 지수·환율 위젯 판 9개 (앱 지수 띠 또는 백그라운드 작업이 받은 판, 받은 시각과 함께). 위젯이 받아 둔 것과 견줘 새것을 쓴다 */
   board?: { at: number; list: WidgetIndex[] } | null;
 }): Promise<void> {
+  const accountGeneration = widgetAccountSnapshotGeneration();
   const identity = sessionIdentityVersion();
   if (Platform.OS !== "android") return;
   try {
@@ -161,8 +164,10 @@ export async function refreshWidgets({
     const fetchedAt = dataAt !== undefined && dataAt > 0 ? Math.min(dataAt, now) : now;
     // 시세가 빠진 종목은 마지막 값으로 채우고(위젯이 직접 받을 때와 같은 규칙), 다음 실패 대비로 적어 둔다 (더 새 마지막 잔고는 덮지 않는다)
     const { stocks, filled } = given ? { stocks: raw, filled: given } : await withLastGood(raw, fetchedAt);
+    assertWidgetAccountSnapshotGeneration(accountGeneration);
     assertSessionIdentity(identity);
     const push = {
+      accountGeneration,
       stocks,
       filled,
       showKrw,
@@ -173,14 +178,17 @@ export async function refreshWidgets({
       features,
       indices,
       board,
+      tossAccount,
       ...(rowKrw !== undefined ? { rowKrw } : {}),
     };
     let data = await pushWidgetData({ ...push, briefings });
+    assertWidgetAccountSnapshotGeneration(accountGeneration);
     assertSessionIdentity(identity);
     // 앱이 받은 최신 브리핑 (위젯 검토 7번): 위젯이 실제로 쓰는 플래그(위에서 앱·위젯 중 늦게 받은 쪽으로 고름)가 다듬은 모습일 때만.
     // 꺼져 있으면 예전처럼 브리핑 위젯은 백그라운드 작업·위젯이 받은 것만 그리고, 저장해 둔 브리핑도 바꾸지 않는다.
     // 켜져 있으면 브리핑까지 넣어 다시 적는다 (같은 입력이라 지수·플래그·칩은 첫 번과 같게 고른다)
     const fromApp = !briefings && data.features.polish ? await appBriefingsToDraw(appBriefings, raw) : null;
+    assertWidgetAccountSnapshotGeneration(accountGeneration);
     assertSessionIdentity(identity);
     if (fromApp && appBriefings) {
       data = await pushWidgetData({ ...push, briefings: fromApp });
@@ -190,6 +198,7 @@ export async function refreshWidgets({
       assertSessionIdentity(identity);
     }
     const pnlMode = await readPnlMode();
+    assertWidgetAccountSnapshotGeneration(accountGeneration);
     assertSessionIdentity(identity);
     const fontScale = fontScaleNow();
     // 그리는 시각은 지금 ('지연'·칩 만료·오늘 날짜 판단) — 잔고를 받은 시각이 아니다

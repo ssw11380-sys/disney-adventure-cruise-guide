@@ -6,7 +6,7 @@ vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem
 vi.mock("expo-router", () => ({ useIsFocused: () => true }));
 vi.mock("react-native", () => ({ Platform: { OS: "android" }, AppState: { currentState: "active", addEventListener: () => ({ remove() {} }) } }));
 vi.mock("expo-constants", () => ({ default: { expoConfig: { extra: {} } } }));
-const { tossAccountSnapshotQuery, tossSnapshotCredentialScope } = await import("@/api/hooks");
+const { tossAccountSnapshotQuery, tossAccountSnapshotCacheQuery, tossSnapshotCredentialScope } = await import("@/api/hooks");
 const { ApiRequestError, createApi } = await import("@/api/client");
 const { resetSessionForTests, saveSession, markAccountsSeen } = await import("@/lib/session");
 const API = "https://server.test";
@@ -16,6 +16,24 @@ beforeEach(() => resetSessionForTests());
 afterEach(() => { resetSessionForTests(); vi.unstubAllGlobals(); });
 
 describe("토스 계좌 저장 기록 조회", () => {
+  it("위젯 캐시 관찰자는 같은 키의 변화를 받지만 마운트·무효화·재연결·폴링 조회를 하지 않는다", async () => {
+    const api = { tossAccountSnapshot: vi.fn(async () => BODY) };
+    const active = tossAccountSnapshotQuery(api, API, "owner:1");
+    const passive = tossAccountSnapshotCacheQuery(active);
+    expect(passive.queryKey).toEqual(active.queryKey);
+    expect(passive).toMatchObject({ enabled: false, subscribed: true, refetchInterval: false, refetchOnMount: false, refetchOnWindowFocus: false, refetchOnReconnect: false });
+    const qc = new QueryClient();
+    const observer = new QueryObserver(qc, passive);
+    const states: unknown[] = [];
+    const off = observer.subscribe((state) => states.push(state.data));
+    await qc.invalidateQueries({ queryKey: active.queryKey });
+    qc.setQueryData(active.queryKey, BODY);
+    await Promise.resolve();
+    expect(observer.getCurrentResult().data).toEqual(BODY);
+    expect(states).toContainEqual(BODY);
+    expect(api.tossAccountSnapshot).not.toHaveBeenCalled();
+    off(); qc.clear();
+  });
   it("30초 간격·화면 밖 구독 중지·재시도 없음이며 조회는 동기화를 실행하지 않는다", async () => {
     const api = { tossAccountSnapshot: vi.fn(async () => BODY) };
     const o = tossAccountSnapshotQuery(api, API, "owner:1");

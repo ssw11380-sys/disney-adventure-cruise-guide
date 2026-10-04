@@ -237,9 +237,16 @@ describe("토스 원본 계좌 평가 보존·실패·조회", () => {
       const response = await app.inject({ url, headers });
       expect(response.statusCode).toBe(200);
       expect(response.json()).toMatchObject({ on: true, snapshot: { source: "toss-openapi", gross: { krw: 15.125 } }, sync: { lastError: null } });
+      const widget = await app.inject({ url: "/api/widget?account=1", headers });
+      expect(widget.statusCode).toBe(200);
+      expect(widget.json().tossAccount).toEqual(response.json());
+      expect(widget.json().features.tossAccountSnapshot).toBe(true);
       expect(f.calls).toEqual([]);
       await app.inject({ method: "PUT", url: "/api/admin/features", headers, payload: { tossAccountSnapshot: false } });
       expect((await app.inject({ url, headers })).json()).toEqual({ on: false, snapshot: null, sync: null });
+      const widgetOff = (await app.inject({ url: "/api/widget?account=1", headers })).json();
+      expect(widgetOff.tossAccount).toEqual({ on: false, snapshot: null, sync: null });
+      expect(widgetOff.features.tossAccountSnapshot).toBe(false);
       expect(f.calls).toEqual([]);
     } finally { await app.close(); await f.db.destroy(); }
   });

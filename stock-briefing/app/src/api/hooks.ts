@@ -324,15 +324,29 @@ export function tossSnapshotCredentialScope(client: object, apiUrl: string, apiT
   tossCredentialScopes.set(client, next);
   return next.id;
 }
-/** 켜진 주인 화면에서만 호출한다. 종목 조회·보고서 생성과 독립된 서버 저장 기록 조회다. */
-export function useTossAccountSnapshot() {
+/** 화면과 위젯 관찰자가 같은 서버·세션·인증 영역만 구독한다. */
+function useTossAccountSnapshotOptions() {
   const api = useApi();
   const qc = useQueryClient();
   const { apiUrl, apiToken } = useSettings();
   useSyncExternalStore(subscribeSession, sessionVersion, sessionVersion);
   const credentialScope = tossSnapshotCredentialScope(qc, apiUrl, apiToken);
   const scope = `${sessionFor(apiUrl)?.user.id ?? "legacy"}:${sessionIdentityVersion()}:${credentialScope}`;
-  return useQuery(tossAccountSnapshotQuery(api, apiUrl, scope, useScreenFocused()));
+  return tossAccountSnapshotQuery(api, apiUrl, scope);
+}
+
+/** 켜진 주인 화면에서만 호출한다. 종목 조회·보고서 생성과 독립된 서버 저장 기록 조회다. */
+export function useTossAccountSnapshot() {
+  return useQuery({ ...useTossAccountSnapshotOptions(), subscribed: useScreenFocused() });
+}
+
+/** 앱 맨 위 위젯 연결은 화면이 받은 캐시만 관찰한다. 추가 조회·폴링·무효화 재요청 없음. */
+export function tossAccountSnapshotCacheQuery(o: ReturnType<typeof tossAccountSnapshotQuery>) {
+  return { ...o, enabled: false as const, subscribed: true, refetchInterval: false as const,
+    refetchOnMount: false as const, refetchOnWindowFocus: false as const, refetchOnReconnect: false as const };
+}
+export function useTossAccountSnapshotCache() {
+  return useQuery(tossAccountSnapshotCacheQuery(useTossAccountSnapshotOptions()));
 }
 
 /**

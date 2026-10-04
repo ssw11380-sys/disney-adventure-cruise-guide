@@ -112,7 +112,7 @@ describe("갱신 주기: 연장 세션이 열려 있으면 장중처럼 15분", 
 
   it("위젯 스스로 갱신: 16분 전 프리마켓 응답은 다시 쓰지 않고 서버에 묻는다 (예전: 2시간 재사용)", async () => {
     const payload = { v: 1, market: preChip(), stocks: [], briefings: [], latestIds: [], features: { widgetExtended: true } };
-    store.set("widget.payload", JSON.stringify({ at: NOW - 16 * 60_000, apiUrl: API, path: "/api/widget?indices=1&sessions=1&ui=2&ms=1", etag: '"a"', body: payload }));
+    store.set("widget.payload", JSON.stringify({ at: NOW - 16 * 60_000, apiUrl: API, path: "/api/widget?indices=1&sessions=1&ui=2&ms=1&account=1", etag: '"a"', body: payload }));
     const urls: string[] = [];
     vi.stubGlobal("fetch", async (url: string) => {
       urls.push(url);
@@ -200,7 +200,7 @@ describe("통합 검증 지적: 칩과 플래그가 서로 다른 기록에서 �
     latestIds: [],
     features: { widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetExtended: extended },
   });
-  const cache = (atMs: number, b: unknown) => store.set("widget.payload", JSON.stringify({ at: atMs, apiUrl: API, path: "/api/widget?indices=1&sessions=1&ui=2&ms=1", etag: '"x"', body: b }));
+  const cache = (atMs: number, b: unknown) => store.set("widget.payload", JSON.stringify({ at: atMs, apiUrl: API, path: "/api/widget?indices=1&sessions=1&ui=2&ms=1&account=1", etag: '"x"', body: b }));
   const flags = (atMs: number, extended: boolean) => ({ at: atMs, flags: widgetFeatures({ widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetExtended: extended }) });
 
   it("칩은 더 새 앱 잔고의 것(ext 켜짐), 플래그는 더 늦게 받은 응답의 것(꺼짐) → ext 를 뗀다", async () => {

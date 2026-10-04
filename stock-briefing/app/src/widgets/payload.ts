@@ -1,4 +1,4 @@
-import type { LatestBriefing, Quote, QuoteSession, RegisteredWithQuote } from "@/api/types";
+import type { LatestBriefing, Quote, QuoteSession, RegisteredWithQuote, TossAccountSnapshotBody } from "@/api/types";
 import { featureOn } from "@/lib/features";
 
 /**
@@ -94,6 +94,8 @@ export interface WidgetIndex {
 
 export interface WidgetPayload {
   v: 1;
+  /** 같은 위젯 응답에 실린 토스 계좌 수신 기록. 새 앱의 account=1 요청만 받는다. */
+  tossAccount?: TossAccountSnapshotBody;
   market: WidgetMarket | null;
   stocks: WidgetStock[];
   briefings: WidgetBriefing[];
@@ -115,6 +117,8 @@ export interface WidgetPayload {
 
 /** 위젯 기능 플래그 (서버 featureService 의 widgetPnlToggle·widgetIndexLine·widgetMarket·widgetPolish·widgetExtended·widgetFoldFit·marketSummary) */
 export interface WidgetFeatures {
+  /** 계좌 합계·누적 손익은 토스 동기화 기록으로 표시한다. */
+  tossAccount?: boolean;
   /** 합계 옆 손익을 눌러 누적·당일 전환 */
   pnlToggle: boolean;
   /** 합계 아래 지수·환율 한 줄 */
@@ -163,7 +167,22 @@ export function widgetFeatures(features: Record<string, boolean> | null | undefi
     ...(featureOn(flags, "marketSummary", false) ? { marketSummary: true } : {}),
     ...(featureOn(flags, "numberBasis", false) ? { basis: true } : {}),
     ...(featureOn(flags, "widgetClarity", false) ? { clarity: true } : {}),
+    ...(featureOn(flags, "tossAccountSnapshot", false) ? { tossAccount: true } : {}),
   };
+}
+
+/** 손상된 저장값도 시세 합계로 대체하지 않는다. 계좌 기능은 유지하고 확인 필요로 그린다. */
+export function cleanTossAccount(value: unknown): TossAccountSnapshotBody | undefined {
+  if (!value || typeof value !== "object" || typeof (value as TossAccountSnapshotBody).on !== "boolean") return undefined;
+  const body = value as TossAccountSnapshotBody;
+  if (!body.on) return { on: false, snapshot: null, sync: null };
+  const s = body.snapshot;
+  const amount = (a: unknown) => !!a && typeof a === "object" && Number.isFinite((a as { krw: number }).krw) && (a as { krw: number }).krw >= 0 && Number.isFinite((a as { usd: number }).usd) && (a as { usd: number }).usd >= 0;
+  const snapshot = s && s.source === "toss-openapi" && s.scope === "all-toss-stock-holdings" && s.excludesCash === true && s.includesExcludedHoldings === true
+    && typeof s.receivedAt === "string" && Number.isFinite(Date.parse(s.receivedAt)) && amount(s.gross) && amount(s.net)
+    && Number.isInteger(s.holdingCount) && s.holdingCount >= 0 ? s : null;
+  const sync = body.sync && typeof body.sync.enabled === "boolean" && Number.isFinite(body.sync.intervalMin) && Number.isFinite(body.sync.idleIntervalMin) ? body.sync : null;
+  return { on: true, snapshot, sync };
 }
 
 /** 위젯 지수 줄에 넣는 항목과 순서 (서버 widgetPayload.ts 의 WIDGET_INDEX_CODES 와 같다) */
@@ -266,6 +285,7 @@ export function cleanSummary(v: unknown): WidgetSummary | null {
 const rate = (profit: number, cost: number) => (cost > 0 ? Math.round((profit / cost) * 10000) / 100 : 0);
 
 export function fromPayload(p: WidgetPayload): {
+  tossAccount?: TossAccountSnapshotBody;
   stocks: RegisteredWithQuote[];
   briefings: LatestBriefing[];
   market: WidgetMarket | null;
@@ -304,7 +324,8 @@ export function fromPayload(p: WidgetPayload): {
   }));
   const features = widgetFeatures(p.features);
   const summary = cleanSummary(p.ms);
-  return { stocks, briefings, market: gateExtended(p.market, features), indices: cleanIndices(p.indices), board: cleanIndices(p.board), features, brief: cleanBrief(p.brief), ...(summary ? { summary } : {}) };
+  const tossAccount = cleanTossAccount(p.tossAccount);
+  return { stocks, briefings, market: gateExtended(p.market, features), indices: cleanIndices(p.indices), board: cleanIndices(p.board), features, brief: cleanBrief(p.brief), ...(summary ? { summary } : {}), ...(tossAccount ? { tossAccount } : {}) };
 }
 
 /**

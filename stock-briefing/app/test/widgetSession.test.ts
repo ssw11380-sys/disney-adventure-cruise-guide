@@ -137,7 +137,7 @@ describe("로그인이 필요하면 위젯이 적어 둔 개인 데이터로 그
   const seed = () => {
     h.store.set("widget.lastStocks", JSON.stringify({ at: 1, apiUrl: SERVER, accountUserId: 1, stocks: [ownerRow] }));
     h.store.set("widget.view", JSON.stringify({ apiUrl: SERVER, accountUserId: 1, view: { stocks: [ownerRow], briefings: [], fetchedAt: 1, error: null, filled: [], market: null, indices: null, board: null, features: {} } }));
-    h.store.set("widget.payload", JSON.stringify({ at: 1, apiUrl: SERVER, accountUserId: 1, path: "/api/widget?indices=1&sessions=1&ui=2&ms=1", etag: null, body: { v: 1, stocks: [ownerRow], briefings: [] } }));
+    h.store.set("widget.payload", JSON.stringify({ at: 1, apiUrl: SERVER, accountUserId: 1, path: "/api/widget?indices=1&sessions=1&ui=2&ms=1&account=1", etag: null, body: { v: 1, stocks: [ownerRow], briefings: [] } }));
   };
   // 로그인한 주인 아닌 계정에는 '로그인 필요'가 아니라 '개인 종목 기능은 준비 중' (검증 지적 — 이미 로그인해 있는데 로그인하라고 했다)
   const cases: [string, () => Response, "login" | "personal", string][] = [

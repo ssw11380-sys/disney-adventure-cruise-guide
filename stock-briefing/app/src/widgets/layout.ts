@@ -93,7 +93,7 @@ export function clarityLine(candidates: readonly string[], width: number, scale:
 
 export interface ClarityAssetLine { kind: "warning" | "basis" | "value" | "time" | "pnl"; text: string; font: number; height: number }
 /** 작은 자산 카드: 경고/평가 기준 → 금액 → 시세 시각 → 손익 순. 경고를 지우고 금액을 남기지 않는다. */
-export function planClarityAsset(i: { width: number; height: number; scale: number; total: string | null; warning: string | null; time: string | null; pnl: string | null }): ClarityAssetLine[] {
+export function planClarityAsset(i: { width: number; height: number; scale: number; total: string | null; warning: string | null; time: string | null; pnl: string | null; basis?: string[]; prioritizePnl?: boolean; empty?: string[] }): ClarityAssetLine[] {
   const width = Math.max(0, i.width - space.sm * 2);
   let room = Math.max(0, i.height - space.sm * 2);
   const lines: ClarityAssetLine[] = [];
@@ -102,13 +102,14 @@ export function planClarityAsset(i: { width: number; height: number; scale: numb
     if (!text || height > room) return false;
     lines.push({ kind, text, font, height }); room -= height; return true;
   };
-  const lead = i.warning ? clarityLine([i.warning, "금액 주의", "주의"], width, i.scale) : clarityLine(["앱 시세 평가", "앱 시세", "시세"], width, i.scale);
+  const lead = i.warning ? clarityLine([i.warning, "금액 주의", "주의"], width, i.scale) : clarityLine(i.basis ?? ["앱 시세 평가", "앱 시세", "시세"], width, i.scale);
   add(i.warning ? "warning" : "basis", lead, 12);
   const valueFont = i.total ? readableFont(i.total, width, i.scale) : null;
   if (i.total && valueFont !== null) add("value", i.total, valueFont);
-  else add("value", clarityLine(["앱에서 금액 확인", "앱에서 확인", "확인"], width, i.scale), 12);
+  else add("value", clarityLine(i.empty ?? ["앱에서 금액 확인", "앱에서 확인", "확인"], width, i.scale), 12);
+  if (i.prioritizePnl && i.pnl && clarityLine([i.pnl], width, i.scale)) add("pnl", i.pnl, 12);
   if (i.time && clarityLine([i.time], width, i.scale, 11)) add("time", i.time, 11);
-  if (i.pnl && clarityLine([i.pnl], width, i.scale)) add("pnl", i.pnl, 12);
+  if (!i.prioritizePnl && i.pnl && clarityLine([i.pnl], width, i.scale)) add("pnl", i.pnl, 12);
   return lines;
 }
 

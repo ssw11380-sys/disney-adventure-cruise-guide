@@ -90,7 +90,7 @@ const words = (r: unknown) =>
 const FAIL = "갱신 실패 · 연결 안 됨";
 
 const API = "https://server.test";
-const WIDGET_URL = `${API}/api/widget?indices=1&sessions=1&ui=2&ms=1`;
+const WIDGET_URL = `${API}/api/widget?indices=1&sessions=1&ui=2&ms=1&account=1`;
 const BOARD_URL = `${WIDGET_URL}&board=1`;
 const BOX = { width: 420, height: 260 };
 /** 2026-09-26(토) KST 시각 — 두 시장 모두 휴장 (다음 개장 월 08:00) */

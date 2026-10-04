@@ -1,6 +1,7 @@
 import React from "react";
 import { FlexWidget, ListWidget, TextWidget, type FlexWidgetStyle } from "react-native-android-widget";
-import type { Currency, LatestBriefing, RegisteredWithQuote } from "@/api/types";
+import type { Currency, LatestBriefing, RegisteredWithQuote, TossAccountSnapshotBody } from "@/api/types";
+import { tossSnapshotNotice, tossSnapshotValuation } from "@/lib/tossAccountSnapshot";
 import { formatPct, formatPrice, shownSign, toDisplay } from "@/lib/format";
 import { evalView } from "@/lib/liveTick";
 import { fxOf, totals } from "@/lib/portfolio";
@@ -201,6 +202,8 @@ function holdingsEmptyError(error: string): string {
 }
 
 type StockWidgetProps = {
+  /** undefined는 기존 기능, null은 계좌 기준은 켰지만 아직 수신하지 못한 상태다. */
+  tossAccount?: TossAccountSnapshotBody | null;
   stocks: RegisteredWithQuote[];
   showKrw: boolean;
   afterCost?: boolean;
@@ -717,7 +720,7 @@ function pairs<T>(xs: readonly T[]): [T, T | null][] {
 }
 
 export function HoldingsWidget(props: StockWidgetProps & WidgetFrame & HoldingsExtra) {
-  if (props.clarity) return <ClarityHoldingsWidget {...props} />;
+  if (props.clarity || props.tossAccount !== undefined) return <ClarityHoldingsWidget {...props} />;
   // 다듬은 모습 (widgetPolish). 꺼져 있으면 아래 예전 모습 그대로
   if (props.polish) return <PolishedHoldingsWidget {...props} />;
   const { stocks, showKrw, afterCost = true, fetchedAt, error, filled = [], now, market: given } = props;
@@ -941,7 +944,7 @@ export function BriefingWidget(
 }
 
 export function AssetWidget(props: StockWidgetProps & WidgetFrame) {
-  if (props.clarity) return <ClarityAssetWidget {...props} />;
+  if (props.clarity || props.tossAccount !== undefined) return <ClarityAssetWidget {...props} />;
   const { stocks, showKrw, afterCost = true, fetchedAt, error, filled = [], now, market: given } = props;
   const c = props.palette ?? WIDGET_COLORS;
   const width = dp(props.width, DEFAULT_ASSET.width);
@@ -1019,6 +1022,7 @@ export function AssetWidget(props: StockWidgetProps & WidgetFrame) {
 
 /** 앱도 같은 시세 평가 탭을 열어 서로 다른 금액을 같은 것으로 보이지 않게 한다. */
 export const LIVE_VALUATION_URI = `${HOME_URI}?valuation=live`;
+export const ACCOUNT_VALUATION_URI = `${HOME_URI}?valuation=account`;
 export const widgetSettingsUri = (id?: number) => `${HOME_URI}widget-settings${id === undefined ? "" : `?id=${id}`}`;
 
 /** 새 보기의 공통 머리. 설정·새로고침은 독립된 48dp 칸이다. */
@@ -1040,28 +1044,43 @@ export function ClarityWidgetHeader({ title, shortTitle, width, scale, widgetId,
 }
 
 function clarityStockInfo(props: StockWidgetProps) {
-  const total = totals(props.stocks, props.showKrw, props.afterCost ?? true);
-  const info = widgetClarity(props.stocks, total, props.market ?? null, props.now, props.filled ?? []);
+  const accountMode = props.tossAccount !== undefined;
+  const quoteTotal = totals(props.stocks, props.showKrw, props.afterCost ?? true);
+  const info = widgetClarity(props.stocks, quoteTotal, props.market ?? null, props.now, props.filled ?? []);
   const failure = failureText(props.error);
-  const warning = sentence([failure, info.partial ? "부분 평가" : null, info.staleCount ? "시세 지연" : null]);
-  const quoteTime = info.earliestQuoteAt === null ? "시세 시각 미확인" : widgetTimeVariants(info.earliestQuoteAt, props.now, "quote")[0]!;
+  const snapshot = props.tossAccount?.on ? props.tossAccount.snapshot : null;
+  const valuation = snapshot ? tossSnapshotValuation(snapshot, props.afterCost ?? true) : null;
+  const hasForeign = snapshot ? (props.afterCost === false ? snapshot.gross.usd : snapshot.net.usd) !== 0 : false;
+  const originalCurrency = accountMode && !props.showKrw && hasForeign;
+  const total = accountMode ? !originalCurrency && valuation?.evaluationKrw !== null && valuation?.evaluationKrw !== undefined
+    ? { value: valuation.evaluationKrw, profit: valuation.profitKrw ?? 0, day: 0, currency: "KRW" as const } : null : quoteTotal;
+  const profitKnown = accountMode ? valuation?.profitKrw !== null && valuation?.profitKrw !== undefined : !!total;
+  const accountNotice = snapshot ? tossSnapshotNotice(props.tossAccount!, !!props.error, props.now) : null;
+  const warning = accountMode ? sentence([failure, !total && !originalCurrency ? "계좌 확인 필요" : !profitKnown && !originalCurrency ? "손익 확인 필요" : null,
+    accountNotice ? "계좌 갱신 확인" : null, !originalCurrency && valuation?.estimatedHoldingCount ? "매입금액 일부 추정" : null])
+    : sentence([failure, info.partial ? "부분 평가" : null, info.staleCount ? "시세 지연" : null]);
+  const quoteTime = accountMode ? snapshot ? widgetTimeVariants(Date.parse(snapshot.receivedAt), props.now, "received")[0]!.replace(/^조회/, "계좌 수신") : "계좌 수신 시각 미확인"
+    : info.earliestQuoteAt === null ? "시세 시각 미확인" : widgetTimeVariants(info.earliestQuoteAt, props.now, "quote")[0]!;
   const received = widgetTimeVariants(props.fetchedAt, props.now, "received")[0]!;
   const basis = widgetBasis(props);
-  const details = sentence([warning, info.exclusionNote, info.staleNote, quoteTime, received, props.afterCost === false ? "수수료·세금 차감 전" : "수수료·세금 차감 후", basis ? `시세 ${basisSpeech(basis)}` : null]);
-  return { total, info, warning: warning || null, quoteTime, received, details, basis };
+  const currencyNotice = originalCurrency ? "통화별 금액은 앱에서 확인" : null;
+  const details = sentence([warning, accountMode ? accountNotice : info.exclusionNote, accountMode ? originalCurrency ? currencyNotice : valuation?.unavailable : info.staleNote, quoteTime, accountMode ? originalCurrency ? "원화 환산 표시 꺼짐, 현금 제외" : "원화 환산 참고금액, 현금 제외" : received, props.afterCost === false ? "수수료·세금 차감 전" : "수수료·세금 차감 후", basis ? `${accountMode ? "종목 " : ""}시세 ${basisSpeech(basis)}` : null]);
+  const titles = accountMode ? hasForeign && !originalCurrency ? ["토스 계좌 · 원화 환산", "계좌 · 원화 환산", "원화 환산"] : ["토스 계좌"] : ["앱 시세 평가", "앱 시세", "시세"];
+  return { total, quoteTotal, profitKnown, accountMode, currencyNotice, info, warning: warning || null, quoteTime, received, details, basis,
+    title: titles[0]!, titles, uri: accountMode ? ACCOUNT_VALUATION_URI : LIVE_VALUATION_URI };
 }
 
 function ClarityAssetWidget(props: StockWidgetProps & WidgetFrame) {
   const c = props.palette ?? WIDGET_COLORS;
-  const { total, warning, quoteTime, details } = clarityStockInfo(props);
+  const { total, profitKnown, accountMode, title, titles, currencyNotice, uri, warning, quoteTime, details } = clarityStockInfo(props);
   const width = dp(props.width, DEFAULT_ASSET.width), height = dp(props.height, DEFAULT_ASSET.height), scale = props.fontScale ?? 1;
   const amount = total ? formatPrice(total.value, total.currency) : null;
-  const day = total ? `${WIDGET_CHANGE_LABEL} ${formatPrice(total.day, total.currency, { sign: true })}` : null;
-  const cumulative = total ? `누적 ${formatPrice(total.profit, total.currency, { sign: true })}` : null;
-  const pnl = day ? clarityLine([`${day} · ${cumulative}`, day], width - space.sm * 2, scale) : null;
-  const lines = planClarityAsset({ width, height, scale, total: amount, warning, time: quoteTime, pnl });
-  const label = sentence(["앱 시세 평가", amount ? speakAmount(amount) : "금액 확인 불가", day, cumulative, props.market?.label, details, "눌러서 같은 평가 기준으로 앱 열기"]);
-  return <FlexWidget clickAction="OPEN_URI" clickActionData={{ uri: LIVE_VALUATION_URI }} accessibilityLabel={label} style={{ ...rootStyle(c), padding: space.sm, justifyContent: "center" }}>
+  const day = total && !accountMode ? `${WIDGET_CHANGE_LABEL} ${formatPrice(total.day, total.currency, { sign: true })}` : null;
+  const cumulative = total && profitKnown ? `${accountMode ? "평가손익" : "누적"} ${formatPrice(total.profit, total.currency, { sign: true })}` : null;
+  const pnl = accountMode ? cumulative : day ? clarityLine([`${day} · ${cumulative}`, day], width - space.sm * 2, scale) : null;
+  const lines = planClarityAsset({ width, height, scale, total: amount, warning, time: quoteTime, pnl, ...(accountMode ? { basis: titles, prioritizePnl: true } : {}), ...(currencyNotice ? { empty: [currencyNotice, "앱에서 통화별 보기"] } : {}) });
+  const label = sentence([title, amount ? speakAmount(amount) : "금액 확인 불가", day, cumulative, props.market?.label, details, "눌러서 같은 평가 기준으로 앱 열기"]);
+  return <FlexWidget clickAction="OPEN_URI" clickActionData={{ uri }} accessibilityLabel={label} style={{ ...rootStyle(c), padding: space.sm, justifyContent: "center" }}>
     {lines.map((line) => <TextWidget key={line.kind} text={line.text} maxLines={1} style={{ color: line.kind === "warning" ? c.warn : line.kind === "value" ? c.ink : c.sub, fontSize: line.font, fontWeight: line.kind === "value" || line.kind === "warning" ? "700" : "500" }} />)}
   </FlexWidget>;
 }
@@ -1071,12 +1090,16 @@ function ClarityHoldingsWidget(props: StockWidgetProps & WidgetFrame & HoldingsE
   const c = props.palette ?? WIDGET_COLORS;
   const width = dp(props.width, DEFAULT_LIST.width), height = dp(props.height, DEFAULT_LIST.height), scale = props.fontScale ?? 1;
   const content = Math.max(0, width - PAD * 2);
-  const { total, info, warning, quoteTime, details, basis } = clarityStockInfo(props);
+  const { total, quoteTotal, profitKnown, accountMode, title, titles, currencyNotice, uri, info, warning, quoteTime, details, basis } = clarityStockInfo(props);
   const stocks = widgetOrder(props.stocks, fxOf, props.order);
-  const ordered = stocks.map((s) => polishedRowView(s, props.filled ?? [], props.showKrw, props.rowKrw !== false && total?.currency !== "USD", props.afterCost ?? true, c, WIDGET_CHANGE_LABEL));
+  const ordered = stocks.map((s) => {
+    const row = polishedRowView(s, props.filled ?? [], props.showKrw, props.rowKrw !== false && total?.currency !== "USD", props.afterCost ?? true, c, WIDGET_CHANGE_LABEL);
+    return accountMode ? { ...row, subs: row.subs.map((text) => text.replace(/^수익 /, "시세 손익 ")), speech: `종목 시세 기준, ${row.speech}` } : row;
+  });
   const amount = total ? formatPrice(total.value, total.currency) : null;
   const mode = props.pnlToggle ? props.pnlMode ?? "cumulative" : "cumulative";
-  const pnl = total ? pnlLine(mode, total, (n) => formatPrice(n, total.currency, { sign: true }), formatPct, WIDGET_CHANGE_LABEL) : null;
+  const pnlTotal = mode === "day" && accountMode ? quoteTotal : profitKnown ? total : null;
+  const pnl = pnlTotal ? pnlLine(mode, pnlTotal, (n) => formatPrice(n, pnlTotal.currency, { sign: true }), formatPct, accountMode ? `시세 ${WIDGET_CHANGE_LABEL}` : WIDGET_CHANGE_LABEL) : null;
   const pnlText = pnl ? `${pnl.valueText}${pnl.rate ? ` ${pnl.rate}` : ""}` : "";
   const pnlWidth = pnl ? Math.max(TOUCH, textWidth(pnlText, F.base, scale, true), textWidth(`${pnl.label} ↔`, F.base, scale, true)) : 0;
   const leftWidth = content - pnlWidth - space.sm;
@@ -1090,7 +1113,7 @@ function ClarityHoldingsWidget(props: StockWidgetProps & WidgetFrame & HoldingsE
   const embeddedPair = embeddedPairedFont !== null && pnl !== null;
   const embeddedWidth = embeddedPair ? embeddedLeft : content - actionsWidth;
   const embeddedFont = amount ? (embeddedPair ? embeddedPairedFont : readableFont(amount, embeddedWidth, scale)) : null;
-  const embeddedTitle = clarityLine(["앱 시세 평가", "앱 시세", "시세"], embeddedWidth, scale, F.md);
+  const embeddedTitle = clarityLine(titles, embeddedWidth, scale, F.md);
   const embeddedHeight = Math.max(TOUCH, lineHeight(F.md, scale) + lineHeight(embeddedFont ?? F.base, scale), embeddedPair ? lineHeight(F.base, scale) * 2 : 0);
   const embedded = amount !== null && embeddedFont !== null && embeddedTitle !== null && embeddedHeight + (warning ? lineHeight(F.base, scale) : 0) + space.sm <= height;
   let room = Math.max(0, height - (embedded ? embeddedHeight : TOUCH) - space.sm);
@@ -1114,14 +1137,14 @@ function ClarityHoldingsWidget(props: StockWidgetProps & WidgetFrame & HoldingsE
   const indexCandidates = selectedIndex.map((_, n) => selectedIndex.slice(0, selectedIndex.length - n).map((x) => `${x.label} ${x.rate ?? x.value}${indexTag(x) ? ` (${indexTag(x)})` : ""}`).join(" · "));
   const indexText = clarityLine(indexCandidates, content, scale, F.md);
   const showIndex = indexText && room >= rowHeight + hintH + lineHeight(F.md, scale) && take(lineHeight(F.md, scale));
-  const a11y = sentence(["앱 시세 평가", info.partial ? "부분 평가금액" : null, amount ? speakAmount(amount) : "금액 확인 불가", pnl?.text, details]);
+  const a11y = sentence([title, !accountMode && info.partial ? "부분 평가금액" : null, amount ? speakAmount(amount) : "금액 확인 불가", pnl?.text, details]);
   return <FlexWidget style={{ ...rootStyle(c), paddingHorizontal: PAD, paddingBottom: space.sm }}>
     {embedded ? <FlexWidget style={{ width: "match_parent", height: embeddedHeight, flexDirection: "row", alignItems: "center" }}>
-      <FlexWidget clickAction="OPEN_URI" clickActionData={{ uri: LIVE_VALUATION_URI }} accessibilityLabel={a11y} style={{ width: embeddedWidth, height: embeddedHeight, justifyContent: "center" }}>
+      <FlexWidget clickAction="OPEN_URI" clickActionData={{ uri }} accessibilityLabel={a11y} style={{ width: embeddedWidth, height: embeddedHeight, justifyContent: "center" }}>
         <TextWidget text={embeddedTitle!} maxLines={1} style={{ color: c.sub, fontSize: F.md }} />
         <TextWidget text={amount!} maxLines={1} style={{ color: c.ink, fontSize: embeddedFont!, fontWeight: "700" }} />
       </FlexWidget>
-      {embeddedPair && pnl ? <FlexWidget clickAction={props.pnlToggle ? WIDGET_CLICK.pnlToggle : "OPEN_URI"} clickActionData={props.pnlToggle ? { mode: pnl.mode } : { uri: LIVE_VALUATION_URI }} accessibilityLabel={sentence([pnlSpeech(pnl, false), props.pnlToggle ? `눌러서 ${mode === "day" ? "누적" : WIDGET_CHANGE_LABEL} 손익 보기` : null])} style={{ width: pnlWidth, height: embeddedHeight, marginLeft: space.sm, justifyContent: "center", alignItems: "flex-end" }}>
+      {embeddedPair && pnl ? <FlexWidget clickAction={props.pnlToggle ? WIDGET_CLICK.pnlToggle : "OPEN_URI"} clickActionData={props.pnlToggle ? { mode: pnl.mode } : { uri }} accessibilityLabel={sentence([pnlSpeech(pnl, false), props.pnlToggle ? `눌러서 ${mode === "day" ? "누적" : WIDGET_CHANGE_LABEL} 손익 보기` : null])} style={{ width: pnlWidth, height: embeddedHeight, marginLeft: space.sm, justifyContent: "center", alignItems: "flex-end" }}>
         <TextWidget text={`${pnl.label}${props.pnlToggle ? " ↔" : ""}`} maxLines={1} style={{ color: c.sub, fontSize: F.base }} />
         <TextWidget text={pnlText} maxLines={1} style={{ color: tone(pnl.sign, c), fontSize: F.base, fontWeight: "700" }} />
       </FlexWidget> : null}
@@ -1129,19 +1152,19 @@ function ClarityHoldingsWidget(props: StockWidgetProps & WidgetFrame & HoldingsE
         <TextWidget text="설정" maxLines={1} style={{ color: c.sub, fontSize: F.sm }} />
       </FlexWidget>}
       <RefreshBox refreshing={props.refreshing === true} c={c} />
-    </FlexWidget> : <ClarityWidgetHeader title="앱 시세 평가" shortTitle="앱 시세" width={width} scale={scale} widgetId={props.widgetId} refreshing={props.refreshing} c={c} />}
+    </FlexWidget> : <ClarityWidgetHeader title={title} shortTitle={accountMode ? titles[titles.length - 1]! : "앱 시세"} uri={uri} width={width} scale={scale} widgetId={props.widgetId} refreshing={props.refreshing} c={c} />}
     {showWarning ? <TextWidget text={warningText!} maxLines={1} accessibilityLabel={details} style={{ color: c.warn, fontSize: F.base, fontWeight: "700" }} /> : null}
     {showAmount ? <FlexWidget style={{ width: "match_parent", height: mainHeight, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-      <FlexWidget clickAction="OPEN_URI" clickActionData={{ uri: LIVE_VALUATION_URI }} accessibilityLabel={a11y} style={{ width: pair ? leftWidth : content, height: mainHeight, justifyContent: "center" }}>
-        <TextWidget text={amount && amountFont !== null ? amount : total ? "앱에서 금액 확인" : "평가금액 없음"} maxLines={1} style={{ color: c.ink, fontSize: amountFont ?? F.base, fontWeight: "700" }} />
+      <FlexWidget clickAction="OPEN_URI" clickActionData={{ uri }} accessibilityLabel={a11y} style={{ width: pair ? leftWidth : content, height: mainHeight, justifyContent: "center" }}>
+        <TextWidget text={amount && amountFont !== null ? amount : currencyNotice ?? (total ? "앱에서 금액 확인" : "평가금액 없음")} maxLines={1} style={{ color: c.ink, fontSize: amountFont ?? F.base, fontWeight: "700" }} />
       </FlexWidget>
-      {pair && pnl ? <FlexWidget clickAction={props.pnlToggle ? WIDGET_CLICK.pnlToggle : "OPEN_URI"} clickActionData={props.pnlToggle ? { mode: pnl.mode } : { uri: LIVE_VALUATION_URI }} accessibilityLabel={sentence([pnlSpeech(pnl, false), props.pnlToggle ? `눌러서 ${mode === "day" ? "누적" : WIDGET_CHANGE_LABEL} 손익 보기` : null])} style={{ width: pnlWidth, height: mainHeight, justifyContent: "center", alignItems: "flex-end" }}>
+      {pair && pnl ? <FlexWidget clickAction={props.pnlToggle ? WIDGET_CLICK.pnlToggle : "OPEN_URI"} clickActionData={props.pnlToggle ? { mode: pnl.mode } : { uri }} accessibilityLabel={sentence([pnlSpeech(pnl, false), props.pnlToggle ? `눌러서 ${mode === "day" ? "누적" : WIDGET_CHANGE_LABEL} 손익 보기` : null])} style={{ width: pnlWidth, height: mainHeight, justifyContent: "center", alignItems: "flex-end" }}>
         <TextWidget text={`${pnl.label}${props.pnlToggle ? " ↔" : ""}`} maxLines={1} style={{ color: c.sub, fontSize: F.base }} />
         <TextWidget text={pnlText} maxLines={1} style={{ color: tone(pnl.sign, c), fontSize: F.base, fontWeight: "700" }} />
       </FlexWidget> : null}
     </FlexWidget> : null}
     {showMeta ? <TextWidget text={metaText!} maxLines={1} accessibilityLabel={sentence([details, basis ? `시세 ${basisSpeech(basis)}` : null])} style={{ color: c.sub, fontSize: F.md }} /> : null}
-    {showSeparatePnl && pnl ? <FlexWidget clickAction={props.pnlToggle ? WIDGET_CLICK.pnlToggle : "OPEN_URI"} clickActionData={props.pnlToggle ? { mode: pnl.mode } : { uri: LIVE_VALUATION_URI }} accessibilityLabel={sentence([pnlSpeech(pnl, false), props.pnlToggle ? `눌러서 ${mode === "day" ? "누적" : WIDGET_CHANGE_LABEL} 손익 보기` : null])} style={{ width: "match_parent", height: separatePnlH, justifyContent: "center" }}>
+    {showSeparatePnl && pnl ? <FlexWidget clickAction={props.pnlToggle ? WIDGET_CLICK.pnlToggle : "OPEN_URI"} clickActionData={props.pnlToggle ? { mode: pnl.mode } : { uri }} accessibilityLabel={sentence([pnlSpeech(pnl, false), props.pnlToggle ? `눌러서 ${mode === "day" ? "누적" : WIDGET_CHANGE_LABEL} 손익 보기` : null])} style={{ width: "match_parent", height: separatePnlH, justifyContent: "center" }}>
       {separatePnlLines.map((line, n) => <TextWidget key={line} text={line} maxLines={1} style={{ color: n === 0 ? c.sub : tone(pnl.sign, c), fontSize: F.base }} />)}
     </FlexWidget> : null}
     {showIndex ? <TextWidget text={indexText!} maxLines={1} accessibilityLabel={indexSpeech(selectedIndex)} style={{ color: c.sub, fontSize: F.md }} /> : null}

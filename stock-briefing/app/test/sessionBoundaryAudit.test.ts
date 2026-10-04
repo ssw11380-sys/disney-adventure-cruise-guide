@@ -48,7 +48,7 @@ function seedPersonal(kind: "lastStocks" | "view" | "payload", apiUrl = API, acc
   const row = { code: "OLD", quantity: 123 };
   const value = kind === "lastStocks" ? { apiUrl, ...owner, at: Date.now(), stocks: [row] }
     : kind === "view" ? { apiUrl, ...owner, view: { ...signedOutWidgetData(), error: null, stocks: [row] } }
-    : { apiUrl, ...owner, at: Date.now(), path: "/api/widget?indices=1&sessions=1&ui=2&ms=1", body: { v: 1, market: null, stocks: [{ c: "OLD", n: "가짜", qty: 123, avg: 100, q: null, e: null }], briefings: [] } };
+    : { apiUrl, ...owner, at: Date.now(), path: "/api/widget?indices=1&sessions=1&ui=2&ms=1&account=1", body: { v: 1, market: null, stocks: [{ c: "OLD", n: "가짜", qty: 123, avg: 100, q: null, e: null }], briefings: [] } };
   h.store.set(`widget.${kind}`, JSON.stringify(value));
 }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>((yes) => { resolve = yes; }); return { promise, resolve }; }

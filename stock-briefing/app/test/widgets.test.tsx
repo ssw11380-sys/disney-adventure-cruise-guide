@@ -493,7 +493,7 @@ describe("3-16 위젯 데이터·갱신 주기", () => {
     const a = await loadWidgetData({ stocks: true, briefings: true });
     const b = await loadWidgetData({ stocks: true, briefings: true });
     // 새 앱은 지수 줄을 그릴 수 있다고 알린다 (?indices=1 — 서버는 이 표시가 있을 때만 지수를 넣는다)
-    expect(calls.map((c) => c.url)).toEqual([`${API}/api/widget?indices=1&sessions=1&ui=2&ms=1`, `${API}/api/widget?indices=1&sessions=1&ui=2&ms=1`]);
+    expect(calls.map((c) => c.url)).toEqual([`${API}/api/widget?indices=1&sessions=1&ui=2&ms=1&account=1`, `${API}/api/widget?indices=1&sessions=1&ui=2&ms=1&account=1`]);
     expect(calls[1]!.inm).toBe('"abc"');
     expect(b.stocks.map((s) => s.code)).toEqual(a.stocks.map((s) => s.code));
     expect(b.market?.label).toBe("한국 장중");
@@ -508,7 +508,7 @@ describe("3-16 위젯 데이터·갱신 주기", () => {
       return new Response(JSON.stringify(url.includes("briefings") ? [] : book()), { status: 200 });
     });
     const d = await loadWidgetData({ stocks: true, briefings: true });
-    expect(urls).toEqual([`${API}/api/widget?indices=1&sessions=1&ui=2&ms=1`, `${API}/api/stocks?quotes=1`, `${API}/api/briefings/latest`]);
+    expect(urls).toEqual([`${API}/api/widget?indices=1&sessions=1&ui=2&ms=1&account=1`, `${API}/api/stocks?quotes=1`, `${API}/api/briefings/latest`]);
     expect(d.stocks).toHaveLength(18);
     expect(d.market).toBeNull();
   });
@@ -615,7 +615,7 @@ describe("3-16 위젯 데이터·갱신 주기", () => {
       return new Response(JSON.stringify({ ...payload, market: { label: "미국 주간거래", open: false, nextChangeAt: "2026-09-25T08:00:00Z", kr: false, us: false } }), { status: 200, headers: { etag: '"new"' } });
     });
     const d = await loadWidgetData({ stocks: true, briefings: true, reuse: true });
-    expect(calls).toEqual([{ url: `${API}/api/widget?indices=1&sessions=1&ui=2&ms=1`, inm: null }]);
+    expect(calls).toEqual([{ url: `${API}/api/widget?indices=1&sessions=1&ui=2&ms=1&account=1`, inm: null }]);
     expect(d.market?.label).toBe("미국 주간거래");
     // 새 주소로 받아 둔 응답은 그대로 다시 쓴다
     await loadWidgetData({ stocks: true, briefings: true, reuse: true });
