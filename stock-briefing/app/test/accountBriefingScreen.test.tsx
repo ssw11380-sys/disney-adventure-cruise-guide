@@ -76,7 +76,8 @@ vi.mock("@/api/hooks", () => {
   };
 });
 
-const { AccountBriefingCard } = await import("@/components/AccountBriefingCard");
+const { AccountBriefingCard, AccountBriefingRow } = await import("@/components/AccountBriefingCard");
+const { AccountBriefingBody } = await import("@/components/AccountBriefingBody");
 const { default: BriefingsScreen } = await import("@/app/(tabs)/briefings");
 const { default: AccountBriefingScreen } = await import("@/app/briefings/account/[id]");
 
@@ -146,6 +147,16 @@ beforeEach(() => {
 });
 
 describe("브리핑 탭 '내 계좌 브리핑' 카드", () => {
+  it("카드와 넓은 줄은 현재 계좌 금액이 아닌 작성 당시 종목 시세 추정임을 표시하고 읽는다", () => {
+    for (const element of [<AccountBriefingCard key="card" briefing={ITEM} />, <AccountBriefingRow key="row" briefing={ITEM} selected={false} onPress={h.push} role="button" />]) {
+      const r = render(element);
+      expect(r.text()).toContain("작성 당시 종목 시세 기준 추정");
+      expect(r.text()).toContain("-250,267원");
+      const link = ofType(r, "Pressable")[0]!;
+      expect(link.props.accessibilityHint).toBe("작성 당시 종목 시세 기준 추정입니다. 현재 토스 계좌 금액과 다를 수 있습니다.");
+    }
+  });
+
   it("플래그가 꺼져 있으면(기본) 카드가 없고 목록을 요청하지 않는다", () => {
     const r = render(<BriefingsScreen />);
     expect(r.text()).not.toContain("내 계좌 브리핑");
@@ -186,6 +197,20 @@ describe("브리핑 탭 '내 계좌 브리핑' 카드", () => {
 });
 
 describe("계좌 브리핑 상세 화면", () => {
+  it.each(["stack", "pane", "split"] as const)("%s: 옛 기준 설명을 표시할 때만 바로잡고 저장된 숫자·본문·시각을 유지한다", (layout) => {
+    h.flags = { accountBriefing: true };
+    h.detail = { ...DETAIL, data: { ...DATA, krPreviousDay: true } };
+    const original = JSON.stringify(h.detail);
+    const r = render(<AccountBriefingBody numId={ITEM.id} layout={layout} />);
+    expect(r.text()).not.toContain("앱 잔고 화면과 같은 기준");
+    expect(r.text()).toContain("보유 7종목 합계 · 작성 당시 종목 시세 기준 추정");
+    expect(r.text()).toContain("기준: 작성 당시 종목 시세 기준 추정");
+    expect(r.text()).toContain("9,157,673원");
+    expect(r.text()).toContain("+883,324원");
+    expect(ofType(r, "MarkdownView")[0]!.children).toEqual([ITEM.detail]);
+    expect(JSON.stringify(h.detail)).toBe(original);
+  });
+
   it("플래그가 꺼져 있으면 상세를 요청하지 않고 안내만", () => {
     const r = render(<AccountBriefingScreen />);
     expect(h.detailEnabled.every((e) => e === false)).toBe(true);

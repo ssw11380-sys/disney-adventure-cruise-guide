@@ -96,7 +96,7 @@ export default function StocksScreen() {
   //   (접은 화면에서 본 종목을 펼친 뒤 이어 보려면 접힌 동안에도 재야 한다). 플래그 값을 처음 받는 순간 목록을 한 번 새로 그린다 (아래 key)
   const anchor = useHoldingsAnchor(fold.on ? holdingsLayoutKey({ wide, oneLineBand, rail: fold.rail, cols: heldPlan?.cols.length ?? 0 }) : null);
 
-  // 실시간 평가: 앱 시세와 설정한 비용·원화 매입금액을 사용한다. 토스 계좌 원본은 별도 보기로 표시한다.
+  // 종목 시세 추정: 정렬·비중·추정 펼치기에 쓴다. 계좌 대표 금액은 토스 수신값을 표시한다.
   const summary = useMemo(() => summarize(data ?? [], afterCost), [data, afterCost]);
   // 넓은 창 계좌 띠의 당일 등락률 기준: 비용 차감 전 평가금액 (당일손익이 비용 차감 전 금액이라 — AccountBand dayRateOf). 차감이 꺼져 있으면 같은 값
   const grossValue = useMemo(() => {
@@ -294,7 +294,7 @@ export default function StocksScreen() {
   // 넓은 한 줄 계좌 띠에 국내·해외 수익률까지 넣는 폭인지 (좁은 한 줄 띠는 숫자 기준 점만 — 글 없음)
   const rates = bandRates(tableW, fontScale);
   // 계정 A단계: 주인 아닌 계정은 맨 위에 '개인 종목 기능은 준비 중' 안내 (주인·플래그 꺼짐이면 없음)
-  const wrapAccount = (content: React.ReactNode) => gated(tossSnapshotOn && !member, true) ? <TossAccountSummary>{content}</TossAccountSummary> : content;
+  const wrapAccount = (content: React.ReactNode) => gated(tossSnapshotOn && !member, true) ? <TossAccountSummary onAllocation={gated(allocationOn && summary.held > 0, openAllocation)}>{content}</TossAccountSummary> : content;
   const header = wide ? (
     <View>
       <MemberNotice />

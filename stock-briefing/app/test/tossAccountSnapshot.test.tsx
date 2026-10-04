@@ -40,7 +40,16 @@ beforeEach(() => {
   });
 });
 
-describe("토스 원본 계좌와 실시간 평가 분리", () => {
+describe("계좌 대표 손익과 선택해서 보는 시세 추정", () => {
+  it("예전 실시간 링크에서도 계좌 손익을 대표로 보이고 추정 합계는 자동으로 펼치지 않는다", () => {
+    h.params = { valuation: "live" };
+    h.data = { ...BODY, snapshot: { ...BODY.snapshot!, net: { krw: 30_000, usd: 50 },
+      costBasis: { krw: 120_000, holdingCount: 20, estimatedHoldingCount: 0, source: "synced-holdings-cost-book" } } };
+    const r = render(<TossAccountSummary><TextStub>시세 합계 +5,000원</TextStub></TossAccountSummary>);
+    expect(text(r.tree)).toContain("-20,000원");
+    expect(text(r.tree)).not.toContain("+5,000원");
+    expect(all(r.tree).some((x) => x.props.accessibilityRole === "tab")).toBe(false);
+  });
   it("계좌 손익은 같은 수신 평가와 원화 원가로 표시하고 시간외 실시간 손익과 구분한다", () => {
     const body: TossAccountSnapshotBody = { ...BODY, snapshot: { ...BODY.snapshot!,
       net: { krw: 30_000, usd: 50 },
@@ -53,20 +62,22 @@ describe("토스 원본 계좌와 실시간 평가 분리", () => {
     expect(text(r.tree)).toContain("수익률 -16.67%");
     expect(text(r.tree)).toContain("매입금액 120,000원");
     expect(text(r.tree)).not.toContain("+5,000원");
-    const tab = all(r.tree).find((x) => x.props.accessibilityLabel === "실시간 평가 보기")!;
+    const tab = all(r.tree).find((x) => x.props.accessibilityLabel === "시간외 시세 기준 추정 보기")!;
     r.act(() => (tab.props.onPress as () => void)());
     expect(text(r.tree)).toContain("시간외 시세를 포함");
     expect(text(r.tree)).toContain("실시간 평가손익 +5,000원");
-    expect(text(r.tree)).not.toContain("-20,000원");
-    const back = all(r.tree).find((x) => x.props.accessibilityLabel === "토스 계좌 보기")!;
+    expect(text(r.tree)).toContain("-20,000원");
+    const back = all(r.tree).find((x) => x.props.accessibilityLabel === "시간외 시세 기준 추정 접기")!;
     r.act(() => (back.props.onPress as () => void)());
     expect(text(r.tree)).toContain("-20,000원");
+    expect(text(r.tree)).not.toContain("+5,000원");
   });
   it("큰 글씨 변경 등으로 위젯 링크가 재시작되어도 루트 준비 전에 이동하지 않고 준비 즉시 한 번 소비한다", () => {
     h.params = { valuation: "live" }; h.navReady = false;
     let r!: ReturnType<typeof render>;
     expect(() => { r = render(<TossAccountSummary><TextStub>위젯과 같은 실시간 평가</TextStub></TossAccountSummary>); }).not.toThrow();
-    expect(text(r.tree)).toContain("위젯과 같은 실시간 평가");
+    expect(text(r.tree)).toContain("토스 주식 평가금액");
+    expect(text(r.tree)).not.toContain("위젯과 같은 실시간 평가");
     expect(h.setParams).not.toHaveBeenCalled();
     for (const listener of h.readyListeners) listener();
     expect(h.setParams).not.toHaveBeenCalled();
@@ -86,7 +97,7 @@ describe("토스 원본 계좌와 실시간 평가 분리", () => {
     expect(h.setParams).not.toHaveBeenCalled();
     for (const listener of h.readyListeners) listener();
     expect(h.setParams).toHaveBeenCalledExactlyOnceWith({ valuation: undefined });
-    expect(text(next.tree)).toContain("실시간 평가");
+    expect(text(next.tree)).toContain("토스 주식 평가금액");
   });
   it("준비를 기다리던 링크가 바뀌면 취소한 요청으로 주소를 뒤늦게 고치지 않는다", () => {
     h.params = { valuation: "live" }; h.navReady = false;
@@ -98,21 +109,23 @@ describe("토스 원본 계좌와 실시간 평가 분리", () => {
     h.params = { valuation: "live" }; r.rerender();
     expect(h.setParams).toHaveBeenCalledExactlyOnceWith({ valuation: undefined });
   });
-  it("위젯 금액 링크는 같은 실시간 평가를 열고, 다시 누르면 사용자가 고른 토스 탭에서도 돌아온다", () => {
-    h.params = { valuation: "live" };
+  it.each(["live", "account"])("위젯 %s 링크는 계좌를 열고 다시 누르면 펼친 추정 합계를 닫는다", (valuation) => {
+    h.params = { valuation };
     const el = <TossAccountSummary><TextStub>위젯과 같은 실시간 평가</TextStub></TossAccountSummary>;
     const r = render(el);
-    expect(text(r.tree)).toContain("위젯과 같은 실시간 평가");
-    expect(text(r.tree)).not.toContain("토스 주식 평가금액");
+    expect(text(r.tree)).not.toContain("위젯과 같은 실시간 평가");
+    expect(text(r.tree)).toContain("토스 주식 평가금액");
     expect(h.setParams).toHaveBeenCalledWith({ valuation: undefined });
     h.params = {};
     r.rerender(el);
-    const tab = all(r.tree).find((x) => x.props.accessibilityLabel === "토스 계좌 보기")!;
+    const tab = all(r.tree).find((x) => x.props.accessibilityLabel === "시간외 시세 기준 추정 보기")!;
     r.act(() => (tab.props.onPress as () => void)());
     expect(text(r.tree)).toContain("토스 주식 평가금액");
-    h.params = { valuation: "live" };
-    r.rerender(el);
     expect(text(r.tree)).toContain("위젯과 같은 실시간 평가");
+    h.params = { valuation };
+    r.rerender(el);
+    expect(text(r.tree)).not.toContain("위젯과 같은 실시간 평가");
+    expect(text(r.tree)).toContain("토스 주식 평가금액");
     expect(h.setParams).toHaveBeenCalledTimes(2);
   });
   it("기본은 비용 차감 후 원본 통화별 금액, 전체 범위·예수금 제외·수신과 환산 한계를 함께 표시", () => {
@@ -123,21 +136,36 @@ describe("토스 원본 계좌와 실시간 평가 분리", () => {
     expect(s).toContain("전체 연동 2개 계좌 · 보유 20종목 · 현금·예수금 제외");
     expect(s).toContain("앱 동기화에서 제외한 1종목도 포함");
     expect(s).toContain("토스 앱의 최종 원화 합계와 다를 수");
-    expect(s).toContain("아래 종목·비중·위젯·보고서는 앱 시세 기준");
+    expect(s).toContain("아래 종목·비중은 종목 시세 기준 추정값");
     expect(s).not.toContain("0.0%"); expect(s).not.toContain("기존 실시간 숫자");
   });
-  it("비용 차감을 끄면 gross 원본을 표시하고 실시간 탭은 기존 요약을 그대로 표시", () => {
+  it("비용 차감을 끄면 gross 원본을 표시하고 선택해서 연 추정은 기존 기능을 보존", () => {
     const r = mount(BODY, false, false);
     expect(text(r.tree)).toContain("100,000원"); expect(text(r.tree)).toContain("$200.00");
-    const tab = all(r.tree).find((x) => x.props.accessibilityLabel === "실시간 평가 보기")!;
+    const tab = all(r.tree).find((x) => x.props.accessibilityLabel === "시간외 시세 기준 추정 보기")!;
     r.act(() => (tab.props.onPress as () => void)());
     expect(text(r.tree)).toContain("기존 실시간 숫자와 비중");
-    expect(text(r.tree)).not.toContain("토스 주식 평가금액");
-    expect(all(r.tree).find((x) => x.props.accessibilityLabel === "실시간 평가 보기")!.props.accessibilityState).toEqual({ selected: true });
+    expect(text(r.tree)).toContain("토스 주식 평가금액");
+    expect(all(r.tree).find((x) => x.props.accessibilityLabel === "시간외 시세 기준 추정 접기")!.props.accessibilityState).toEqual({ expanded: true });
   });
-  it.each([undefined, { on: true, snapshot: null, sync: null }, { on: false, snapshot: null, sync: null }] as const)("원본 없음·로딩·이전 서버에서 실시간 요약을 막거나 0원 원본을 만들지 않는다", (body) => {
+  it.each([undefined, { on: true, snapshot: null, sync: null }] as const)("원본 없음·로딩 때 추정 합계를 계좌 대표 값으로 자동 대체하지 않는다", (body) => {
     const r = render(<TossAccountSummaryView body={body} failed={false} afterCost showKrw now={NOW}><TextStub>실시간 대체</TextStub></TossAccountSummaryView>);
-    expect(text(r.tree)).toContain("실시간 대체"); expect(text(r.tree)).not.toContain("0원");
+    expect(text(r.tree)).not.toContain("실시간 대체"); expect(text(r.tree)).not.toContain("0원");
+    const more = all(r.tree).find((x) => x.props.accessibilityLabel === "시간외 시세 기준 추정 보기")!;
+    r.act(() => (more.props.onPress as () => void)());
+    expect(text(r.tree)).toContain("다시 계산한 추정 평가");
+    expect(text(r.tree)).toContain("실시간 대체");
+  });
+  it("서버 기능이 꺼져 있거나 이전 서버이면 기존 요약을 유지", () => {
+    const r = mount({ on: false, snapshot: null, sync: null });
+    expect(text(r.tree)).toBe("기존 실시간 숫자와 비중");
+  });
+  it("추정 합계를 펼치지 않고도 비중 화면을 열 수 있다", () => {
+    const open = vi.fn();
+    const r = render(<TossAccountSummaryView body={BODY} failed={false} afterCost showKrw now={NOW} onAllocation={open}><TextStub>기존 비중 기능</TextStub></TossAccountSummaryView>);
+    const button = all(r.tree).find((x) => x.props.accessibilityLabel === "종목 시세 기준 비중 보기")!;
+    r.act(() => (button.props.onPress as () => void)()); expect(open).toHaveBeenCalledOnce();
+    expect(text(r.tree)).not.toContain("기존 비중 기능");
   });
   it("조회 실패는 원래 수신 시각·금액을 유지하고 갱신 실패로 알린다", () => {
     const r = mount(BODY, true);
@@ -148,6 +176,8 @@ describe("토스 원본 계좌와 실시간 평가 분리", () => {
     h.error = new ApiRequestError(status, "FORBIDDEN", "권한 없음");
     const r = render(<TossAccountSummary><TextStub>실시간 대체</TextStub></TossAccountSummary>);
     expect(text(r.tree)).not.toContain("99,800원"); expect(text(r.tree)).toContain("확인하지 못했습니다");
+    expect(text(r.tree)).not.toContain("실시간 대체");
+    expect(text(r.tree)).not.toContain("추정 보기");
   });
   it("환율 없음은 환산값을 꾸미지 않으며 실제 빈 계좌의 0원만 원본으로 표시", () => {
     const r = mount({ ...BODY, snapshot: { ...BODY.snapshot!, displayFx: null } });
@@ -155,12 +185,12 @@ describe("토스 원본 계좌와 실시간 평가 분리", () => {
     const empty = mount({ ...BODY, snapshot: { ...BODY.snapshot!, holdingCount: 0, net: { krw: 0, usd: 0 }, displayFx: null } });
     expect(text(empty.tree)).toContain("보유 0종목"); expect(text(empty.tree)).toContain("0원");
   });
-  it("큰 글씨·긴 금액은 줄 수 제한 없이 감싸고 탭은 최소 터치 높이를 보장", () => {
+  it("큰 글씨·긴 금액은 줄 수 제한 없이 감싸고 펼치기 버튼은 최소 터치 높이를 보장", () => {
     const r = mount({ ...BODY, snapshot: { ...BODY.snapshot!, net: { krw: 999999999999, usd: 999999999 } } });
     for (const n of all(r.tree).filter((x) => x.type === "Text")) expect(n.props.numberOfLines).toBeUndefined();
-    const tabs = all(r.tree).filter((x) => x.props.accessibilityRole === "tab");
-    expect(tabs).toHaveLength(2);
-    for (const n of tabs) expect((n.props.style as { minHeight?: number }[])[0]!.minHeight).toBeGreaterThanOrEqual(44);
+    const buttons = all(r.tree).filter((x) => x.props.accessibilityRole === "button");
+    expect(buttons).toHaveLength(1);
+    expect((buttons[0]!.props.style as { minHeight: number }).minHeight).toBeGreaterThanOrEqual(44);
   });
 });
 

@@ -462,7 +462,7 @@ describe("받기·저장 (/api/widget …&ms=1 — 예전 서버·모양이 다�
       return new Response(JSON.stringify(current), { status: 200, headers: { etag: `"${urls.length}"` } });
     });
     const d = await loadWidgetData({ stocks: false, briefings: true });
-    expect(urls).toEqual([`${API}/api/widget?indices=1&sessions=1&ui=2&ms=1`]);
+    expect(urls).toEqual([`${API}/api/widget?indices=1&sessions=1&ui=2&ms=1&account=1`]);
     expect(d.summary).toEqual(MONDAY);
     expect(block(build(renderOne(WIDGET_NAMES.briefing, d, { width: 460, height: 290, fontScale: 1, now: NOW, pnlMode: "cumulative" }, WIDGET_PALETTES.dark)))).toBeDefined();
     expect((await loadCachedWidgetData()).summary).toEqual(MONDAY);

@@ -44,10 +44,10 @@ export function tossSnapshotRange(from: string, to: string): string {
 
 /** 수신 구간 끝은 시세 기준 시각이 아니다. 정상 장외 동기화(60분)를 지연으로 오인하지 않는다. */
 export function tossSnapshotNotice(body: TossAccountSnapshotBody | undefined, failed: boolean, now: number): string | null {
-  if (failed) return body?.snapshot ? "새로고침 실패 · 마지막 수신 금액입니다." : "토스 계좌 금액을 확인하지 못했습니다. 아래 실시간 평가를 확인해 주세요.";
-  if (!body) return "토스 계좌 금액 확인 중 · 아래는 실시간 평가입니다.";
-  if (!body.on) return "토스 계좌 기준을 사용할 수 없어 실시간 평가를 표시합니다.";
-  if (!body.snapshot) return body.sync?.lastError ? "토스 계좌 동기화에 실패했습니다. 마지막으로 확보한 실시간 평가를 표시합니다." : "수신한 토스 계좌 금액이 없습니다. 설정에서 계좌 연동 상태를 확인해 주세요.";
+  if (failed) return body?.snapshot ? "새로고침 실패 · 마지막 수신 금액입니다." : "토스 계좌 금액을 확인하지 못했습니다. 연결 상태와 계좌 연동을 확인해 주세요.";
+  if (!body) return "토스 계좌 금액 확인 중입니다.";
+  if (!body.on) return "토스 계좌 기준을 사용할 수 없습니다.";
+  if (!body.snapshot) return body.sync?.lastError ? "토스 계좌 동기화에 실패했습니다. 설정에서 계좌 연동 상태를 확인해 주세요." : "수신한 토스 계좌 금액이 없습니다. 설정에서 계좌 연동 상태를 확인해 주세요.";
   if (body.sync?.lastError) return "계좌 동기화 실패 · 마지막 수신 금액입니다.";
   if (body.sync?.enabled === false) return "자동 동기화 꺼짐 · 마지막 수신 금액입니다.";
   const at = Date.parse(body.snapshot.receivedAt);

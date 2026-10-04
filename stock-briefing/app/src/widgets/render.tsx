@@ -3,7 +3,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { FlexWidget, TextWidget } from "react-native-android-widget";
 import { defaultApiUrl, STORAGE_KEYS } from "@/lib/settings";
 import { space } from "@/tokens";
-import type { WidgetData } from "./data";
+import { assertWidgetAccountSnapshotGeneration, type WidgetData } from "./data";
 import { wideExtrasOk } from "./layout";
 import { memberState, type PnlMode } from "./model";
 import { WIDGET_FONT, WIDGET_PALETTES, WIDGET_RADIUS, type WidgetPalette } from "./palette";
@@ -47,6 +47,7 @@ export function renderOne(name: string, data: WidgetData, o: RenderOpts, palette
   const basis = data.features.basis === true ? { basis: true } : {};
   // 폭 규칙이 막을 때만 칸을 더한다 (막지 않으면 넘기는 값이 예전과 같아 그림도 같다)
   const clarity = data.features.clarity === true;
+  const account = data.features.tossAccount === true ? { tossAccount: data.tossAccount ?? null } : {};
   const prefs = o.preferences ?? defaultWidgetPreferences(o.pnlMode);
   const frame = { width: o.width, height: o.height, fontScale: o.fontScale, palette, ...(clarity ? { clarity: true, widgetId: o.widgetId } : {}), ...(wideExtrasOk(o.width, data.features.foldFit === true) ? {} : { wideExtras: false }) };
   switch (name) {
@@ -68,7 +69,7 @@ export function renderOne(name: string, data: WidgetData, o: RenderOpts, palette
         />
       );
     case WIDGET_NAMES.asset:
-      return <AssetWidget stocks={data.stocks} showKrw={data.showKrw} afterCost={data.afterCost} fetchedAt={data.fetchedAt} error={data.error} filled={data.filled} now={o.now} market={data.market} {...basis} {...frame} />;
+      return <AssetWidget stocks={data.stocks} showKrw={data.showKrw} afterCost={data.afterCost} fetchedAt={data.fetchedAt} error={data.error} filled={data.filled} now={o.now} market={data.market} {...basis} {...frame} {...account} />;
     case WIDGET_NAMES.market:
       // 판을 받은 지 3시간(서버 지연 한도)이 넘으면 모든 칸을 "지연"으로.
       // 주인 아닌 계정('개인 종목 기능은 준비 중')이어도 판은 공유 데이터라 판이 있으면 보통처럼 (검증 6차 — 받은 시각을 제목 옆에)
@@ -106,6 +107,7 @@ export function renderOne(name: string, data: WidgetData, o: RenderOpts, palette
           rowKrw={data.rowKrw !== false}
           {...basis}
           {...frame}
+          {...account}
         />
       );
   }
@@ -122,7 +124,7 @@ export function renderBoth(name: string, data: WidgetData, o: RenderOpts): Rende
  */
 export async function renderFor(name: string, data: WidgetData, box: SizeBox, opts: Omit<RenderOpts, "width" | "height"> & { by?: SizeSource }): Promise<Rendered> {
   const identity = sessionIdentityVersion();
-  const source = data.features.clarity === true ? data.renderScope : undefined;
+  const source = data.features.clarity === true || data.features.tossAccount === true ? data.renderScope : undefined;
   const preferenceScope = source ? await assertRenderSource(source) : undefined;
   const { by, ...o } = opts;
   if (data.features.foldFit === true) await noteWidgetSize(box, by ?? "app", o.now);
@@ -141,8 +143,10 @@ export async function renderFor(name: string, data: WidgetData, box: SizeBox, op
 
 /** 자료를 받은 뒤 늦게 시작한 콜백도 그 자료의 서버·계정에 속하는지 확인한다. 외부 조회는 하지 않는다. */
 async function assertRenderSource(source: NonNullable<WidgetData["renderScope"]>): Promise<WidgetPreferenceScope> {
+  if (source.accountGeneration !== undefined) assertWidgetAccountSnapshotGeneration(source.accountGeneration);
   assertSessionIdentity(source.identity);
   const apiUrl = (await AsyncStorage.getItem(STORAGE_KEYS.apiUrl)) || defaultApiUrl();
+  if (source.accountGeneration !== undefined) assertWidgetAccountSnapshotGeneration(source.accountGeneration);
   assertSessionIdentity(source.identity);
   if (apiUrl !== source.apiUrl) throw new WidgetPreferenceScopeError();
   return { apiUrl, identity: source.identity, owner: sessionFor(apiUrl)?.user.id ?? null };

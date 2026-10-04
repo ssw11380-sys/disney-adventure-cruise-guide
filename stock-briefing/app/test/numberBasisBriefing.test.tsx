@@ -198,20 +198,22 @@ describe("꺼짐 (앱 기본 — 플래그 없음 = 꺼짐): 지금 그대로", 
     expect(JSON.stringify((await tab()).tree)).toBe(base);
   });
 
-  it("넓은 창 2단 줄: 기준 글 없음", async () => {
+  it("넓은 창 2단 줄: 추가 시세 시각 없음, 작성 당시 추정 안내는 유지", async () => {
     h.flags.foldLayout = true;
     size(933, 632);
     const row = account(await tab());
-    expect(rawOf(row)).not.toContain("기준");
+    expect(rawOf(row)).not.toContain("08:38 기준");
+    expect(rawOf(row)).toContain("작성 당시 종목 시세 기준 추정");
+    expect(row.props.accessibilityHint).toBe("작성 당시 종목 시세 기준 추정입니다. 현재 토스 계좌 금액과 다를 수 있습니다.");
     expect(String(row.props.accessibilityLabel)).not.toContain("8시 38분 기준");
   });
 
   it.each(["stack", "pane", "split"] as const)("상세 %s: '시세 기준:' 줄 없음", (layout) => {
     if (layout === "split") size(933, 632);
     const r = render(<AccountBriefingBody numId={12} layout={layout} />);
-    expect(r.text()).not.toContain("시세 기준");
-    expect(labels(r)).not.toContain(LINE_SPEECH);
-    expect(r.text()).toContain("기준: 앱 잔고 화면과 같은 기준");
+    expect(r.all().filter((n) => n.type === "Muted" && plain(rawOf(n)).startsWith("시세 기준: "))).toHaveLength(0);
+    expect(labels(r).filter((l) => l.startsWith("시세 기준,"))).toHaveLength(0);
+    expect(r.text()).toContain("기준: 작성 당시 종목 시세 기준 추정");
   });
 });
 
@@ -334,7 +336,7 @@ describe("켬: 계좌 브리핑 상세 '시세 기준' 줄", () => {
     // '보유 N종목 합계' 줄 바로 다음 (같은 카드 안)
     const muted = ofType(r, "Muted");
     const first = muted.indexOf(kids(wrap)[0]!);
-    expect(rawOf(muted[first - 1]!)).toBe("보유 17종목 합계 · 앱 잔고 화면과 같은 기준");
+    expect(rawOf(muted[first - 1]!)).toBe("보유 17종목 합계 · 작성 당시 종목 시세 기준 추정");
     expect(r.all().filter((n) => n.type === "View" && plain(rawOf(n)) === LINE)).toHaveLength(1);
     expect(labels(r).filter((l) => l.includes("시세 기준"))).toEqual([LINE_SPEECH]);
     // 총 평가 묶음 이름표(totalsSpeech)는 켬·끔이 같고, 그 묶음 안에 이 줄이 없다
@@ -345,7 +347,7 @@ describe("켬: 계좌 브리핑 상세 '시세 기준' 줄", () => {
     // 기존 '기준:' 줄 그대로
     const basisLine = (x: R) => ofType(x, "Muted").map(rawOf).find((l) => l.startsWith("기준: "));
     expect(basisLine(r)).toBe(basisLine(off));
-    expect(basisLine(r)).toContain("기준: 앱 잔고 화면과 같은 기준");
+    expect(basisLine(r)).toContain("기준: 작성 당시 종목 시세 기준 추정");
   });
 
   it.each(["stack", "pane", "split"] as const)("%s: 예전 기록(quoteBasis 없음)은 줄 없음", (layout) => {
@@ -353,8 +355,9 @@ describe("켬: 계좌 브리핑 상세 '시세 기준' 줄", () => {
     h.flags.numberBasis = true;
     h.detail = { ...ACCOUNT, data: OLD_DATA } satisfies AccountBriefingWithData;
     const r = render(<AccountBriefingBody numId={12} layout={layout} />);
-    expect(r.text()).not.toContain("시세 기준");
-    expect(labels(r).some((l) => l.startsWith("시세 기준"))).toBe(false);
+    expect(r.all().filter((n) => n.type === "Muted" && plain(rawOf(n)).startsWith("시세 기준: "))).toHaveLength(0);
+    expect(labels(r).filter((l) => l.startsWith("시세 기준,"))).toHaveLength(0);
+    expect(r.text()).toContain("보유 17종목 합계 · 작성 당시 종목 시세 기준 추정");
   });
 
   it("여럿이면 '말 수'를 가운뎃점으로, 화면 읽기는 'N종목' 을 쉼표로", () => {

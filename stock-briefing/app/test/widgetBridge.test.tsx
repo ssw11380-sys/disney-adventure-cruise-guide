@@ -1,6 +1,6 @@
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { FeatureFlags, LatestBriefing, RegisteredWithQuote } from "@/api/types";
+import type { FeatureFlags, LatestBriefing, RegisteredWithQuote, TossAccountSnapshotBody } from "@/api/types";
 import { holding, quote } from "./helpers";
 
 /**
@@ -19,6 +19,10 @@ const h = vi.hoisted(() => ({
   latest: [] as unknown[],
   fetches: 0,
   appState: [] as ((s: string) => void)[],
+  apiToken: "bridge-test-token",
+  snapshotResets: 0,
+  snapshotResetGate: null as Promise<void> | null,
+  settingsReady: true,
 }));
 
 vi.mock("react-native", () => ({
@@ -31,15 +35,17 @@ vi.mock("react-native", () => ({
   },
 }));
 vi.mock("expo-constants", () => ({ default: { expoConfig: { extra: {} } } }));
+vi.mock("expo-router", () => ({ useIsFocused: () => true }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: async () => null, setItem: async () => undefined, removeItem: async () => undefined, multiGet: async () => [] } }));
 vi.mock("react-native-android-widget", () => ({ FlexWidget: () => null, TextWidget: () => null, ListWidget: () => null }));
 vi.mock("@/lib/settings", () => ({
-  useSettings: () => ({ apiUrl: API, showKrw: false, afterCost: true, widgetRowCurrency: "krw" }),
+  useSettings: () => ({ apiUrl: API, apiToken: h.apiToken, ready: h.settingsReady, showKrw: false, afterCost: true, widgetRowCurrency: "krw" }),
   STORAGE_KEYS: {},
   defaultApiUrl: () => API,
   widgetRowCurrencyOf: () => "krw",
 }));
-vi.mock("@/api/hooks", () => ({
+vi.mock("@/api/hooks", async (original) => ({
+  ...(await original<typeof import("@/api/hooks")>()),
   useApi: () => ({
     listStocks: async () => [],
     features: async () => ({ features: {}, updatedAt: null }),
@@ -56,10 +62,17 @@ vi.mock("@/widgets/refresh", async (orig) => ({
   refreshWidgets: async (o: Record<string, unknown>) => void h.calls.push(o),
   refreshBriefingWidget: async (a: { at: number; list: unknown[] } | null | undefined) => void h.briefOnly.push(a),
 }));
+vi.mock("@/widgets/data", async (orig) => ({
+  ...(await orig<typeof import("@/widgets/data")>()),
+  resetWidgetAccountSnapshot: () => { h.snapshotResets++; return h.snapshotResetGate ?? Promise.resolve(); },
+}));
 
 const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
 const { render, cleanupRenders } = await import("./miniRender");
 const { WidgetBridge } = await import("@/components/WidgetBridge");
+const { tossSnapshotCredentialScope } = await import("@/api/hooks");
+const { ApiRequestError } = await import("@/api/client");
+const { sessionIdentityVersion, sessionFor } = await import("@/lib/session");
 
 const T = Date.parse("2026-09-24T16:10:00+09:00");
 const STOCKS: RegisteredWithQuote[] = [
@@ -110,6 +123,140 @@ beforeEach(() => {
   h.latest = [];
   h.fetches = 0;
   h.appState.length = 0;
+  h.apiToken = "bridge-test-token";
+  h.snapshotResets = 0;
+  h.snapshotResetGate = null;
+  h.settingsReady = true;
+});
+
+describe("WidgetBridge: 같은 계좌 수신 기록을 추가 조회 없이 전달", () => {
+  const body = (krw: number): TossAccountSnapshotBody => ({ on: true, snapshot: {
+    source: "toss-openapi", scope: "all-toss-stock-holdings", excludesCash: true, includesExcludedHoldings: true,
+    receivedFrom: "2026-09-24T16:09:59+09:00", receivedAt: "2026-09-24T16:10:00+09:00",
+    accountCount: 1, holdingCount: 1, excludedHoldingCount: 0, gross: { krw, usd: 0 }, net: { krw, usd: 0 },
+    displayFx: null, costBasis: { krw: 90_000, holdingCount: 1, estimatedHoldingCount: 0, source: "synced-holdings-cost-book" },
+  }, sync: { enabled: true, intervalMin: 10, idleIntervalMin: 60, lastRunAt: null, nextRunAt: null, lastError: null } });
+  const key = (client: InstanceType<typeof QueryClient>) => [API, "tossAccountSnapshot", `${sessionFor(API)?.user.id ?? "legacy"}:${sessionIdentityVersion()}:${tossSnapshotCredentialScope(client, API, h.apiToken)}`];
+  async function enable(client: InstanceType<typeof QueryClient>) {
+    client.setQueryData([API, "features"], { ...flags(true), features: { ...flags(true).features, tossAccountSnapshot: true } });
+    await settle();
+  }
+
+  it("앱 시작 때 저장된 인증을 처음 복원하는 것은 인증 교체로 취급하지 않는다", async () => {
+    h.settingsReady = false;
+    const client = await open({ polish: true });
+    expect(h.calls).toHaveLength(0);
+    h.apiToken = "saved-bridge-token";
+    h.settingsReady = true;
+    await enable(client);
+    expect(h.snapshotResets).toBe(0);
+    client.setQueryData(key(client), body(100_000));
+    await settle();
+    expect(h.calls.at(-1)!.tossAccount).toMatchObject({ body: { snapshot: { net: { krw: 100_000 } } } });
+    expect(h.snapshotResets).toBe(0);
+  });
+
+  it("같은 인증의 수신 금액만 즉시 전달하며 반복 수신과 종목 체결은 1분 규칙을 유지한다", async () => {
+    const client = await open({ polish: true });
+    await enable(client);
+    const currentKey = key(client);
+    const before = h.calls.length;
+    expect(h.snapshotResets).toBe(0);
+    client.setQueryData([API, "tossAccountSnapshot", "other-user"], body(1));
+    await settle();
+    expect(h.calls).toHaveLength(before);
+    const first = body(100_000);
+    client.setQueryData(currentKey, first, { updatedAt: T + 10_000 });
+    await settle();
+    expect(h.calls).toHaveLength(before + 1);
+    expect(h.calls.at(-1)!.tossAccount).toEqual({ at: T + 10_000, body: first });
+    client.setQueryData(currentKey, structuredClone(first), { updatedAt: T + 20_000 });
+    client.setQueryData([API, "stocks"], [...STOCKS], { updatedAt: Date.now() + 2_000 });
+    await settle();
+    expect(h.calls).toHaveLength(before + 1);
+    client.setQueryData(currentKey, body(101_000), { updatedAt: T + 30_000 });
+    await settle();
+    expect(h.calls).toHaveLength(before + 2);
+    expect(h.fetches).toBe(0);
+    expect(h.snapshotResets).toBe(0);
+  });
+
+  it.each([401, 403])("%i 응답 뒤 남은 계좌 캐시는 백그라운드 전환에서도 넘기지 않는다", async (status) => {
+    const client = await open({ polish: true });
+    await enable(client);
+    const currentKey = key(client);
+    client.setQueryData(currentKey, body(100_000));
+    await settle();
+    const before = h.calls.length;
+    client.getQueryCache().find({ queryKey: currentKey, exact: true })!.setState({ status: "error", error: new ApiRequestError(status, "DENIED", "권한 없음"), errorUpdatedAt: Date.now() });
+    await settle();
+    for (const f of [...h.appState]) f("background");
+    await settle();
+    expect(h.calls).toHaveLength(before);
+  });
+
+  it("인증값을 바꾸면 이전 인증 영역의 계좌 금액을 새 위젯 갱신에 넘기지 않는다", async () => {
+    const client = await open({ polish: true });
+    await enable(client);
+    const oldKey = key(client);
+    client.setQueryData(oldKey, body(100_000));
+    await settle();
+    h.apiToken = "different-bridge-token";
+    // 기존 관찰자에 변경이 와서 다시 그려져도 새 인증 영역만 본다.
+    client.setQueryData(oldKey, body(999_999));
+    await settle();
+    expect(h.calls.at(-1)!.tossAccount).toBeNull();
+    const newKey = key(client);
+    expect(newKey).not.toEqual(oldKey);
+    expect(h.snapshotResets).toBe(1);
+    client.setQueryData(newKey, body(110_000));
+    await settle();
+    expect(h.calls.at(-1)!.tossAccount).toMatchObject({ body: { snapshot: { net: { krw: 110_000 } } } });
+  });
+
+  it("인증 교체 정리 중 새 값은 기다리되 또 다른 인증으로 바뀌면 앞 인증의 전달을 폐기한다", async () => {
+    const client = await open({ polish: true });
+    await enable(client);
+    const oldKey = key(client);
+    client.setQueryData(oldKey, body(100_000));
+    await settle();
+    const before = h.calls.length;
+    let finish!: () => void;
+    h.snapshotResetGate = new Promise<void>((resolve) => { finish = resolve; });
+    h.apiToken = "second-bridge-token";
+    client.setQueryData(oldKey, body(999_999));
+    await settle();
+    const secondKey = key(client);
+    client.setQueryData(secondKey, body(110_000));
+    await settle();
+    expect(h.calls).toHaveLength(before);
+    h.apiToken = "third-bridge-token";
+    client.setQueryData(secondKey, body(120_000));
+    await settle();
+    client.setQueryData(key(client), body(130_000));
+    await settle();
+    finish(); await settle();
+    expect(h.snapshotResets).toBe(2);
+    const sent = h.calls.slice(before).map((call) => (call.tossAccount as { body?: TossAccountSnapshotBody } | null)?.body?.snapshot?.net.krw);
+    expect(sent).not.toContain(110_000);
+    expect(sent).not.toContain(120_000);
+    expect(sent).toContain(130_000);
+    expect(JSON.stringify(h.calls)).not.toContain("bridge-token");
+  });
+
+  it("연결 실패는 마지막 금액에 실패 상태를 붙이고, 플래그 꺼짐은 계좌 캐시를 재사용하지 않는다", async () => {
+    const client = await open({ polish: true });
+    await enable(client);
+    const currentKey = key(client);
+    client.setQueryData(currentKey, body(100_000));
+    await settle();
+    client.getQueryCache().find({ queryKey: currentKey, exact: true })!.setState({ status: "error", error: new Error("network"), errorUpdatedAt: Date.now() });
+    await settle();
+    expect(h.calls.at(-1)!.tossAccount).toMatchObject({ body: { on: true, snapshot: { net: { krw: 100_000 } }, sync: { lastError: expect.stringContaining("새로고침 실패") } } });
+    client.setQueryData([API, "features"], flags(true));
+    await settle();
+    expect(h.calls.at(-1)!.tossAccount).toMatchObject({ body: { on: false, snapshot: null, sync: null } });
+  });
 });
 afterEach(() => {
   cleanupRenders();

@@ -1,11 +1,12 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import type { AccountBriefing, LatestBriefing, RegisteredWithQuote } from "@/api/types";
+import type { AccountBriefing, LatestBriefing, RegisteredWithQuote, TossAccountSnapshotBody } from "@/api/types";
 import { defaultApiUrl, STORAGE_KEYS, widgetRowCurrencyOf } from "@/lib/settings";
 import { fillFromLast, type PnlMode } from "./model";
 import {
   canReuse,
   cleanBrief,
   cleanSummary,
+  cleanTossAccount,
   fromPayload,
   gateExtended,
   NO_FEATURES,
@@ -89,8 +90,11 @@ async function noteAuth(res: Response, apiUrl: string, sent: string | null): Pro
  */
 
 export interface WidgetData {
+  tossAccount?: TossAccountSnapshotBody;
+  /** 이 계좌 응답을 받은 시각. 시세나 다시 그린 시각으로 바꾸지 않는다. */
+  tossAccountAt?: number;
   /** 이번 실행에서 자료를 읽은 서버·로그인 경계. 기기에 저장한 이전 실행의 값은 재사용하지 않는다. */
-  renderScope?: { apiUrl: string; identity: number };
+  renderScope?: { apiUrl: string; identity: number; accountGeneration?: number };
   stocks: RegisteredWithQuote[];
   briefings: LatestBriefing[];
   showKrw: boolean;
@@ -148,7 +152,7 @@ export interface WidgetData {
 }
 
 function withRenderScope(data: WidgetData, apiUrl: string, identity: number): WidgetData {
-  return data.features.clarity === true ? { ...data, renderScope: { apiUrl, identity } } : data;
+  return data.features.clarity === true || data.features.tossAccount === true ? { ...data, renderScope: { apiUrl, identity, ...(data.features.tossAccount === true ? { accountGeneration: widgetAccountSnapshotGeneration() } : {}) } } : data;
 }
 
 const LAST_KEY = "widget.lastStocks";
@@ -288,6 +292,23 @@ const PAYLOAD_KEY = "widget.payload";
 const VIEW_KEY = "widget.view";
 const PNL_KEY = "widget.pnlMode";
 
+let accountSnapshotGeneration = 0;
+let accountSnapshotReset: Promise<void> | null = null;
+export function widgetAccountSnapshotGeneration(): number { return accountSnapshotGeneration; }
+export function assertWidgetAccountSnapshotGeneration(generation: number): void {
+  if (generation !== accountSnapshotGeneration || accountSnapshotReset) throw new Error("계좌 연결 정보가 바뀌었습니다. 새 계좌 정보를 확인해 주세요.");
+}
+
+/** 인증값을 저장하지 않고 인증 경계가 바뀐 때만 이전 계좌 응답·그림을 폐기한다. 종목 마지막 값은 기존 규칙으로 유지한다. */
+export function resetWidgetAccountSnapshot(): Promise<void> {
+  accountSnapshotGeneration++;
+  // 진행 중 이전 쓰기 뒤에 지워야 늦은 저장이 이전 계좌 응답을 되살리지 못한다.
+  const job = personalSerial(() => Promise.all([VIEW_KEY, PAYLOAD_KEY].map(removePersonal)).then(() => undefined));
+  const pending = job.finally(() => { if (accountSnapshotReset === pending) accountSnapshotReset = null; });
+  accountSnapshotReset = pending;
+  return pending;
+}
+
 /**
  * 위젯이 적어 둔 개인 데이터(마지막 잔고·마지막 /api/widget 응답·마지막으로 그린 데이터·실패 표시)를 지운다 (계정 A단계).
  * 계정이 바뀔 때(로그아웃·세션 끊김·다른 사람 로그인 — 앱 루트가 lib/session onAccountChange 로 부른다)와 서버가 개인 데이터를 주지 않을 때.
@@ -374,6 +395,7 @@ function slimBriefings(list: LatestBriefing[]): LatestBriefing[] {
 }
 
 export async function saveWidgetView(data: WidgetData, apiUrl: string, identity = sessionIdentityVersion()): Promise<void> {
+  if (data.renderScope?.accountGeneration !== undefined) assertWidgetAccountSnapshotGeneration(data.renderScope.accountGeneration);
   const { showKrw: _k, afterCost: _a, rowKrw: _r, asked: _q, recovered: _v, boardFresh: _f, renderScope: _scope, ...rest } = data;
   const view: StoredView = { ...rest, briefings: slimBriefings(data.briefings) };
   try {
@@ -384,6 +406,8 @@ export async function saveWidgetView(data: WidgetData, apiUrl: string, identity 
 }
 
 async function readWidgetView(apiUrl: string): Promise<StoredView | null> {
+  const accountGeneration = widgetAccountSnapshotGeneration();
+  if (accountSnapshotReset) return null;
   const identity = sessionIdentityVersion();
   if (personalClears || invalidPersonalKeys.has(VIEW_KEY)) return null;
   try {
@@ -391,6 +415,7 @@ async function readWidgetView(apiUrl: string): Promise<StoredView | null> {
     if (personalClears || invalidPersonalKeys.has(VIEW_KEY) || identity !== sessionIdentityVersion()) return null;
     const v = raw ? (JSON.parse(raw) as { apiUrl?: unknown; accountUserId?: unknown; view?: Partial<StoredView> }) : null;
     const d = v?.view;
+    if (accountSnapshotReset || accountGeneration !== widgetAccountSnapshotGeneration()) return null;
     if (!v || v.apiUrl !== apiUrl || !d || typeof d.fetchedAt !== "number" || !Array.isArray(d.stocks)) return null;
     if (!ownsPersonalCache(v, apiUrl)) {
       // 로그인 안내가 이미 그려졌다는 사실만 보존한다. 디스크의 개인 필드는 한 개도 되돌리지 않는다.
@@ -411,6 +436,7 @@ async function readWidgetView(apiUrl: string): Promise<StoredView | null> {
       board: Array.isArray(d.board) ? d.board : null,
       ...(typeof d.boardAt === "number" ? { boardAt: d.boardAt } : {}),
       features: { ...NO_FEATURES, ...(d.features ?? {}) },
+      ...(cleanTossAccount(d.tossAccount) ? { tossAccount: cleanTossAccount(d.tossAccount), tossAccountAt: d.tossAccountAt } : {}),
       ...(typeof d.featuresAt === "number" ? { featuresAt: d.featuresAt } : {}),
       brief: cleanBrief(d.brief),
       ...summaryOf(d.summary),
@@ -451,15 +477,19 @@ export async function togglePnlMode(): Promise<PnlMode> {
  * 아직 적어 둔 것이 없으면(업데이트 직후) 마지막 잔고·마지막 /api/widget 응답으로 만든다
  */
 export async function loadCachedWidgetData(): Promise<WidgetData> {
+  const accountGeneration = widgetAccountSnapshotGeneration();
+  assertWidgetAccountSnapshotGeneration(accountGeneration);
   const identity = sessionIdentityVersion();
   if (personalClears) return signedOutWidgetData();
   const { apiUrl, showKrw, afterCost, rowKrw } = await readSettings();
   try { await backgroundSessionFor(apiUrl); assertSessionIdentity(identity); }
   catch { return signedOutWidgetData(); }
   const view = await readWidgetView(apiUrl);
+  assertWidgetAccountSnapshotGeneration(accountGeneration);
   if (personalClears || identity !== sessionIdentityVersion()) return signedOutWidgetData();
   if (view) return withRenderScope({ ...view, showKrw, afterCost, rowKrw }, apiUrl, identity);
   const [last, cached] = await Promise.all([readLastStocks(apiUrl), readCachedPayload(apiUrl)]);
+  assertWidgetAccountSnapshotGeneration(accountGeneration);
   if (personalClears || identity !== sessionIdentityVersion()) return signedOutWidgetData();
   const p = cached ? fromPayload(cached.body) : null;
   return withRenderScope({
@@ -480,6 +510,7 @@ export async function loadCachedWidgetData(): Promise<WidgetData> {
     board: p?.board ?? null,
     ...(p?.board && cached ? { boardAt: cached.at } : {}),
     features: p?.features ?? NO_FEATURES,
+    ...(p?.tossAccount && cached ? { tossAccount: p.tossAccount, tossAccountAt: cached.at } : {}),
     ...(cached ? { featuresAt: cached.at } : {}),
   }, apiUrl, identity);
 }
@@ -501,6 +532,9 @@ function newest<T extends { at: number }>(known: (T | null | undefined)[]): T | 
  * 그린 데이터는 적어 둔다 (손익 전환 때 같은 값으로 다시 그리게)
  */
 export async function pushWidgetData(o: {
+  /** 앱에서 위젯 갱신을 시작했을 때의 인증 경계. 비동기 준비 중 바뀌면 그 결과를 저장하지 않는다. */
+  accountGeneration?: number;
+  tossAccount?: { at: number; body: TossAccountSnapshotBody } | null;
   stocks: RegisteredWithQuote[];
   filled: string[];
   showKrw: boolean;
@@ -519,6 +553,8 @@ export async function pushWidgetData(o: {
   /** 종목 줄 손익을 원화로 (앱 설정 값). 주지 않으면(백그라운드 작업) 저장된 설정 */
   rowKrw?: boolean;
 }): Promise<WidgetData> {
+  const accountGeneration = o.accountGeneration ?? widgetAccountSnapshotGeneration();
+  assertWidgetAccountSnapshotGeneration(accountGeneration);
   const identity = sessionIdentityVersion();
   const now = Date.now();
   const { apiUrl, rowKrw } = await readSettings();
@@ -532,6 +568,7 @@ export async function pushWidgetData(o: {
     return out;
   }
   const [prev, cached] = await Promise.all([readWidgetView(apiUrl), readCachedPayload(apiUrl)]);
+  assertWidgetAccountSnapshotGeneration(accountGeneration);
   assertSessionIdentity(identity);
   const p = cached ? fromPayload(cached.body) : null;
   const idx = newest([
@@ -548,6 +585,7 @@ export async function pushWidgetData(o: {
     p && cached ? { at: cached.at, flags: p.features } : null,
   ]);
   const features = flags?.flags ?? NO_FEATURES;
+  const account = newestAccount([o.tossAccount, accountOf(prev), p?.tossAccount && cached ? { at: cached.at, body: p.tossAccount } : null]);
   // 다듬은 모습을 그릴 때만 시장별 문구가 있는 칩 (예전 모습은 그 경계에서 칩을 감추면 안 된다).
   // 연장 세션 표시(ext, widgetExtended)는 서버와 같은 규칙으로 잔고 시세의 세션에서 붙인다 — 서버 칩과 같은 갱신 주기·'지연' (위젯 리뷰 1)
   const chip = features.polish && o.marketPolished !== undefined ? o.marketPolished : o.market;
@@ -573,15 +611,19 @@ export async function pushWidgetData(o: {
     board: board?.list ?? null,
     ...(board ? { boardAt: board.at } : {}),
     features,
+    ...(account ? { tossAccount: account.body, tossAccountAt: account.at } : {}),
     ...(flags ? { featuresAt: flags.at } : {}),
   };
   // 마지막으로 그린 잔고가 더 새 데이터면 그 잔고·칩·기준 시각 (그 칩의 연장 세션 표시는 고른 플래그로 다시 거른다)
   if (takeFresherStocks(data, prev)) data.market = gateExtended(data.market, features);
+  assertWidgetAccountSnapshotGeneration(accountGeneration);
   await saveWidgetView(data, apiUrl, identity);
+  assertWidgetAccountSnapshotGeneration(accountGeneration);
   assertSessionIdentity(identity);
   // 자동 갱신 기록 (위젯 리뷰 2): 앱이 바로 그린 것만 app 으로 — 앱(WidgetBridge)은 늘 rowKrw 를 넘기고, 백그라운드 작업은 넘기지 않는다
   // (refresh.tsx 의 약속. 백그라운드 작업은 lib/backgroundBriefings 가 background 로 따로 적는다). 시각은 넘긴 때
   if (o.rowKrw !== undefined) await logWidgetRefresh("app", "ok", { at: now });
+  assertWidgetAccountSnapshotGeneration(accountGeneration);
   return withRenderScope(data, apiUrl, identity);
 }
 
@@ -590,18 +632,37 @@ function boardOf(v: Pick<WidgetData, "board" | "boardAt" | "fetchedAt"> | null):
   return v?.board?.length ? { at: v.boardAt ?? v.fetchedAt, list: v.board } : null;
 }
 
+function accountOf(v: Pick<WidgetData, "tossAccount" | "tossAccountAt"> | null): { at: number; body: TossAccountSnapshotBody } | null {
+  return v?.tossAccount && Number.isFinite(v.tossAccountAt) ? { at: v.tossAccountAt!, body: v.tossAccount } : null;
+}
+
+/** 더 늦게 돌아온 요청의 오래된 동기화 기록이 앱에서 이미 본 새 기록을 덮지 않는다. */
+function newestAccount(candidates: ({ at: number; body: TossAccountSnapshotBody } | null | undefined)[]) {
+  const valid = candidates.flatMap((c) => {
+    const body = c ? cleanTossAccount(c.body) : undefined;
+    return c && body && Number.isFinite(c.at) ? [{ at: c.at, body }] : [];
+  });
+  const recent = newest(valid);
+  if (!recent?.body.on || !recent.body.snapshot) return recent;
+  const snapshotSource = valid.reduce((best, c) => c.body.on && c.body.snapshot && Date.parse(c.body.snapshot.receivedAt) > Date.parse(best.body.snapshot!.receivedAt) ? c : best, recent);
+  // 숫자는 최신 수신 회차로 유지해도 마지막 조회의 실패·자동 동기화 상태는 새 응답에서 가져온다.
+  return snapshotSource === recent ? recent : { at: recent.at, body: { ...recent.body, snapshot: snapshotSource.body.snapshot } };
+}
+
 /**
  * 마지막으로 받은 /api/widget 응답 (ETag 로 304 를 받으면 이걸 쓴다, 백그라운드 갱신이 휴장 중 호출을 건너뛸지 판단).
  * 지금 앱의 요청 주소(WIDGET_PATH)로 받은 것만 — 주소가 바뀌기 전(OTA 전 ?indices=1)에 받은 응답은 서버가 다른 칩(달력만 본 칩)을 준 것이라,
  * 다시 쓰면 앱이 바로 그린 세션 칩("미국 주간거래")과 위젯이 스스로 갱신할 때의 옛 칩("한국 휴장")이 최대 2시간 번갈아 보인다
  */
 export async function readCachedPayload(apiUrl?: string): Promise<{ at: number; etag: string | null; body: WidgetPayload; briefingsAt?: number } | null> {
+  const accountGeneration = widgetAccountSnapshotGeneration();
+  if (accountSnapshotReset) return null;
   const identity = sessionIdentityVersion();
   if (personalClears || invalidPersonalKeys.has(PAYLOAD_KEY)) return null;
   try {
     const url = apiUrl ?? (await readSettings()).apiUrl;
     const [raw] = await Promise.all([AsyncStorage.getItem(PAYLOAD_KEY), backgroundSessionFor(url)]);
-    if (personalClears || invalidPersonalKeys.has(PAYLOAD_KEY) || identity !== sessionIdentityVersion()) return null;
+    if (personalClears || invalidPersonalKeys.has(PAYLOAD_KEY) || identity !== sessionIdentityVersion() || accountSnapshotReset || accountGeneration !== widgetAccountSnapshotGeneration()) return null;
     const v = raw ? (JSON.parse(raw) as { at?: unknown; apiUrl?: unknown; accountUserId?: unknown; path?: unknown; etag?: unknown; body?: unknown; briefingsAt?: unknown }) : null;
     if (!v || typeof v.at !== "number" || v.apiUrl !== url || v.path !== WIDGET_PATH || !v.body || !ownsPersonalCache(v, url)) return null;
     return { at: v.at, etag: typeof v.etag === "string" ? v.etag : null, body: v.body as WidgetPayload, ...(typeof v.briefingsAt === "number" ? { briefingsAt: v.briefingsAt } : {}) };
@@ -620,12 +681,15 @@ export async function readCachedPayload(apiUrl?: string): Promise<{ at: number; 
  * 응답이 앱 목록보다 늦게 받은 것이거나, 고르는 동안 위젯·백그라운드 작업이 새 응답을 적었으면(받은 시각이 다름) 건드리지 않는다. 실패해도 그린 것은 그대로다
  */
 export async function carryBriefingsIntoPayload(picked: readonly LatestBriefing[], appAt: number): Promise<void> {
+  const accountGeneration = widgetAccountSnapshotGeneration();
   const identity = sessionIdentityVersion();
   try {
     const { apiUrl } = await readSettings();
     const cached = await readCachedPayload(apiUrl);
+    assertWidgetAccountSnapshotGeneration(accountGeneration);
     if (!cached || cached.at > appAt) return;
     const raw = await AsyncStorage.getItem(PAYLOAD_KEY);
+    assertWidgetAccountSnapshotGeneration(accountGeneration);
     const v = raw ? (JSON.parse(raw) as { at?: unknown; apiUrl?: unknown; accountUserId?: unknown; body?: WidgetPayload }) : null;
     if (!v?.body || v.at !== cached.at || v.apiUrl !== apiUrl || !ownsPersonalCache(v, apiUrl)) return;
     const briefings = picked.flatMap((b): WidgetBriefing[] =>
@@ -703,7 +767,7 @@ async function legacyUntil(apiUrl: string): Promise<number> {
  * ms=1 은 "브리핑 위젯 첫 줄(시장 전체 요약)을 그릴 수 있는 앱"이라는 표시다 — 서버는 이때만 features.marketSummary 와, 켜져 있으면 가장 최근 요약의 숫자(ms)를 넣는다
  * (예전 앱의 응답·ETag 는 그대로). 이 표시를 더해 주소가 바뀌었으므로 OTA 뒤 첫 갱신은 한 번 묻는다 (받아 둔 응답은 주소가 같을 때만 다시 쓴다)
  */
-const WIDGET_PATH = "/api/widget?indices=1&sessions=1&ui=2&ms=1";
+const WIDGET_PATH = "/api/widget?indices=1&sessions=1&ui=2&ms=1&account=1";
 /**
  * 지수·환율 위젯이 있을 때만 &board=1 (서버는 widgetMarket 이 켜져 있고 이 표시가 있을 때만 판 9개를 넣는다).
  * 위젯이 없는 사용자의 응답·ETag 는 그대로다. ETag 는 본문으로 만들므로 board 가 있는 응답과 없는 응답의 ETag 가 섞여도 304 가 잘못 나지 않는다
@@ -715,6 +779,8 @@ const BOARD_QUERY = "&board=1";
  * HTML(와이파이 로그인 페이지·프록시)이나 JSON 이 아닌 본문은 연결 오류로 던진다 — 예전 서버로 보지 않는다 (위젯 리뷰 6)
  */
 async function fetchPayload(apiUrl: string, token: string, now: number, board = false): Promise<WidgetPayload | null> {
+  const accountGeneration = widgetAccountSnapshotGeneration();
+  assertWidgetAccountSnapshotGeneration(accountGeneration);
   const identity = sessionIdentityVersion();
   const until = await legacyUntil(apiUrl);
   // 예전 앱이 적은 6시간짜리 기록(지금 규칙보다 긴 것)은 쓰지 않는다 — OTA 직후 바로 다시 묻게
@@ -725,6 +791,7 @@ async function fetchPayload(apiUrl: string, token: string, now: number, board = 
   };
   const cached = await readCachedPayload(apiUrl);
   const session = await withSession(apiUrl);
+  assertWidgetAccountSnapshotGeneration(accountGeneration);
   assertSessionIdentity(identity);
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 12_000);
@@ -733,6 +800,7 @@ async function fetchPayload(apiUrl: string, token: string, now: number, board = 
       headers: { accept: "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...session.headers, ...(cached?.etag ? { "if-none-match": cached.etag } : {}) },
       signal: ctrl.signal,
     });
+    assertWidgetAccountSnapshotGeneration(accountGeneration);
     assertSessionIdentity(identity);
     const denied = await noteAuth(res, apiUrl, session.sent);
     if (denied) throw new LoginNeededError(denied);
@@ -747,9 +815,11 @@ async function fetchPayload(apiUrl: string, token: string, now: number, board = 
     else if (await isPortalPage(res)) throw new Error(NOT_JSON); // 와이파이 로그인 511·프록시 403/407 HTML
     else throw new HttpError(res.status);
     assertSessionIdentity(identity);
+    assertWidgetAccountSnapshotGeneration(accountGeneration);
     // 모양이 다르면(예전·다른 서버) 예전 API 로
     if (!body || body.v !== 1 || !Array.isArray(body.stocks)) return legacy();
     await writePersonal(PAYLOAD_KEY, JSON.stringify({ at: now, apiUrl, accountUserId: personalOwner(apiUrl), path: WIDGET_PATH, etag: res.headers.get("etag"), body }), identity).catch(() => undefined);
+    assertWidgetAccountSnapshotGeneration(accountGeneration);
     assertSessionIdentity(identity);
     return body;
   } finally {
@@ -841,6 +911,8 @@ function boardReusable(body: WidgetPayload, prevBoardAt: number | undefined, now
  *  - board: 지수·환율 위젯 판도 묻는다 (&board=1). 판은 받지 못해도(실패·묻지 않음) 마지막으로 받은 것을 둔다
  */
 export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boolean; reuse?: boolean; board?: boolean } = { stocks: true, briefings: true }): Promise<WidgetData> {
+  const accountGeneration = widgetAccountSnapshotGeneration();
+  assertWidgetAccountSnapshotGeneration(accountGeneration);
   const identity = sessionIdentityVersion();
   const { apiUrl, apiToken, showKrw, afterCost, rowKrw } = await readSettings();
   const out: WidgetData = { stocks: [], briefings: [], showKrw, afterCost, rowKrw, brief: null, fetchedAt: Date.now(), error: null, filled: [], market: null, indices: null, board: null, features: NO_FEATURES };
@@ -854,6 +926,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
   const last = await readLastStocks(apiUrl);
   // 판은 이번에 못 받아도 마지막 것을 둔다 (조회 전에 읽어 둔다 — 아래에서 이번 결과를 적으므로)
   const prevView = await readWidgetView(apiUrl);
+  assertWidgetAccountSnapshotGeneration(accountGeneration);
   /** 이 조회를 시작한 시각 — 성공했을 때 이보다 늦게 적힌 실패 표시는 지우지 않는다 (clearRetry) */
   const started = out.fetchedAt;
   let full = false;
@@ -874,6 +947,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
     // 자동 갱신 기록: 받아 둔 응답을 다시 쓰면 서버를 부르지 않은 것 (예전 서버 모드 10분도 예전 API 로 서버에 묻는다)
     out.asked = !reuse;
     const payload = reuse ? reuse.body : await fetchPayload(apiUrl, apiToken, out.fetchedAt, opts.board === true);
+    assertWidgetAccountSnapshotGeneration(accountGeneration);
     assertSessionIdentity(identity);
     let stocks: RegisteredWithQuote[];
     if (payload) {
@@ -887,6 +961,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       if (p.board) out.boardAt = out.fetchedAt;
       out.features = p.features;
       out.featuresAt = out.fetchedAt;
+      if (p.tossAccount) { out.tossAccount = p.tossAccount; out.tossAccountAt = out.fetchedAt; }
       out.brief = p.brief;
       if (p.summary) out.summary = p.summary;
       if (payload.latestIds) out.latestIds = payload.latestIds;
@@ -917,6 +992,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
     assertSessionIdentity(identity);
     ok = true;
   } catch (e) {
+    assertWidgetAccountSnapshotGeneration(accountGeneration);
     // 앞 계정의 늦은 성공·오류는 새 계정의 저장값을 지우거나 예전 캐시로 대신 그리지 않는다.
     if (identity !== sessionIdentityVersion()) return signedOutWidgetData(out.fetchedAt);
     out.error = e instanceof Error ? e.message : String(e);
@@ -951,6 +1027,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       if (p.board) out.boardAt = cached.at;
       out.features = p.features;
       out.featuresAt = cached.at;
+      if (p.tossAccount) { out.tossAccount = p.tossAccount; out.tossAccountAt = cached.at; }
       out.brief = p.brief;
       if (p.summary) out.summary = p.summary;
       full = true;
@@ -965,6 +1042,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       if (prevView.featuresAt !== undefined) out.featuresAt = prevView.featuresAt;
       out.brief = prevView.brief ?? null;
       if (prevView.summary) out.summary = prevView.summary;
+      if (prevView.tossAccount) { out.tossAccount = prevView.tossAccount; out.tossAccountAt = prevView.tossAccountAt; }
     }
     if (last) {
       out.stocks = last.stocks;
@@ -973,10 +1051,14 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
   }
   // 방금 서버에서 받은 것이 아니면(재사용·조회 실패) 앱이 더 늦게 받아 그린 잔고·칩·기준 시각·지수·플래그를 옛 응답으로 덮지 않는다
   if (full && !fresh) await keepNewer(out, apiUrl);
+  const account = newestAccount([accountOf(out), accountOf(await readWidgetView(apiUrl))]);
+  if (account) { out.tossAccount = account.body; out.tossAccountAt = account.at; }
   keepBoard(out, prevView);
   const view = full ? out : await mergeLegacy(out, apiUrl, opts);
+  assertWidgetAccountSnapshotGeneration(accountGeneration);
   if (identity !== sessionIdentityVersion()) return signedOutWidgetData(out.fetchedAt);
   await saveWidgetView(view, apiUrl, identity);
+  assertWidgetAccountSnapshotGeneration(accountGeneration);
   if (identity !== sessionIdentityVersion()) return signedOutWidgetData(out.fetchedAt);
   if (!ok) {
     // 실패 표시: 다음 백그라운드 작업이 장 상태와 상관없이 다시 묻게. 그릴 값(오류 포함)을 적은 뒤에 적는다 — 함께 돌던 조회가 성공해
@@ -992,6 +1074,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       out.briefings = view.briefings;
     }
   }
+  assertWidgetAccountSnapshotGeneration(accountGeneration);
   return identity === sessionIdentityVersion() ? withRenderScope(out, apiUrl, identity) : signedOutWidgetData(out.fetchedAt);
 }
 
