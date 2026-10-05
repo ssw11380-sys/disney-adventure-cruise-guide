@@ -1,3 +1,4 @@
+import { checkMovementNotifications } from "@/lib/movementNotifications";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as BackgroundTask from "expo-background-task";
 import * as Notifications from "expo-notifications";
@@ -191,6 +192,8 @@ async function notifyUnseen(latest: LatestBriefing[], opts: NotifyOpts): Promise
  * 돌 때마다 자동 갱신 기록(lib/widgetRefreshLog — 설정 화면 '마지막 자동 갱신')에 성공·건너뜀·실패를 적는다 (위젯 리뷰 2)
  */
 export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskResult> {
+  // 위젯 휴장 캐시와 관계없이 가격 사건은 확인한다. 실패가 기존 브리핑·위젯을 막지 않는다.
+  const movement = checkMovementNotifications().catch(() => 0);
   try {
     // 두 시장이 모두 닫혀 있으면 2시간에 한 번만 서버에 묻는다 (휴장 중 위젯 트래픽을 줄이려고, 3-16).
     // 보유 종목의 연장 세션(미국 프리·애프터·주간거래 등, 칩의 ext — widgetExtended)이 열려 있으면 장중처럼 묻는다 (위젯 리뷰 1).
@@ -281,6 +284,8 @@ export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskR
   } catch (error) {
     await logWidgetRefresh("background", "failed", error instanceof LocalDeliveryRecordError ? { error: error.message } : undefined);
     return BackgroundTask.BackgroundTaskResult.Failed;
+  } finally {
+    await movement;
   }
 }
 

@@ -7,6 +7,8 @@ import { headerH, TAB_ICON as ICON, tabBarH } from "@/lib/textScale";
 import { useFoldLayout } from "@/lib/useFoldLayout";
 import { isWide, railWidth } from "@/lib/windowClass";
 import { font, fontCap, slopFor, space, useFontScale, useTheme } from "@/theme";
+import { useFeature } from "@/api/hooks";
+import { useAccountView } from "@/lib/account";
 
 /**
  * 넓은 창(폭 등급 중간 이상 + 플래그 foldLayout)에서 탭 화면 머리(52)를 숨기는 탭 (3-42 공통 틀 — 네 탭 모두).
@@ -20,6 +22,8 @@ const WIDE_HEADERLESS: Readonly<Record<"index" | "discover" | "briefings" | "set
 
 export default function TabsLayout() {
   const t = useTheme();
+  const watchOn = useFeature("watchlistSteps", false);
+  const { member } = useAccountView();
   const insets = useSafeAreaInsets();
   // 탭 이름은 150% 까지 키우고 그만큼 탭 바를 높인다 → 200% 에서도 이름이 잘리지 않는다. 머리 제목은 상한 없이 200% 까지 (lib/textScale)
   const scale = useFontScale();
@@ -105,6 +109,8 @@ export default function TabsLayout() {
           ...perTab("discover"),
         }}
       />
+      <Tabs.Screen name="watchlist" options={{ title: "관심", tabBarAccessibilityLabel: "관심종목", href: watchOn && !member ? undefined : null,
+        tabBarIcon: ({ color, focused }) => <Ionicons name={focused ? "star" : "star-outline"} size={ICON} color={color} /> }} />
       <Tabs.Screen
         name="briefings"
         options={{

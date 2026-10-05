@@ -605,7 +605,7 @@ describe("BH-48 Postgres 에서 수량·평단 정밀도", () => {
     const { db, sqls, inserted } = recordingPostgres([1, 2, 3, 4, 5]);
     await migrate(db, "postgres");
     // 이후 새 표와 최신 보고서 조회 색인(12)이 더해졌다. 이전 자료를 변경하는 SQL은 추가하지 않는다.
-    expect(inserted).toEqual([6, 7, 8, 9, 10, 11, 12, 13]);
+    expect(inserted).toEqual([6, 7, 8, 9, 10, 11, 12, 13, 14]);
     expect(sqls.some((s) => /create table.*"?account_briefings"?/i.test(s))).toBe(false); // 5 는 다시 돌지 않는다
     expect(sqls.some((s) => /create table.*"?market_summaries"?/i.test(s))).toBe(true);
     expect(sqls.some((s) => /create table.*"?account_snapshots"?/i.test(s))).toBe(true);
@@ -620,14 +620,14 @@ describe("BH-48 Postgres 에서 수량·평단 정밀도", () => {
     // 새 Postgres DB 는 1~12 를 한 번씩 기록한다
     const fresh = recordingPostgres();
     await migrate(fresh.db, "postgres");
-    expect(fresh.inserted).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+    expect(fresh.inserted).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
     await fresh.db.destroy();
   });
 
   it("새 SQLite DB 는 버전 1~12 를 한 번씩 기록하고, 6만 누락된 DB도 기존 자료를 보존해 올라간다", async () => {
     const db = await createMigratedDb(":memory:");
     try {
-      expect(await versionsOf(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+      expect(await versionsOf(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
       // 버전 5 까지만 올라간 운영 DB 흉내: 계좌 브리핑·보유 종목이 이미 있다
       await sql`delete from schema_version where version = 6`.execute(db);
       await db
@@ -640,7 +640,7 @@ describe("BH-48 Postgres 에서 수량·평단 정밀도", () => {
         .execute();
       await migrate(db, "sqlite");
       await migrate(db, "sqlite"); // 두 번 돌아도 안전
-      expect(await versionsOf(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+      expect(await versionsOf(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
       expect(await db.selectFrom("account_briefings").select(["briefing_date", "session"]).execute()).toEqual([{ briefing_date: "2026-09-24", session: "morning" }]);
       expect(await db.selectFrom("registered_stocks").select(["quantity", "avg_price"]).where("code", "=", "VRT").executeTakeFirst()).toEqual({ quantity: 16.123456, avg_price: 201234.57 });
     } finally {
@@ -651,7 +651,7 @@ describe("BH-48 Postgres 에서 수량·평단 정밀도", () => {
   it("가격 알림 조건 표(10, 3-29)는 새 표만 만들고, 값은 Postgres 에서 double precision · (종목·종류·값) 유일 색인", async () => {
     const { db, sqls, inserted } = recordingPostgres([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     await migrate(db, "postgres");
-    expect(inserted).toEqual([10, 11, 12, 13]);
+    expect(inserted).toEqual([10, 11, 12, 13, 14]);
     const create = sqls.find((s) => /create table.*"?price_alerts"?/i.test(s));
     expect(create).toMatch(/"?value"?\s+double precision/i);
     expect(create).toMatch(/"?fired_value"?\s+double precision/i);
@@ -663,7 +663,7 @@ describe("BH-48 Postgres 에서 수량·평단 정밀도", () => {
   it("가치 지표 표(11, 3-44 2단계)는 새 표 두 개만 만들고(재무 · 비교 기준), 종목·(시장·기준일) 유일 색인", async () => {
     const { db, sqls, inserted } = recordingPostgres([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     await migrate(db, "postgres");
-    expect(inserted).toEqual([11, 12, 13]);
+    expect(inserted).toEqual([11, 12, 13, 14]);
     expect(sqls.some((s) => /create table.*"?value_fundamentals"?/i.test(s))).toBe(true);
     expect(sqls.some((s) => /create table.*"?value_references"?/i.test(s))).toBe(true);
     expect(sqls.some((s) => /create unique index if not exists uq_value_fundamentals_code on value_fundamentals \(code\)/i.test(s))).toBe(true);

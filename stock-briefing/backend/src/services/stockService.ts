@@ -649,6 +649,17 @@ export class StockService {
 
   // ── 시세 ────────────────────────────────────────────────────────
 
+  /** 관심·알림의 여러 종목도 실시간 보강을 한 번에 묶고 기존 시세 캐시를 공유한다. */
+  async quotesFor(codes: string[]): Promise<Map<string, Quote>> {
+    const unique = [...new Set(codes)];
+    if (!unique.length) return new Map();
+    const quick = await this.quickNow(unique);
+    const rows = await mapLimit(unique, 4, async code => {
+      try { return [code, await this.getQuote(code, { quick })] as const; } catch { return null; }
+    });
+    return new Map(rows.filter((r): r is readonly [string, Quote] => r !== null));
+  }
+
   /**
    * 한 종목 현재가 (상세 화면·/quote). 캐시가 ttl 안이면 그대로, 오래됐으면 마지막 값으로 답하고 뒤에서 새로 받는다.
    * 캐시가 없거나 fresh 면 새로 받을 때까지 기다린다. 새로 받지 못하면 마지막 값(stale), 그것도 없으면 던진다

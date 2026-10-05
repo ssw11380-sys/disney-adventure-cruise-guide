@@ -355,4 +355,17 @@ describe.skipIf(!url)("postgres dialect", () => {
       await db.deleteFrom("account_briefings").where("briefing_date", "=", date).where("session", "=", "morning").execute();
     }
   });
+  it("관심종목 가격과 구간 사건을 Postgres에 저장하고 잔고와 분리한다", async () => {
+    await app.stockService.refreshMaster();
+    const before = await db.selectFrom("registered_stocks").selectAll().orderBy("code").execute();
+    const saved = await app.inject({ method: "PUT", url: "/api/watchlist/005930", payload: { startPrice: 70000, desiredPrice: 65000, alerts: true } });
+    expect(saved.statusCode).toBe(200);
+    expect(await db.selectFrom("watch_items").selectAll().where("code", "=", "005930").executeTakeFirst()).toMatchObject({ start_price: 70000, desired_price: 65000, alerts: 1 });
+    expect(await db.selectFrom("registered_stocks").selectAll().orderBy("code").execute()).toEqual(before);
+    await db.insertInto("movement_marks").values({ mark_key: "pg-test", up: 5, down: 10, created_at: "2026-10-05T01:00:00Z" }).onConflict(c => c.column("mark_key").doNothing()).execute();
+    expect(await db.selectFrom("movement_marks").selectAll().where("mark_key", "=", "pg-test").executeTakeFirst()).toMatchObject({ up: 5, down: 10 });
+    expect((await app.inject({ method: "DELETE", url: "/api/watchlist/005930" })).statusCode).toBe(204);
+    expect(await db.selectFrom("watch_items").selectAll().where("code", "=", "005930").executeTakeFirst()).toBeUndefined();
+  });
+
 });

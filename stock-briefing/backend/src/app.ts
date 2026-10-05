@@ -61,6 +61,8 @@ import { scoreRoutes } from "./routes/scores.js";
 import { PriceAlertService } from "./services/priceAlertService.js";
 import { BriefingStatusService } from "./services/briefingStatus.js";
 import { priceAlertRoutes } from "./routes/priceAlerts.js";
+import { watchlistRoutes } from "./routes/watchlist.js";
+import { WatchlistService } from "./services/watchlistService.js";
 
 export interface BuildAppOptions {
   config: AppConfig;
@@ -277,6 +279,10 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     ...(opts.receiptDelayMs !== undefined ? { receiptDelayMs: opts.receiptDelayMs } : {}),
   });
   // 지수 띠와 잔고 위젯 지수 줄, 계좌 브리핑(3-31)이 같은 목록(30초 캐시·stale 규칙)을 쓰게 하나만 만든다
+  const watchlist = new WatchlistService({ db: opts.db, stocks: stockService, features, notifications: notificationService, settings: settingsStore, now,
+    warn: () => log.warn({}, "5% 구간 알림 확인 실패") });
+  if (opts.enableScheduler !== false) watchlist.start();
+  app.addHook("onClose", async () => watchlist.stop());
   const marketIndices = opts.providers.indices ?? new MarketIndices();
   // 지표 점수 (3-44, 플래그 indicatorScores): 종목 상세의 추세 지표 점수. 일봉은 차트와 같은 캐시, 비교 지수는 위 지수 목록과 같은 인스턴스.
   // 장 마감 뒤(한국 20:10 · 뉴욕 17:30, 평일·거래일만) 등록 종목을 미리 계산해 기록한다. 플래그가 꺼져 있으면 예약이 돌아도 아무것도 하지 않는다
@@ -538,6 +544,7 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
 
   await app.register(stockRoutes, { prefix: "/api/stocks", service: stockService });
   await app.register(priceAlertRoutes, { prefix: "/api/price-alerts", service: priceAlerts });
+  await app.register(watchlistRoutes, { prefix: "/api/watchlist", service: watchlist, features });
   await app.register(analysisRoutes, {
     prefix: "/api/stocks",
     service: analysisService,

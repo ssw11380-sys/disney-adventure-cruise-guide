@@ -368,7 +368,7 @@ describe("넓은 창 (플래그 켜짐)", () => {
 });
 
 describe("탭 틀: 넓은 창에서 네 탭 모두 머리 숨김 · 세로 막대 탭을 세로 가운데로", () => {
-  const screens = () => byType(render(<TabsLayout />), "TabsScreen").map((n) => ({ name: n.props.name as string, o: n.props.options as Record<string, unknown> }));
+  const screens = () => byType(render(<TabsLayout />), "TabsScreen").filter(n => (n.props.options as { href?: string | null }).href !== null).map((n) => ({ name: n.props.name as string, o: n.props.options as Record<string, unknown> }));
 
   it.each(Object.entries(SIZES))("플래그가 꺼져 있으면 %s 도 모든 탭 머리 그대로 · 탭 칸 모양 그대로", (_n, [w, hh]) => {
     size(w, hh);
@@ -377,6 +377,16 @@ describe("탭 틀: 넓은 창에서 네 탭 모두 머리 숨김 · 세로 막�
       expect(s.o).not.toHaveProperty("headerShown");
       expect(s.o).not.toHaveProperty("tabBarItemStyle");
     }
+  });
+
+  it("관심 플래그를 켜면 다섯 번째 메뉴가 추가되고 끄면 숨겨진다", () => {
+    h.flags = { watchlistSteps: true };
+    size(475, 751);
+    expect(screens().map(x => x.name)).toEqual(["index", "discover", "watchlist", "briefings", "settings"]);
+    h.flags = { watchlistSteps: false };
+    const hidden = byType(render(<TabsLayout />), "TabsScreen").find(n => n.props.name === "watchlist");
+    expect((hidden?.props.options as { href: unknown }).href).toBeNull();
+    expect(screens().map(x => x.name)).toEqual(["index", "discover", "briefings", "settings"]);
   });
 
   it("넓은 창이면 네 탭 모두 머리를 숨긴다 (탭을 오가도 머리가 생겼다 없어졌다 하지 않게 — 검색은 잔고·발견 맨 위 줄 오른쪽 끝으로)", () => {

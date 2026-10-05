@@ -268,6 +268,9 @@ export interface FundamentalsCacheTable {
 }
 
 export interface Database {
+  watch_items: { code: string; name: string; market: string; start_price: number; desired_price: number; alerts: number; revision: string; created_at: string; updated_at: string };
+  movement_marks: { mark_key: string; up: number; down: number; created_at: string };
+  movement_events: { event_key: string; code: string; scope: string; payload: string; created_at: string };
   generation_jobs: GenerationJobTable;
   generation_requests: GenerationRequestTable;
   fundamentals_cache: FundamentalsCacheTable;

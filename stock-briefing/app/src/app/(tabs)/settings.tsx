@@ -37,6 +37,8 @@ import { isWide } from "@/lib/windowClass";
 import { font, space, touch, useTheme } from "@/theme";
 import { settingsReveal } from "@/tokens";
 import { WIDGET_REFRESH_HELP } from "@/widgets/pushPolicy";
+import { SettingsSections } from "@/components/SettingsSections";
+import { MovementSettingsCard } from "@/components/MovementSettingsCard";
 
 /**
  * 설정: 표시(원화 환산·정렬) → 알림 → 토스증권 연동 → 앱 업데이트 → 서버 상태 → 고급(서버 주소·토큰 / 화면 정보, 각각 접힘) → 정보
@@ -47,6 +49,8 @@ import { WIDGET_REFRESH_HELP } from "@/widgets/pushPolicy";
  */
 export default function SettingsScreen() {
   const t = useTheme();
+  const grouped = useFeature("settingsSections", false);
+  const movementOn = useFeature("watchlistSteps", false);
   const { apiUrl, apiToken, setCredentials, showKrw, setShowKrw, sort, setSort, themeMode, setThemeMode, afterCost, setAfterCost, widgetRowCurrency, setWidgetRowCurrency, haptics, setHaptics, density, setDensity, chartHighLow, setChartHighLow } = useSettings();
   // 3-24 플래그: oneHand('누를 때 진동' 스위치), firstRun('처음 사용 안내 다시 보기'), emptyGuide(서버 연결 칸 열기·빈 칸 안내)
   const ux = useUx();
@@ -79,6 +83,7 @@ export default function SettingsScreen() {
   const tradeRecordsOn = useFeature("tradeRecords", false);
   const recordsLabel = owner ? tradeRecordsLabel(gated(tradeRecordsOn, health.data?.tradeRecords)) : null;
   const [advanced, setAdvanced] = useState(false);
+  const [groupRequest, setGroupRequest] = useState<string | null>(null);
   // 3-24 (emptyGuide — 플래그를 못 받은 채 서버에 닿지 않을 때도, lib/uxFlags connectionGuide): 오류 화면·끊김 띠의 '설정 열기'로 오면(주소 검색어 open=server) '서버 연결' 칸을 펼치고 그 칸까지 스크롤한다.
   // 누를 때마다 새 요청이라(at) 사용자가 칸을 접은 뒤 다른 화면에서 또 눌러도 다시 펼친다. 플래그가 꺼져 있으면 검색어를 보지 않는다
   const params = useLocalSearchParams<{ open?: string; at?: string }>();
@@ -101,6 +106,7 @@ export default function SettingsScreen() {
     connectPos.current.until = 0;
   };
   const revealConnect = () => {
+    if (grouped) setGroupRequest(String(Date.now()));
     const p = connectPos.current;
     // 이미 펼쳐져 있고 자리를 알면 바로 스크롤. 아니면 펼친 뒤 칸이 자리를 알려 올 때(처음 그릴 때·펼쳐 높이가 바뀔 때) 스크롤 —
     // 펼치기 전 자리로 한 번 스크롤해도 펼친 모습을 알려 올 때까지 기다린다 (펼치기 전에는 목록이 짧아 끝까지 못 내려갈 수 있다)
@@ -394,6 +400,18 @@ export default function SettingsScreen() {
   // '서버 연결' 칸 자리를 잰다 ('설정 열기'로 왔을 때 그 칸까지 스크롤 — 플래그가 꺼져 있으면 감싸지 않는다)
   const connectBox = measure ? <View onLayout={onConnectLayout}>{connect}</View> : connect;
 
+  if (grouped) {
+    const groupedScreen = <SettingsSections openServerRequest={groupRequest ?? openReq} refreshing={pulling} onRefresh={onPull} sections={[
+      { id: "display", title: "화면·숫자 표시", detail: "테마, 원화 환산, 잔고 정렬, 차트, 위젯", content: display },
+      { id: "notifications", title: "알림", detail: "5% 구간 알림, 브리핑 시간, 기기 수신", content: <>{full && owner && movementOn ? <MovementSettingsCard /> : null}{notify}{priceAlertCard}{serverGap}</> },
+      { id: "account", title: "계정·증권사 연동", detail: "계정 정보, 토스 연동과 시세 대조", content: <><AccountCard />{toss}{serverGap}</> },
+      { id: "update", title: "앱 업데이트", detail: `현재 ${appVersion} · 새 버전 확인 및 적용`, content: <AppUpdateCard /> },
+      { id: "server", title: "연결·진단", detail: health.isError || health.data?.limited ? "연결 확인 필요 · 서버 주소와 토큰" : "서버 상태, 연결 설정, 화면 정보", content: <>{server}{connectBox}<ScreenInfoCard /></> },
+      { id: "info", title: "앱 정보·도움말", detail: "버전, 자료 출처, 처음 사용 안내", content: info },
+    ]} />;
+    return wide ? <View style={{ flex: 1, backgroundColor: t.bg, paddingTop: insets.top, paddingLeft: fold.rail ? 0 : insets.left, paddingRight: insets.right }}>{groupedScreen}</View> : groupedScreen;
+  }
+
   if (wide)
     return (
       // 넓은 창은 탭 화면 머리를 숨기므로(공통 틀) 상태 표시줄·좌우 화면 여백을 여기서 둔다 (왼쪽은 세로 탭 막대가 있으면 막대가 맡는다)
@@ -411,6 +429,7 @@ export default function SettingsScreen() {
             <AccountCard />
             {display}
             {notify}
+            {full && owner && movementOn ? <MovementSettingsCard /> : null}
             {priceAlertCard}
             {serverGap}
             {two ? info : null}
@@ -433,6 +452,7 @@ export default function SettingsScreen() {
       <AccountCard />
       {display}
       {notify}
+      {full && owner && movementOn ? <MovementSettingsCard /> : null}
       {priceAlertCard}
       {toss}
       {serverGap}
