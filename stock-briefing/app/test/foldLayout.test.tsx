@@ -474,7 +474,7 @@ describe("탭 바", () => {
     h.flag = true;
     size(933, 704);
     const r = render(<TabsLayout />);
-    const screens = r.all().filter((n) => n.type === "TabsScreen");
+    const screens = r.all().filter((n) => n.type === "TabsScreen" && (n.props.options as { href?: string | null }).href !== null);
     expect(screens.map((n) => n.props.name)).toEqual(["index", "discover", "briefings", "settings"]);
     expect(screens.map((n) => (n.props.options as { tabBarAccessibilityLabel: string }).tabBarAccessibilityLabel)).toEqual(["잔고", "발견", "브리핑", "설정"]);
   });

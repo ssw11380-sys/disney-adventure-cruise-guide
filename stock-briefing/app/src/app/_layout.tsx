@@ -14,6 +14,7 @@ import "@/lib/sessionStorage";
 import { AuthBridge } from "@/components/AuthBridge";
 import { InitialPasswordSheet } from "@/components/auth/InitialPasswordSheet";
 import { NotificationBridge, useSplashHold } from "@/components/NotificationBridge";
+import { MovementAlertBridge } from "@/components/MovementAlertBridge";
 import { PriceAlertProvider } from "@/components/PriceAlertProvider";
 import { ConnectionWordingBridge, FirstRunGate, GuideMarksProvider, HapticsBridge, UxFlagsProvider } from "@/components/UxBridge";
 import { WidgetBridge } from "@/components/WidgetBridge";
@@ -220,6 +221,7 @@ export default function RootLayout() {
                   <PriceAlertProvider>
                     <ThemedStatusBar />
                     <NotificationBridgeWithAuth />
+                    <MovementAlertBridge />
                     <WidgetBridge />
                     <ScreenTracker />
                     <HapticsBridge />

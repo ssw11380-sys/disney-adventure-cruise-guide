@@ -1247,3 +1247,8 @@ export interface QuoteBasis {
   kr: MarketQuoteBasis | null;
   us: MarketQuoteBasis | null;
 }
+export interface WatchItem {
+  code: string; name: string; market: string; currency: "KRW" | "USD";
+  startPrice: number; desiredPrice: number; alerts: boolean;
+  createdAt: string; updatedAt: string; quote: Quote | null;
+}

@@ -387,6 +387,32 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>, dialect: D
         .addColumn("fetched_at", "text", (c) => c.notNull()).execute();
     },
   },
+  {
+    version: 14,
+    up: async (db) => {
+      // 관심 가격은 보유 수량·평단과 독립해 보존한다.
+      await db.schema.createTable("watch_items").ifNotExists()
+        .addColumn("code", "text", c => c.primaryKey())
+        .addColumn("name", "text", c => c.notNull())
+        .addColumn("market", "text", c => c.notNull())
+        .addColumn("start_price", "double precision", c => c.notNull())
+        .addColumn("desired_price", "double precision", c => c.notNull())
+        .addColumn("alerts", "integer", c => c.notNull())
+        .addColumn("revision", "text", c => c.notNull())
+        .addColumn("created_at", "text", c => c.notNull())
+        .addColumn("updated_at", "text", c => c.notNull()).execute();
+      await db.schema.createTable("movement_marks").ifNotExists()
+        .addColumn("mark_key", "text", c => c.primaryKey())
+        .addColumn("up", "integer", c => c.notNull().defaultTo(0))
+        .addColumn("down", "integer", c => c.notNull().defaultTo(0))
+        .addColumn("created_at", "text", c => c.notNull()).execute();
+      await db.schema.createTable("movement_events").ifNotExists()
+        .addColumn("event_key", "text", c => c.primaryKey()).addColumn("code", "text", c => c.notNull())
+        .addColumn("scope", "text", c => c.notNull()).addColumn("payload", "text", c => c.notNull())
+        .addColumn("created_at", "text", c => c.notNull()).execute();
+      await sql`create index if not exists idx_movement_events_created on movement_events (created_at)`.execute(db);
+    },
+  },
 ];
 
 export async function migrate(db: Kysely<Database>, dialect: Dialect = "sqlite"): Promise<void> {

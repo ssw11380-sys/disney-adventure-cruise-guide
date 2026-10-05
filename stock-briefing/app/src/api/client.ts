@@ -1,4 +1,4 @@
-import type { AppErrorSummary, Evaluation,
+import type { AppErrorSummary, Evaluation, WatchItem,
   AccountBriefing,
   AccountBriefingWithData,
   DiscoverMarket,
@@ -234,6 +234,12 @@ export function createApi(baseUrl: string, token = "", opts: ApiOptions = {}) {
 
   return {
     baseUrl,
+    watchlist: () => get<{ items: WatchItem[] }>("/api/watchlist", 20_000),
+    saveWatch: (code: string, body: { startPrice: number; desiredPrice: number; alerts: boolean }) => send<{ ok: boolean }>("PUT", `/api/watchlist/${encodeURIComponent(code)}`, body),
+    removeWatch: (code: string) => send<void>("DELETE", `/api/watchlist/${encodeURIComponent(code)}`),
+    movementEvents: () => get<{ events: import("@/lib/movementNotifications").MovementEvent[] }>("/api/watchlist/events", 12_000),
+    movementSettings: () => get<{ holdings: boolean }>("/api/watchlist/settings"),
+    setMovementSettings: (holdings: boolean) => send<{ holdings: boolean }>("PUT", "/api/watchlist/settings", { holdings }),
     // ── 계정 (A단계, 플래그 accounts). 예전 서버·플래그 꺼짐은 404 → 부르는 쪽이 로그인 없이 지금처럼 (fail-open)
     login: (body: { loginId: string; password: string; remember: boolean; deviceName?: string | null }) => sendNoSession<AuthResult>("POST", "/api/auth/login", body, 20_000),
     signup: (body: { loginId: string; password: string; passwordConfirm: string; email: string; remember: boolean; deviceName?: string | null }) =>

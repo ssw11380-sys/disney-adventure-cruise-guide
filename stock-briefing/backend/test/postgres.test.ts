@@ -58,7 +58,7 @@ describe.skipIf(!url)("postgres dialect", () => {
   it("마이그레이션이 두 번 실행돼도 안전하다", async () => {
     await migrate(db, "postgres");
     const rows = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
-    expect(rows.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+    expect(rows.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
     const idx12 = await sql<{ indexdef: string }>`select indexdef from pg_indexes where schemaname = current_schema() and indexname = 'idx_briefings_date_created'`.execute(db);
     expect(idx12.rows).toHaveLength(1);
     expect(idx12.rows[0]!.indexdef).toContain("(briefing_date DESC, created_at DESC)");
@@ -163,7 +163,7 @@ describe.skipIf(!url)("postgres dialect", () => {
       await migrate(db, "postgres");
       expect(await read()).toEqual({ quantity: 16.123455, avg_price: 1234.5677 });
       const versions = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
-      expect(versions.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+      expect(versions.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
       const doubles = await sql<{ n: number }>`select count(*) as n from information_schema.columns where table_name = 'registered_stocks' and data_type = 'double precision'`.execute(db);
       expect(Number(doubles.rows[0]!.n)).toBe(2);
     } finally {
@@ -355,4 +355,17 @@ describe.skipIf(!url)("postgres dialect", () => {
       await db.deleteFrom("account_briefings").where("briefing_date", "=", date).where("session", "=", "morning").execute();
     }
   });
+  it("관심종목 가격과 구간 사건을 Postgres에 저장하고 잔고와 분리한다", async () => {
+    await app.stockService.refreshMaster();
+    const before = await db.selectFrom("registered_stocks").selectAll().orderBy("code").execute();
+    const saved = await app.inject({ method: "PUT", url: "/api/watchlist/005930", payload: { startPrice: 70000, desiredPrice: 65000, alerts: true } });
+    expect(saved.statusCode).toBe(200);
+    expect(await db.selectFrom("watch_items").selectAll().where("code", "=", "005930").executeTakeFirst()).toMatchObject({ start_price: 70000, desired_price: 65000, alerts: 1 });
+    expect(await db.selectFrom("registered_stocks").selectAll().orderBy("code").execute()).toEqual(before);
+    await db.insertInto("movement_marks").values({ mark_key: "pg-test", up: 5, down: 10, created_at: "2026-10-05T01:00:00Z" }).onConflict(c => c.column("mark_key").doNothing()).execute();
+    expect(await db.selectFrom("movement_marks").selectAll().where("mark_key", "=", "pg-test").executeTakeFirst()).toMatchObject({ up: 5, down: 10 });
+    expect((await app.inject({ method: "DELETE", url: "/api/watchlist/005930" })).statusCode).toBe(204);
+    expect(await db.selectFrom("watch_items").selectAll().where("code", "=", "005930").executeTakeFirst()).toBeUndefined();
+  });
+
 });

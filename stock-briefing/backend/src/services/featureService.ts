@@ -8,6 +8,8 @@ import { seoulIso } from "../lib/time.js";
  *  - 새 기능(3-19·3-24 의 새 동작, P2 전부)은 플래그 뒤에 둔다
  */
 export const FEATURES = {
+  watchlistSteps: { default: true, description: "별도 관심종목·관심 시작 가격·구매희망 가격, 관심 기준 및 잔고 전일 종가 기준 5% 구간 서버 알림. 끄면 메뉴·조회·알림 중지, 저장값 보존" },
+  settingsSections: { default: true, description: "설정 분류 목록과 선택한 항목만 펼치기. 끄면 기존 전체 설정 화면" },
   widgetClarity: { default: true, description: "위젯 정보 기준 개선: 앱 실시간 평가·시세와 조회 시각·합계 제외와 지난 값 경고·전일 대비·개인화. 끄면 기존 위젯" },
   tossAccountSnapshot: { default: true, description: "토스 원본 계좌 평가: 동기화 때 받은 전체 주식 평가를 통화별로 보존하고 잔고의 기본 기준으로 표시. 끄면 기록·조회·표시 없이 기존 실시간 평가" },
   briefingParallel: { default: true, description: "보고서 속도 개선: 종목 두 개의 자료 수집·분석을 동시에 진행하며 각 종목의 분석 뒤 요약, 저장 순서와 세션 알림을 유지. 끄면 기존 순차 처리" },

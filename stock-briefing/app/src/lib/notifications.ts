@@ -181,7 +181,7 @@ export function routeForNotification(data: Record<string, unknown> | undefined):
   if (data["type"] === "briefing" && typeof data["briefingId"] === "number") return `/briefings/${data["briefingId"]}`;
   if (data["type"] === "briefing" && typeof data["briefingId"] === "string") return `/briefings/${data["briefingId"]}`;
   // 가격 알림(3-29)은 그 종목 상세로. 코드는 화면 주소에 넣기 전에 거른다 ("../x" 같은 값은 이동하지 않음)
-  if (data["type"] === "priceAlert" && typeof data["code"] === "string") {
+  if ((data["type"] === "priceAlert" || data["type"] === "movementAlert") && typeof data["code"] === "string") {
     const code = parseStockCode(data["code"]);
     if (code) return `/stocks/${code}`;
   }
