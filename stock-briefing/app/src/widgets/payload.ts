@@ -150,6 +150,8 @@ export interface WidgetFeatures {
   basis?: boolean;
   /** 위젯 정보 기준·경고·개인화. 꺼짐·예전 서버는 칸이 없어 예전 모습과 같다 (fallback false) */
   clarity?: boolean;
+  /** 핵심 숫자 중심 표시 및 앱 실행 중 5초 묶음 전달. */
+  leanLive?: boolean;
 }
 
 export const NO_FEATURES: WidgetFeatures = { pnlToggle: false, indexLine: false, market: false, polish: false };
@@ -167,6 +169,7 @@ export function widgetFeatures(features: Record<string, boolean> | null | undefi
     ...(featureOn(flags, "marketSummary", false) ? { marketSummary: true } : {}),
     ...(featureOn(flags, "numberBasis", false) ? { basis: true } : {}),
     ...(featureOn(flags, "widgetClarity", false) ? { clarity: true } : {}),
+    ...(featureOn(flags, "widgetLeanLive", false) ? { leanLive: true } : {}),
     ...(featureOn(flags, "tossAccountSnapshot", false) ? { tossAccount: true } : {}),
   };
 }

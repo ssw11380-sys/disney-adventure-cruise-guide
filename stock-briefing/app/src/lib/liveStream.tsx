@@ -2,12 +2,12 @@ import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { createApi } from "@/api/client";
 import React, { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { AppState, Platform } from "react-native";
-import type { CandleSeries, Evaluation, FeatureFlags, Quote, RegisteredStock, RegisteredWithQuote } from "@/api/types";
+import type { CandleSeries, Evaluation, FeatureFlags, Quote, RegisteredStock, RegisteredWithQuote, WatchItem } from "@/api/types";
 import { applyTickToCandles, isIntraday } from "./chartPrefs";
 import { featureOn } from "./features";
 import { SAVER } from "./pollSaver";
 import { applyTick, applyTicksToList, evaluate, latestPerCode, newTradingDay, streamUrl, type StreamMessage, type StreamTick } from "./liveTick";
-import { personalBlocked, sessionFor, sessionVersion, subscribeSession } from "./session";
+import { personalBlocked, sessionFor, sessionIdentityVersion, sessionVersion, subscribeSession } from "./session";
 import { useSettings } from "./settings";
 
 /**
@@ -88,6 +88,19 @@ export function forgetTicks(): void {
   lastTicks.clear();
 }
 
+/** 늦게 도착한 관심목록 조회가 연결 중 받은 최신 가격을 되돌리지 않게 한다. */
+export function withWatchTicks(apiUrl: string, body: { items: WatchItem[] }): { items: WatchItem[] } {
+  let changed = false;
+  const items = body.items.map(item => {
+    const tick = lastTicks.get(lastTickKey(apiUrl, item.code));
+    const quote = tick ? applyTick(item.quote, tick) : item.quote;
+    if (quote === item.quote) return item;
+    changed = true;
+    return { ...item, quote };
+  });
+  return changed ? { ...body, items } : body;
+}
+
 /**
  * 서버에서 받은 봉에 연결 중 받은 마지막 체결을 다시 얹는다. 서버의 마지막 봉과 같은 구간일 때만 고·저·종을 고치고, 뒤 구간·지난 구간이면 그대로.
  * 서버에 없는 뒤 구간 봉은 붙이지 않는다 — 서버 봉을 다시 받는 것이 앱이 만든 봉을 지우는 길이라서. 붙이면 휴장일 목록(KR_HOLIDAYS)에 없는 임시 휴장일
@@ -122,6 +135,22 @@ export function applyTicksToCache(qc: QueryClient, apiUrl: string, ticks: Map<st
     if (next === list) return undefined;
     touched = true;
     return next;
+  });
+  qc.setQueriesData<{ items: WatchItem[] }>({ queryKey: [apiUrl, "watchlist"], predicate: q => q.queryKey[3] === sessionIdentityVersion() && fresh(q.queryKey as unknown[]) }, body => {
+    if (!body?.items) return undefined;
+    let changed = false;
+    const items = body.items.map(item => {
+      const tick = ticks.get(item.code);
+      if (!tick) return item;
+      if (newTradingDay(item.quote, tick)) held.add(item.code);
+      const quote = applyTick(item.quote, tick);
+      if (quote === item.quote) return item;
+      changed = true;
+      return { ...item, quote };
+    });
+    if (!changed) return undefined;
+    touched = true;
+    return { ...body, items };
   });
   for (const tick of ticks.values()) {
     qc.setQueriesData<StockDetail>({ queryKey: [apiUrl, "stock", tick.code], exact: true }, (d) => {
@@ -196,6 +225,7 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
       if (now - listRefetchedAt < NEW_DAY_REFETCH_MS) return;
       listRefetchedAt = now;
       void qc.invalidateQueries({ queryKey: [apiUrl, "stocks"], exact: true }, { cancelRefetch: false });
+      void qc.invalidateQueries({ queryKey: [apiUrl, "watchlist"] }, { cancelRefetch: false });
     };
     // snapshot: 접속 직후 스냅샷이면 차트에 새 봉을 열지 않고, 스냅샷에 없는 종목의 마지막 체결은 잊는다 (applyTicksToCache · rememberTicks)
     const applyNow = (snapshot = false) => {
@@ -306,6 +336,10 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
           // 잔고 탭이 가려져 구독이 끊겨 있어도 바로 받는다 (위젯이 옛 잔고를 그리지 않게) — 구독이 없으면 refetch 가 건너뛰므로 직접 받는다
           void qc.fetchQuery({ queryKey: [apiUrl, "stocks"], queryFn: createApi(apiUrl, apiToken).listStocks, staleTime: 0 }).catch(() => undefined);
           void qc.invalidateQueries({ queryKey: [apiUrl, "stock"] });
+          if (featureOn(qc.getQueryData<FeatureFlags>([apiUrl, "features"]), "tossAccountSnapshot", false)) {
+            void qc.invalidateQueries({ queryKey: [apiUrl, "tossAccountSnapshot"] });
+          }
+        } else if (msg.type === "account") {
           if (featureOn(qc.getQueryData<FeatureFlags>([apiUrl, "features"]), "tossAccountSnapshot", false)) {
             void qc.invalidateQueries({ queryKey: [apiUrl, "tossAccountSnapshot"] });
           }

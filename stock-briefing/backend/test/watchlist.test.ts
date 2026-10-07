@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
 import { createMigratedDb, type Db } from "../src/db/index.js";
 import { WatchlistService, movementDate, movementLevel } from "../src/services/watchlistService.js";
 import { FeatureService } from "../src/services/featureService.js";
@@ -36,6 +37,34 @@ async function setup() {
 }
 
 describe("관심 가격과 5% 구간", () => {
+  it("관심 전용 종목도 실시간 구독하고 삭제·기능 끄기는 해제하며 보유 종목을 보존한다", async () => {
+    db = await createMigratedDb(":memory:");
+    const providers = fakeProviders();
+    const live = Object.assign(new EventEmitter(), { get: () => null, setCodes: vi.fn(), stop: vi.fn(),
+      status: () => ({ enabled: true, connected: true, subscribed: [], lastMessageAt: null, lastError: null }) });
+    providers.live = live as never;
+    const app = await buildApp({ db, config: loadConfig({ DATABASE_URL: ":memory:", API_TOKEN: "unit-test-only" }), providers, enableScheduler: false, logger: false });
+    const headers = { authorization: "Bearer unit-test-only" };
+    const save = (code: string) => app.inject({ method: "PUT", url: `/api/watchlist/${code}`, headers, payload: { startPrice: 100, desiredPrice: 90, alerts: false } });
+    try {
+      await app.stockService.refreshMaster();
+      await app.stockService.register({ code: "005930", quantity: 2, avgPrice: 80 });
+      const before = await app.stockService.list();
+      expect((await save("000660")).statusCode).toBe(200);
+      expect(live.setCodes).toHaveBeenLastCalledWith(["005930", "000660"]);
+      expect(await app.stockService.streamCodes()).toEqual(["005930", "000660"]);
+      expect((await save("005930")).statusCode).toBe(200);
+      expect(live.setCodes).toHaveBeenLastCalledWith(["005930", "000660"]);
+      expect((await app.inject({ method: "DELETE", url: "/api/watchlist/000660", headers })).statusCode).toBe(204);
+      expect(live.setCodes).toHaveBeenLastCalledWith(["005930"]);
+      await save("000660");
+      expect((await app.inject({ method: "PUT", url: "/api/admin/features", headers, payload: { watchlistSteps: false } })).statusCode).toBe(200);
+      expect(live.setCodes).toHaveBeenLastCalledWith(["005930"]);
+      expect(await app.stockService.streamCodes()).toEqual(["005930"]);
+      expect(await app.stockService.list()).toEqual(before);
+      expect(await db.selectFrom("briefings").selectAll().execute()).toEqual([]);
+    } finally { await app.close(); }
+  });
   it("정확한 경계·음수 방향·부동소수 가격을 계산한다", () => {
     expect(movementLevel(104.99, 100)).toBe(0); expect(movementLevel(105, 100)).toBe(5);
     expect(movementLevel(115, 100)).toBe(15); expect(movementLevel(95, 100)).toBe(-5);

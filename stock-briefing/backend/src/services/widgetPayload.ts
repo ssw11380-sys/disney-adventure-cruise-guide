@@ -124,6 +124,7 @@ export interface WidgetFeatures {
   numberBasis?: boolean;
   /** 위젯 정보 기준 개선. &ms=1 요청이고 켜졌을 때만 넣어 예전 응답을 보존한다 */
   widgetClarity?: boolean;
+  widgetLeanLive?: boolean;
   /** 계좌 기준 합계(account=1 요청만). 꺼짐과 사용 불가를 구분한다. */
   tossAccountSnapshot?: boolean;
 }

@@ -36,7 +36,7 @@ import { usePriceAlerts } from "@/lib/priceAlertContext";
 import { isWide } from "@/lib/windowClass";
 import { font, space, touch, useTheme } from "@/theme";
 import { settingsReveal } from "@/tokens";
-import { WIDGET_REFRESH_HELP } from "@/widgets/pushPolicy";
+import { WIDGET_LIVE_HELP, WIDGET_REFRESH_HELP } from "@/widgets/pushPolicy";
 import { SettingsSections } from "@/components/SettingsSections";
 import { MovementSettingsCard } from "@/components/MovementSettingsCard";
 
@@ -59,6 +59,7 @@ export default function SettingsScreen() {
   // 다듬은 잔고 위젯(widgetPolish)에서만 쓰는 설정이라 플래그가 켜져 있을 때만 보인다
   const widgetPolishOn = useFeature("widgetPolish", false);
   const widgetClarityOn = useFeature("widgetClarity", false);
+  const widgetLeanLiveOn = useFeature("widgetLeanLive", false);
   const tossAccountOn = useFeature("tossAccountSnapshot", false);
   // 위젯 자동 갱신 기록 요약·배터리 설정 열기 (위젯 리뷰 2). 기록은 늘 적고 보여 주는 것만 플래그 뒤에
   const widgetLogOn = useFeature("widgetRefreshLog", false);
@@ -262,7 +263,7 @@ export default function SettingsScreen() {
       {owner ? (
         <View style={{ gap: space.xxs, paddingTop: space.sm }}>
           <Text style={styles.label(t.ink)}>홈 화면 위젯 갱신</Text>
-          <Muted style={{ fontSize: font.tiny }}>{WIDGET_REFRESH_HELP}</Muted>
+          <Muted style={{ fontSize: font.tiny }}>{gated(widgetLeanLiveOn, WIDGET_LIVE_HELP) ?? WIDGET_REFRESH_HELP}</Muted>
           {widgetLogOn ? <WidgetRefreshStatus /> : null}
           {gated(widgetClarityOn, true) ? <Button title="위젯별 표시 설정" variant="secondary" onPress={() => router.push("/widget-settings")} /> : null}
         </View>

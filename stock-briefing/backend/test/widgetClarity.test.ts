@@ -44,6 +44,22 @@ describe("위젯 정보 기준 플래그: 예전 본문 보존·추가 외부 �
   });
   afterEach(async () => { await app?.close(); await db?.destroy(); });
 
+  it("간결한 갱신 플래그는 새 요청에만 붙고 끄면 수치·외부 호출·기존 응답을 유지한다", async () => {
+    const legacy = await app.inject("/api/widget");
+    const on = await app.inject("/api/widget?ms=1");
+    expect(on.json().features.widgetLeanLive).toBe(true);
+    expect(legacy.json().features).not.toHaveProperty("widgetLeanLive");
+    const previous = on.json(); delete previous.features.widgetLeanLive;
+    await features.set({ widgetLeanLive: false });
+    const off = await app.inject("/api/widget?ms=1");
+    expect(off.body).toBe(JSON.stringify(previous));
+    const legacyOff = await app.inject("/api/widget");
+    expect(legacyOff.body).toBe(legacy.body);
+    expect(legacyOff.headers.etag).toBe(legacy.headers.etag);
+    expect([list, latest, calendar].map(f => f.mock.calls.length)).toEqual([4, 4, 4]);
+    expect(indices).not.toHaveBeenCalled();
+  });
+
   it("기본 켜짐이며 지금 앱의 요청에만 true 칸을 더한다", async () => {
     expect(FEATURES.widgetClarity.default).toBe(true);
     const before = await app.inject("/api/widget");

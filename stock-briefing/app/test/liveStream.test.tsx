@@ -232,4 +232,12 @@ describe("BH-15: 연결 중에 닫은 소켓이 나중에 열려도 좀비로 �
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["https://server.test", "tossAccountSnapshot"] });
     fetch.mockRestore();
   });
+  it("계좌 저장 완료 사건은 시세 대조 없이 계좌 기록만 바로 갱신한다", () => {
+    const r=mount(), ws=FakeWS.all[0]!; r.act(()=>ws.open());
+    const qc=h.qc as QueryClient;
+    qc.setQueryData(["https://server.test","features"],{features:{tossAccountSnapshot:true}});
+    const invalidate=vi.spyOn(qc,"invalidateQueries");
+    r.act(()=>ws.message({type:"account",at:Date.now()}));
+    expect(invalidate.mock.calls.map(c=>c[0])).toEqual([{queryKey:["https://server.test","tossAccountSnapshot"]}]);
+  });
 });

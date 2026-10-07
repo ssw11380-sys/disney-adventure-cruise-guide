@@ -40,6 +40,8 @@ export interface StockServiceDeps {
   now?: () => Date;
   /** 현재가 캐시 유효 시간(ms). 장중 새로고침 남발 방지용. */
   quoteCacheTtlMs?: number;
+  /** 별도 관심목록은 잔고에 넣지 않고 실시간 구독에만 합친다. */
+  extraLiveCodes?: () => Promise<string[]>;
 }
 
 export interface RegisterInput {
@@ -464,11 +466,20 @@ export class StockService {
     return (await this.get(listed.code))!;
   }
 
-  /** 등록 종목 전체를 실시간 구독 목록으로 넘긴다 (기동 시, 등록/삭제/가져오기 후) */
+  private liveSync: Promise<void> = Promise.resolve();
+
+  /** 등록 종목을 먼저 두어 공급자 구독 상한에 닿아도 보유 시세를 우선한다. */
+  async streamCodes(): Promise<string[]> {
+    const [registered, extra] = await Promise.all([this.list(), this.deps.extraLiveCodes?.() ?? []]);
+    return [...new Set([...registered.map(s => s.code), ...extra])];
+  }
+
+  /** 동시 추가·삭제가 겹쳐도 오래된 구독 목록이 나중에 덮어쓰지 않는다. */
   async syncLive(): Promise<void> {
     if (!this.deps.live) return;
-    const codes = (await this.list()).map((s) => s.code);
-    this.deps.live.setCodes(codes);
+    const run = this.liveSync.then(async () => this.deps.live!.setCodes(await this.streamCodes()));
+    this.liveSync = run.catch(() => undefined);
+    return run;
   }
 
   update(code: string, input: UpdateInput): Promise<RegisteredStock> {

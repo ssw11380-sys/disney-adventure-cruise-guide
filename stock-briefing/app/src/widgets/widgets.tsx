@@ -110,6 +110,7 @@ const dp = (v: number | undefined, fallback: number) => (v !== undefined && Numb
 
 /** 위젯 크기(widgetInfo dp)·시스템 글자 배율·팔레트 */
 export interface WidgetFrame {
+  leanLive?: boolean;
   /** 평가 기준·경고·읽기 크기를 우선하는 보기. 없거나 꺼져 있으면 기존 트리 그대로. */
   clarity?: boolean;
   widgetId?: number;
@@ -1177,7 +1178,7 @@ function ClarityHoldingsWidget(props: StockWidgetProps & WidgetFrame & HoldingsE
           const canPair = nameW >= textWidth("가나", F.base, scale);
           const shownPrice = readableFont(r.price, canPair ? rightW : content, scale, F.base);
           const stale = info.staleCodes.includes(r.code);
-          const sub = clarityLine(stale ? ["시세 지연"] : r.subs, canPair ? nameW : content, scale, F.base);
+          const sub = clarityLine(stale ? ["시세 지연"] : props.leanLive ? (r.hasQuote ? [] : ["시세 없음"]) : r.subs, canPair ? nameW : content, scale, F.base);
           const rate = clarityLine([`${WIDGET_CHANGE_LABEL} ${r.rate ?? "-"}`, r.rate ?? "-"], canPair ? rightW : content, scale, F.base);
           return <FlexWidget key={r.code} clickAction="OPEN_URI" clickActionData={{ uri: `${HOME_URI}stocks/${r.code}` }} accessibilityLabel={sentence([r.speech, stale ? "시세 지연" : null])} style={{ width: "match_parent", height: rowHeight, flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderTopWidth: 1, borderTopColor: c.line }}>
             <FlexWidget style={{ width: canPair ? nameW : content, flexDirection: "column" }}>
@@ -1185,7 +1186,7 @@ function ClarityHoldingsWidget(props: StockWidgetProps & WidgetFrame & HoldingsE
               {sub ? <TextWidget text={sub} maxLines={1} style={{ color: stale ? c.warn : r.subColor(sub), fontSize: F.base }} /> : null}
             </FlexWidget>
             {canPair && shownPrice !== null ? <FlexWidget style={{ width: rightW, flexDirection: "column", alignItems: "flex-end" }}>
-              <TextWidget text={r.price} maxLines={1} style={{ color: tone(r.change, c), fontSize: shownPrice, fontWeight: "700" }} />
+              <TextWidget text={r.price} maxLines={1} style={{ color: props.leanLive ? c.ink : tone(r.change, c), fontSize: shownPrice, fontWeight: "700" }} />
               {rate ? <TextWidget text={rate} maxLines={1} style={{ color: tone(r.rateSign, c), fontSize: F.base }} /> : null}
             </FlexWidget> : null}
           </FlexWidget>;

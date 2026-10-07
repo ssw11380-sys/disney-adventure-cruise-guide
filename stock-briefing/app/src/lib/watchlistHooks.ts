@@ -5,6 +5,7 @@ import { useApi, useFeature } from "@/api/hooks";
 import { useAccountView } from "@/lib/account";
 import { useSettings } from "@/lib/settings";
 import { sessionIdentityVersion, subscribeSession } from "@/lib/session";
+import { withWatchTicks } from "@/lib/liveStream";
 
 let nextScope = 0;
 /** 인증값 자체를 캐시 키에 넣지 않고, 인증이 바뀌면 개인 목록을 새 범위에서 읽는다. */
@@ -18,7 +19,7 @@ export function useWatchlist() {
   const enabled = useFeature("watchlistSteps", false);
   const { member } = useAccountView();
   const focused = useIsFocused();
-  const query = useQuery({ queryKey: key, queryFn: api.watchlist, enabled: enabled && !member, subscribed: focused,
+  const query = useQuery({ queryKey: key, queryFn: async () => withWatchTicks(key[0], await api.watchlist()), enabled: enabled && !member, subscribed: focused,
     staleTime: 10_000, refetchInterval: 30_000, refetchIntervalInBackground: false, retry: 0 });
   return { ...query, available: enabled && !member };
 }

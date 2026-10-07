@@ -98,7 +98,8 @@ export const widgetRoutes: FastifyPluginAsync<{
     const basisOn = wantsSummary && deps.features ? deps.features.enabled("numberBasis").catch(() => false) : null;
     // 새 서버가 먼저 배포되어도 예전 요청·플래그 꺼짐 응답의 본문과 ETag 는 같다. 추가 외부 자료 조회 없음.
     const clarityOn = wantsSummary && deps.features ? deps.features.enabled("widgetClarity").catch(() => false) : null;
-    const [list, latest, status, f, idx, accountIds, sched, msOn, ms, basis, clarity, account] = await Promise.all([
+    const leanOn = wantsSummary && deps.features ? deps.features.enabled("widgetLeanLive").catch(() => false) : null;
+    const [list, latest, status, f, idx, accountIds, sched, msOn, ms, basis, clarity, account, lean] = await Promise.all([
       deps.stocks.listWithQuotes(),
       deps.briefings.latestPerStock(),
       deps.calendar.status().catch(() => null),
@@ -111,12 +112,14 @@ export const widgetRoutes: FastifyPluginAsync<{
       basisOn,
       clarityOn,
       tossAccount,
+      leanOn,
     ]);
     // marketSummary 는 새 앱(&ms=1)에만 — 예전 앱의 features 칸은 그대로. numberBasis 는 켜져 있을 때만 칸을 더한다
     const withSummary = f && msOn !== null ? { ...f, marketSummary: msOn } : f;
     const withBasis = withSummary && basis === true ? { ...withSummary, numberBasis: true } : withSummary;
     const withClarity = withBasis && clarity === true ? { ...withBasis, widgetClarity: true } : withBasis;
-    const withAccount = account ? { widgetPnlToggle: false, widgetIndexLine: false, ...withClarity, tossAccountSnapshot: account.on } : withClarity;
+    const withLean = withClarity && lean === true ? { ...withClarity, widgetLeanLive: true } : withClarity;
+    const withAccount = account ? { widgetPnlToggle: false, widgetIndexLine: false, ...withLean, tossAccountSnapshot: account.on } : withLean;
     const body = JSON.stringify(
       buildWidgetPayload(list, latest, status, {
         features: withAccount,
