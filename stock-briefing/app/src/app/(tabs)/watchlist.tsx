@@ -22,7 +22,7 @@ export function WatchRow({ item, focused = false }: { item: WatchItem; focused?:
       <Text style={{ color: t.ink, fontSize: font.body }}>{focused ? watchDifferenceLabel(q?.price, item.desiredPrice, item.currency) : <>희망가까지 {diff.amount > 0 ? "+" : diff.amount < 0 ? "−" : ""}{formatPrice(Math.abs(diff.amount), item.currency)} ({formatPct(diff.percent)})</>}</Text>
       {diff.reached ? <Muted>현재가가 구매희망 가격 이하입니다{q?.stale ? " · 지난 시세 기준" : ""}</Muted> : null}
     </View> : null}
-    <Muted>{q ? `${q.stale ? "시세 지연 · " : ""}${formatDateKo(q.asOf)} · ${q.priceBasis ?? "제공 시세"}` : "시세를 받으면 가격 차이를 표시합니다"}</Muted>
+    <Muted>{q ? `${q.stale ? "시세 지연 · " : ""}${focused ? "시세 기준 " : ""}${formatDateKo(q.asOf, focused)}${focused ? " (한국 시각)" : ""} · ${q.priceBasis ?? "제공 시세"}` : "시세를 받으면 가격 차이를 표시합니다"}</Muted>
     <Muted>관심 시작 대비 5% 구간 알림 {item.alerts ? "켜짐" : "꺼짐"}</Muted>
     <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.s, marginTop: space.sm }}>
       <Button title="상세·차트" accessibilityLabel={`${item.name} 상세와 차트`} variant="secondary" onPress={() => router.push(`/stocks/${item.code}`)} />

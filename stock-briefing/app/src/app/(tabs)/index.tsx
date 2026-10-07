@@ -362,12 +362,12 @@ export default function StocksScreen() {
         </View>
       )}
       <TableHead>
-        <HeadCell label="종목명" a11y="이름순 정렬" active={sort === "name"} onPress={() => pickSort("name")} flex />
-        <HeadCell label={PRICE_HEAD} a11y="등락률순 정렬" active={sort === "changeRate"} onPress={() => pickSort("changeRate")} width={col.price} />
+        <HeadCell focused={gated(informationFocus, true)} label="종목명" a11y="이름순 정렬" active={sort === "name"} onPress={() => pickSort("name")} flex />
+        <HeadCell focused={gated(informationFocus, true)} label={PRICE_HEAD} a11y="등락률순 정렬" active={sort === "changeRate"} onPress={() => pickSort("changeRate")} width={col.price} />
         {section.key === "held" ? (
-          <HeadCell label="평가손익·수익률" a11y="평가손익순 정렬" active={sort === "profit"} onPress={() => pickSort("profit")} width={col.right} />
+          <HeadCell focused={gated(informationFocus, true)} label="평가손익·수익률" a11y="평가손익순 정렬" active={sort === "profit"} onPress={() => pickSort("profit")} width={col.right} />
         ) : (
-          <HeadCell label="전일대비·거래량" width={col.right} />
+          <HeadCell focused={gated(informationFocus, true)} label="전일대비·거래량" width={col.right} />
         )}
       </TableHead>
     </View>
@@ -555,11 +555,11 @@ function StripEnd({ status }: { status: React.ReactNode }) {
   );
 }
 
-function HeadCell({ label, a11y, active, onPress, width, flex }: { label: string; a11y?: string; active?: boolean; onPress?: () => void; width?: number; flex?: boolean }) {
+function HeadCell({ label, a11y, active, onPress, width, flex, focused = false }: { label: string; a11y?: string; active?: boolean; onPress?: () => void; width?: number; flex?: boolean; focused?: boolean }) {
   const t = useTheme();
   const body = (
     <View style={{ flexDirection: "row", alignItems: "center", justifyContent: flex ? "flex-start" : "flex-end", gap: space.xxs }}>
-      <Text style={{ color: active ? t.ink : t.muted, fontSize: font.tiny, fontWeight: active ? "700" : "500", textAlign: flex ? "left" : "right", flexShrink: 1 }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+      <Text style={{ color: active ? t.ink : t.muted, fontSize: font.tiny, fontWeight: active ? "700" : "500", textAlign: flex ? "left" : "right", flexShrink: 1 }} {...(focused ? { maxFontSizeMultiplier: fontCap.row } : {})} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
         {label}
       </Text>
       {active ? <Ionicons name="caret-down" size={font.tiny} color={t.ink} /> : null}
