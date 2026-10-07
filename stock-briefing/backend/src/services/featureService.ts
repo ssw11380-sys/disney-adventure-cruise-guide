@@ -8,6 +8,7 @@ import { seoulIso } from "../lib/time.js";
  *  - 새 기능(3-19·3-24 의 새 동작, P2 전부)은 플래그 뒤에 둔다
  */
 export const FEATURES = {
+  informationFocus: { default: true, description: "잔고 핵심 금액·상태 우선 표시와 기준 펼치기, 관심 희망가 차이 방향 안내. 끄면 기존 전체 기준 설명과 부호 표시" },
   accountLiveRefresh: { default: true, description: "앱 연결 중 계좌 원본을 완료 후 30초 간격으로 확인. 끄면 기존 정기·체결·수동 동기화만 유지" },
   widgetLeanLive: { default: true, description: "위젯 핵심 숫자 중심 보기와 앱 실행 중 시세 5초 묶음 전달. 끄면 기존 표시와 1분 간격, 수량 즉시 전달·마지막 시세 전달 보완은 유지" },
   watchlistSteps: { default: true, description: "별도 관심종목·관심 시작 가격·구매희망 가격, 관심 기준 및 잔고 전일 종가 기준 5% 구간 서버 알림. 끄면 메뉴·조회·알림 중지, 저장값 보존" },

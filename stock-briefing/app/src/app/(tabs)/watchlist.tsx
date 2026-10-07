@@ -2,14 +2,16 @@ import React from "react";
 import { FlatList, Text, View } from "react-native";
 import { router } from "expo-router";
 import type { WatchItem } from "@/api/types";
+import { useFeature } from "@/api/hooks";
 import { Screen } from "@/components/Screen";
 import { Button, Card, Muted, Row, SectionTitle } from "@/components/ui";
 import { formatPrice, formatPct, formatDateKo } from "@/lib/format";
-import { watchDifference } from "@/lib/watchlist";
+import { watchDifference, watchDifferenceLabel } from "@/lib/watchlist";
+import { gated } from "@/lib/features";
 import { useWatchlist } from "@/lib/watchlistHooks";
 import { font, space, useTheme } from "@/theme";
 
-export function WatchRow({ item }: { item: WatchItem }) {
+export function WatchRow({ item, focused = false }: { item: WatchItem; focused?: boolean }) {
   const t = useTheme(), q = item.quote, diff = watchDifference(q?.price, item.desiredPrice);
   return <Card>
     <SectionTitle>{item.name} · {item.code}</SectionTitle>
@@ -17,7 +19,7 @@ export function WatchRow({ item }: { item: WatchItem }) {
     <Row label="관심 시작 가격" value={formatPrice(item.startPrice, item.currency)} />
     <Row label="구매희망 가격" value={formatPrice(item.desiredPrice, item.currency)} />
     {diff ? <View style={{ gap: space.xs }}>
-      <Text style={{ color: t.ink, fontSize: font.body }}>희망가까지 {diff.amount > 0 ? "+" : diff.amount < 0 ? "−" : ""}{formatPrice(Math.abs(diff.amount), item.currency)} ({formatPct(diff.percent)})</Text>
+      <Text style={{ color: t.ink, fontSize: font.body }}>{focused ? watchDifferenceLabel(q?.price, item.desiredPrice, item.currency) : <>희망가까지 {diff.amount > 0 ? "+" : diff.amount < 0 ? "−" : ""}{formatPrice(Math.abs(diff.amount), item.currency)} ({formatPct(diff.percent)})</>}</Text>
       {diff.reached ? <Muted>현재가가 구매희망 가격 이하입니다{q?.stale ? " · 지난 시세 기준" : ""}</Muted> : null}
     </View> : null}
     <Muted>{q ? `${q.stale ? "시세 지연 · " : ""}${formatDateKo(q.asOf)} · ${q.priceBasis ?? "제공 시세"}` : "시세를 받으면 가격 차이를 표시합니다"}</Muted>
@@ -30,8 +32,9 @@ export function WatchRow({ item }: { item: WatchItem }) {
 }
 export default function WatchlistScreen() {
   const q = useWatchlist();
+  const focused = gated(useFeature("informationFocus", false), true);
   return <Screen scroll={false}>
-    <FlatList data={q.available ? q.data?.items ?? [] : []} keyExtractor={s => s.code} renderItem={({ item }) => <WatchRow item={item} />}
+    <FlatList data={q.available ? q.data?.items ?? [] : []} keyExtractor={s => s.code} renderItem={({ item }) => <WatchRow item={item} focused={focused} />}
       refreshing={q.isFetching && !q.isPending} onRefresh={() => { void q.refetch(); }}
       contentContainerStyle={{ gap: space.sm, paddingBottom: space.lg }}
       ListHeaderComponent={<Card><SectionTitle>관심종목</SectionTitle><Muted>국내·미국 종목의 관심 가격과 구매희망 가격을 기록합니다. 잔고 합계에는 포함하지 않습니다.</Muted>

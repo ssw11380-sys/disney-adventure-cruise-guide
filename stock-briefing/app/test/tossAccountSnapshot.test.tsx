@@ -194,6 +194,61 @@ describe("계좌 대표 손익과 선택해서 보는 시세 추정", () => {
   });
 });
 
+describe("핵심 금액 우선 표시", () => {
+  const body = (): TossAccountSnapshotBody => ({ ...BODY, snapshot: { ...BODY.snapshot!, costBasis: { krw: 400_000, holdingCount: 20, estimatedHoldingCount: 3, source: "synced-holdings-cost-book" } } });
+  const focused = (data = body(), extra = {}) => <TossAccountSummaryView body={data} failed={false} afterCost showKrw now={NOW} focused {...extra}><TextStub>추정 합계 +5,000원</TextStub></TossAccountSummaryView>;
+  const press = (r: ReturnType<typeof render>, label: string) => {
+    const button = all(r.tree).find(n => n.props.accessibilityLabel === label);
+    expect(button, label).toBeDefined(); r.act(() => (button!.props.onPress as () => void)());
+  };
+  it("접힌 기본 화면도 금액·손익·추정 원가·제외 종목·현금 제외·수신 시각을 보존한다", () => {
+    const r = render(focused()); const s = text(r.tree);
+    for (const expected of ["379,520원", "-20,480원", "수익률 -5.12%", "추정 원가 3종목 포함", "토스 원화 손익과 차이 가능", "현금·예수금 제외", "계좌 수신", "앱 동기화 제외 1종목도 포함", "종목별 금액·손익·비중은 시세 기준 추정값"]) expect(s).toContain(expected);
+    expect(s).not.toContain("매입금액 400,000원"); expect(s).not.toContain("$199.80"); expect(s).not.toContain("추정 합계 +5,000원");
+    expect(all(r.tree).some(n => String(n.props.accessibilityLabel).includes("20,480원 손실"))).toBe(true);
+  });
+  it("한 번 펼치면 통화별 원본·매입금액·환율·계좌 범위와 수신 구간을 모두 확인하고 다시 접는다", () => {
+    const r = render(focused()); press(r, "금액·계산 기준 펼치기");
+    for (const expected of ["99,800원", "$199.80", "매입금액 400,000원", "1,400.00원", "전체 연동 2개 계좌 · 보유 20종목", "토스 계좌 수신 구간", "보고서는 작성 당시 시세 기준"]) expect(text(r.tree)).toContain(expected);
+    press(r, "시간외 시세 기준 추정 보기"); expect(text(r.tree)).toContain("추정 합계 +5,000원");
+    expect(text(r.tree)).toContain("-20,480원");
+    press(r, "금액·계산 기준 접기"); expect(text(r.tree)).not.toContain("추정 합계 +5,000원");
+    press(r, "금액·계산 기준 펼치기"); expect(text(r.tree)).not.toContain("추정 합계 +5,000원");
+  });
+  it("자료가 갱신돼도 펼친 상태와 금액 기준을 유지하며 새 위젯 링크에서는 접는다", () => {
+    const r = render(focused()); press(r, "금액·계산 기준 펼치기");
+    const next = body(); next.snapshot!.net = { ...next.snapshot!.net, krw: 100_800 };
+    r.rerender(focused(next)); expect(text(r.tree)).toContain("380,520원"); expect(text(r.tree)).toContain("-19,480원"); expect(text(r.tree)).toContain("매입금액 400,000원");
+    r.rerender(focused(next, { requestedView: "account" })); expect(text(r.tree)).not.toContain("매입금액 400,000원"); expect(text(r.tree)).toContain("-19,480원");
+  });
+  it("조회 실패·갱신 지연·원가 누락 경고를 상세 안으로 숨기지 않는다", () => {
+    const r = render(focused(body(), { failed: true })); expect(text(r.tree)).toContain("새로고침 실패 · 마지막 수신 금액");
+    r.rerender(focused(body(), { now: NOW + 24 * 60 * 60_000 })); expect(text(r.tree)).toContain("계좌 금액 갱신 대기");
+    r.rerender(focused(BODY)); expect(text(r.tree)).toContain("같은 수신 시점의 매입금액을 확인하지 못했습니다"); expect(text(r.tree)).toContain("확인 불가");
+  });
+  it("원화 끄기·환율 누락·빈 계좌에서도 통화별 금액과 의미가 남는다", () => {
+    const r = render(focused(body(), { showKrw: false })); expect(text(r.tree)).toContain("$199.80"); expect(text(r.tree)).toContain("원화 환산 꺼짐");
+    const noFx = body(); noFx.snapshot!.displayFx = null;
+    r.rerender(focused(noFx)); expect(text(r.tree)).toContain("통화별 원본만 표시"); expect(text(r.tree)).not.toContain("379,520원");
+    const empty = body(); empty.snapshot = { ...empty.snapshot!, net: { krw: 0, usd: 0 }, holdingCount: 0, excludedHoldingCount: 0, costBasis: { krw: 0, holdingCount: 0, estimatedHoldingCount: 0, source: "synced-holdings-cost-book" } };
+    r.rerender(focused(empty)); expect(text(r.tree)).toContain("0원"); expect(text(r.tree)).toContain("계산 불가 (매입금액 0원)");
+  });
+  it("금액을 못 받은 상태에서도 시세 추정을 계좌 금액으로 자동 대체하지 않는다", () => {
+    const r = render(focused({ on: true, snapshot: null, sync: null })); expect(text(r.tree)).toContain("수신한 토스 계좌 금액이 없습니다"); expect(text(r.tree)).not.toContain("추정 합계 +5,000원");
+    press(r, "시간외 시세 기준 추정 보기"); expect(text(r.tree)).toContain("추정 합계 +5,000원");
+  });
+  it("새 표시를 끄면 종전 상세 내용이 기본 표시되고 새 펼치기는 없다", () => {
+    const r = render(focused(body(), { focused: false })); expect(text(r.tree)).toContain("매입금액 400,000원"); expect(text(r.tree)).toContain("$199.80");
+    expect(all(r.tree).some(n => n.props.accessibilityLabel === "금액·계산 기준 펼치기")).toBe(false);
+  });
+  it("큰 금액에도 줄 제한이 없고 펼치기·비중 누름 영역과 설명이 남는다", () => {
+    const allocation = vi.fn(); const r = render(focused(body(), { onAllocation: allocation }));
+    for (const n of all(r.tree).filter(n => n.type === "Text")) expect(n.props.numberOfLines).toBeUndefined();
+    for (const n of all(r.tree).filter(n => n.props.accessibilityRole === "button")) expect((n.props.style as { minHeight: number }).minHeight).toBeGreaterThanOrEqual(44);
+    press(r, "종목 시세 기준 비중 보기"); expect(allocation).toHaveBeenCalledOnce();
+  });
+});
+
 describe("토스 수신 금액 최신성", () => {
   it("한국 시각과 연도를 표시하고 같은 수신 시각은 범위를 중복하지 않는다", () => {
     expect(tossSnapshotTime("2025-12-31T23:00:00Z")).toContain("2026. 01. 01.");
