@@ -426,8 +426,10 @@ export function isDelayed(opts: { openAsOf: number | null; fetchedAt: number; er
  * 장중(연장 세션 포함)엔 15분 안에 받은 값(백그라운드 작업이 15분마다 받는다), 두 시장이 닫혀 있으면 shouldSkipFetch 규칙
  */
 export const REUSE_OPEN_MS = 15 * 60_000;
-export function canReuse(last: { at: number; market: WidgetMarket | null } | null, now: number): boolean {
+export function canReuse(last: { at: number; market: WidgetMarket | null } | null, now: number, frequent = false): boolean {
   if (!last) return false;
+  // 빠른 갱신에서는 연속 크기 변경·여러 위젯의 같은 시각 호출만 합친다.
+  if (frequent) return now >= last.at && now - last.at < 60_000;
   if (now - last.at < REUSE_OPEN_MS) return true;
   return shouldSkipFetch(last, now);
 }
@@ -439,7 +441,9 @@ export function canReuse(last: { at: number; market: WidgetMarket | null } | nul
  * 받아 둔 응답의 칩은 플래그로 거른 것(payloadMarket)을 넘긴다
  */
 export const CLOSED_REFRESH_MS = 2 * 3_600_000;
-export function shouldSkipFetch(last: { at: number; market: WidgetMarket | null } | null, now: number): boolean {
+export function shouldSkipFetch(last: { at: number; market: WidgetMarket | null } | null, now: number, frequent = false): boolean {
+  // Android가 실행 기회를 줬으면 장 마감 뒤에도 자체적으로 2시간 더 미루지 않는다.
+  if (frequent) return false;
   if (!last?.market || last.market.open || extOpen(last.market)) return false;
   if (now - last.at >= CLOSED_REFRESH_MS) return false;
   const next = last.market.nextChangeAt ? Date.parse(last.market.nextChangeAt) : NaN;

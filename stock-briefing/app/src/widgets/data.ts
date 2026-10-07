@@ -942,7 +942,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
     const reused = opts.reuse ? await readCachedPayload(apiUrl) : null;
     // 칩은 플래그로 거른 것 (연장 세션 ext 는 widgetExtended 가 켜져 있을 때만 장중처럼 15분)
     const reuse =
-      reused && canReuse({ at: reused.at, market: payloadMarket(reused.body) }, out.fetchedAt) && (!opts.board || boardReusable(reused.body, prevView?.boardAt, out.fetchedAt)) ? reused : null;
+      reused && canReuse({ at: reused.at, market: payloadMarket(reused.body) }, out.fetchedAt, reused.body.features?.widgetLeanLive === true) && (!opts.board || boardReusable(reused.body, prevView?.boardAt, out.fetchedAt)) ? reused : null;
     if (reuse) out.fetchedAt = reuse.at;
     // 자동 갱신 기록: 받아 둔 응답을 다시 쓰면 서버를 부르지 않은 것 (예전 서버 모드 10분도 예전 API 로 서버에 묻는다)
     out.asked = !reuse;

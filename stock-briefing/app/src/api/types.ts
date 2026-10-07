@@ -105,7 +105,7 @@ export interface TossOpenApiStatus {
     idleIntervalMin: number;
     running: boolean;
     lastRunAt: string | null;
-    lastTrigger: "startup" | "schedule" | "briefing" | "manual" | null;
+    lastTrigger: "startup" | "schedule" | "briefing" | "manual" | "order" | "view" | null;
     lastError: string | null;
     lastChanges: { added: number; updated: number; removed: number; holdings: number } | null;
     nextRunAt: string | null;

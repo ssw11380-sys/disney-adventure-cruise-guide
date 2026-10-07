@@ -199,7 +199,7 @@ export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskR
     // 보유 종목의 연장 세션(미국 프리·애프터·주간거래 등, 칩의 ext — widgetExtended)이 열려 있으면 장중처럼 묻는다 (위젯 리뷰 1).
     // 앞선 위젯 갱신(이 작업·위젯 주기·크기 변경·↻)이 실패한 채면 장 상태와 상관없이 묻는다 — '갱신 실패'가 휴장 2시간 동안 남지 않게 (위젯 2차)
     const cached = await readCachedPayload();
-    if ((await pendingRetry()) === null && shouldSkipFetch(cached ? { at: cached.at, market: payloadMarket(cached.body) } : null, Date.now())) {
+    if ((await pendingRetry()) === null && shouldSkipFetch(cached ? { at: cached.at, market: payloadMarket(cached.body) } : null, Date.now(), cached?.body.features?.widgetLeanLive === true)) {
       await logWidgetRefresh("background", "skipped");
       return BackgroundTask.BackgroundTaskResult.Success;
     }

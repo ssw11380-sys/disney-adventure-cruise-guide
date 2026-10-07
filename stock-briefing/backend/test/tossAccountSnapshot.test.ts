@@ -6,7 +6,7 @@ import { loadConfig } from "../src/config.js";
 import { createDb, createMigratedDb, type Db } from "../src/db/index.js";
 import { TossOpenApiProvider } from "../src/providers/market/tossOpenApi.js";
 import { TossAccountSnapshotStore, TOSS_ACCOUNT_SNAPSHOT_KEY, parseTossAccountTotals, sumTossAccountTotals, type TossAccountSnapshot } from "../src/services/tossAccountSnapshot.js";
-import { EXCLUDED_KEY, TossSyncService } from "../src/services/tossSyncService.js";
+import { EXCLUDED_KEY, HoldingsAutoSync, TossSyncService } from "../src/services/tossSyncService.js";
 import { fakeProviders } from "./helpers.js";
 
 const START = "2026-10-04T10:00:00+09:00";
@@ -71,6 +71,26 @@ async function fixture() {
 }
 
 describe("토스 원본 계좌 평가 보존·실패·조회", () => {
+  it("화면용 추가 동기화도 같은 입력의 원액·비용·환산 기준과 누락 상태를 보존하고 수신 시각만 갱신한다", async () => {
+    const f = await fixture();
+    const onResult = vi.fn(async () => undefined);
+    const auto = new HoldingsAutoSync({ sync: f.sync, intervalMin: 10, now, onResult });
+    try {
+      await auto.run("schedule");
+      const before = await f.sync.accountSnapshots.load();
+      const beforeHoldings = await f.db.selectFrom("registered_stocks").selectAll().orderBy("code").execute();
+      await auto.run("view");
+      // 가짜 출처는 조회할 때마다 시계를 1초 전진시킨다. 수신 시각은 새 조회를 정확히 가리켜야 한다.
+      expect(before.snapshot?.receivedAt).toBe("2026-10-04T10:00:01+09:00");
+      expect(await f.sync.accountSnapshots.load()).toEqual({ ...before, snapshot: { ...before.snapshot,
+        receivedFrom: "2026-10-04T10:00:02+09:00", receivedAt: "2026-10-04T10:00:02+09:00",
+        displayFx: { ...before.snapshot?.displayFx, receivedAt: "2026-10-04T10:00:02+09:00" },
+      } });
+      expect(await f.db.selectFrom("registered_stocks").selectAll().orderBy("code").execute()).toEqual(beforeHoldings);
+      expect(f.calls).toEqual(["/api/v1/accounts", "/api/v1/holdings", "/api/v1/accounts", "/api/v1/holdings"]);
+      expect(onResult).toHaveBeenCalledTimes(1);
+    } finally { await f.db.destroy(); }
+  });
   it("저장된 금액이 문자열로 바뀌어도 조회 응답은 검증한 숫자만 반환한다", async () => {
     const f = await fixture();
     try {
