@@ -58,6 +58,8 @@ export interface PriceStreamDeps {
    */
   webOff?: (codes: string[]) => Promise<Set<string>>;
   closedPollMs?: number;
+  /** 인증된 앱의 첫 접속·마지막 이탈. 조회는 별도 작업으로 시작하고 스트림을 기다리게 하지 않는다. */
+  onActiveChange?: (active: boolean) => void;
   log?: ChainLogger;
 }
 
@@ -86,6 +88,7 @@ export class PriceStream {
   }
 
   attach(socket: StreamSocket): void {
+    if (this.clients.has(socket)) return;
     this.clients.add(socket);
     const drop = () => this.detach(socket);
     socket.on("close", drop);
@@ -98,7 +101,10 @@ export class PriceStream {
         /* 모르는 메시지는 무시 */
       }
     });
-    if (this.clients.size === 1) this.startTimers();
+    if (this.clients.size === 1) {
+      this.startTimers();
+      this.deps.onActiveChange?.(true);
+    }
     void this.sendSnapshot(socket);
   }
 
@@ -118,7 +124,10 @@ export class PriceStream {
 
   private detach(socket: StreamSocket): void {
     if (!this.clients.delete(socket)) return;
-    if (this.clients.size === 0) this.stopTimers();
+    if (this.clients.size === 0) {
+      this.stopTimers();
+      this.deps.onActiveChange?.(false);
+    }
   }
 
   stop(): void {
@@ -131,6 +140,7 @@ export class PriceStream {
         /* ignore */
       }
     }
+    if (this.clients.size > 0) this.deps.onActiveChange?.(false);
     this.clients.clear();
   }
 

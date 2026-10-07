@@ -64,6 +64,17 @@ class FakeQuick implements QuickPriceSource {
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
 describe("PriceStream", () => {
+  it("첫 연결과 마지막 이탈만 계좌 갱신에 알리고 서버 종료에도 멈춘다", () => {
+    const active = vi.fn();
+    const stream = new PriceStream({ codes: async () => [], onActiveChange: active });
+    const a = new FakeSocket(), b = new FakeSocket();
+    stream.attach(a); stream.attach(a); stream.attach(b);
+    expect(active.mock.calls).toEqual([[true]]);
+    a.close(); expect(active.mock.calls).toEqual([[true]]);
+    b.close(); expect(active.mock.calls).toEqual([[true], [false]]);
+    stream.attach(new FakeSocket()); stream.stop();
+    expect(active.mock.calls).toEqual([[true], [false], [true], [false]]);
+  });
   it("웹소켓 체결을 접속한 앱 전부에 중계하고, 같은 가격은 다시 보내지 않는다", async () => {
     const live = new FakeLive();
     const stream = new PriceStream({ live, codes: async () => ["005930"] });

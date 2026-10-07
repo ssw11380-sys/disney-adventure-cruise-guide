@@ -465,7 +465,7 @@ function forBook(perAccount: PerAccount[]): AccountForBook[] {
   }));
 }
 
-export type SyncTrigger = "startup" | "schedule" | "briefing" | "manual" | "order";
+export type SyncTrigger = "startup" | "schedule" | "briefing" | "manual" | "order" | "view";
 
 export interface AutoSyncStatus {
   enabled: boolean;
@@ -489,6 +489,7 @@ export class HoldingsAutoSync {
   private running: Promise<ImportResult | null> | null = null;
   /** 실행 중에 체결 알림이 오면, 이번 실행이 체결 전 잔고를 읽었을 수 있어 끝난 뒤 한 번 더 돈다 */
   private rerun = false;
+  private fullResultRequested = false;
   private stopped = true;
   private lastRunAt: string | null = null;
   private lastTrigger: SyncTrigger | null = null;
@@ -589,6 +590,8 @@ export class HoldingsAutoSync {
   async run(trigger: SyncTrigger): Promise<ImportResult | null> {
     if (!this.enabled && trigger !== "manual") return null;
     if (this.running) {
+      // 화면 조회에 정기·브리핑 실행이 합류해도 기존 대조 단계를 생략하지 않는다.
+      if (trigger !== "view") this.fullResultRequested = true;
       // 수동 실행은 자기 결과(와 오류)를 받아야 한다 → 진행 중인 실행이 끝나면 새로 한 번
       if (trigger === "manual") {
         await this.running.catch(() => null);
@@ -598,6 +601,7 @@ export class HoldingsAutoSync {
       // 수동 실행이 실패하면 그 실행은 던진다. 같이 기다리던 자동 실행에는 넘기지 않는다(처리 안 된 거부로 서버가 죽지 않게)
       return this.running.catch(() => null);
     }
+    this.fullResultRequested = trigger !== "view";
     this.running = (async () => {
       try {
         const r = await this.deps.sync.importHoldings();
@@ -608,7 +612,11 @@ export class HoldingsAutoSync {
           await this.deps.afterSync?.(r);
         }
         // 대조처럼 시세를 다시 받는 뒷일은 기다리지 않는다 (수동 동기화·브리핑 전 동기화가 느려지지 않게)
-        void this.deps.onResult?.(r).catch((e: unknown) => this.deps.log?.warn({ err: e instanceof Error ? e.message : String(e) }, "동기화 후 처리 실패"));
+        // 화면용 추가 조회는 계좌 원본·장부를 똑같이 저장한다. 수량 변화도 없는 추가 조회로
+        // 대조 이력을 채우거나 전 종목 시세를 중복 요청하지 않는다. 기존 정기·브리핑 대조는 그대로다.
+        if (this.fullResultRequested || r.added.length || r.updated.length || r.removed.length) {
+          void this.deps.onResult?.(r).catch((e: unknown) => this.deps.log?.warn({ err: e instanceof Error ? e.message : String(e) }, "동기화 후 처리 실패"));
+        }
         return r;
       } catch (e) {
         this.lastError = e instanceof Error ? e.message : String(e);

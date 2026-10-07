@@ -119,6 +119,24 @@ describe("TossSyncService 전량 매도 처리", () => {
 });
 
 describe("HoldingsAutoSync", () => {
+  it("추가 화면 조회도 원본을 가져오지만 변화 없는 대조 이력만 늘리지 않는다", async () => {
+    const { db, toss, sync } = await setup();
+    let compared = 0, settled = 0;
+    const auto = new HoldingsAutoSync({ sync, intervalMin: 10, now: NOW,
+      onResult: async () => { compared++; }, onSettled: () => { settled++; } });
+    try {
+      toss.holdingsList = [h("035420", 9, 232555)];
+      await auto.run("view"); expect(compared).toBe(1);
+      await auto.run("view"); expect(compared).toBe(1);
+      expect(toss.calls).toBe(2); expect(settled).toBe(2);
+      toss.duringSync = () => { void auto.run("briefing"); };
+      await auto.run("view"); expect(compared).toBe(2);
+      await auto.run("schedule"); expect(compared).toBe(3);
+      toss.holdingsList = [h("035420", 10, 232555)];
+      await auto.run("view"); expect(compared).toBe(4);
+      expect((await db.selectFrom("registered_stocks").select("quantity").where("code", "=", "035420").executeTakeFirst())?.quantity).toBe(10);
+    } finally { await db.destroy(); }
+  });
   it("수량 변화가 없어도 갱신 완료 상태를 즉시 전달하고 후속 대조를 기다리지 않는다", async () => {
     const { db, toss, sync } = await setup();
     const states: ReturnType<HoldingsAutoSync["status"]>[] = [];

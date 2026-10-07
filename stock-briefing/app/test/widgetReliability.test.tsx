@@ -135,6 +135,36 @@ beforeEach(() => {
   vi.setSystemTime(T("10:00"));
 });
 
+describe("빠른 갱신 플래그의 실제 조회 경로", () => {
+  it("휴장 백그라운드 실행도 새로 조회하고 플래그를 끄면 예전 생략을 유지한다", async () => {
+    const now = Date.parse("2026-10-10T13:00:00+09:00");
+    vi.setSystemTime(now);
+    const features = { widgetLeanLive: true };
+    const body = payload({ market: { label: "휴장", open: false, nextChangeAt: "2026-10-12T09:00:00+09:00" }, features });
+    const urls = serve(body);
+    await loadWidgetData({ stocks: true, briefings: true });
+    vi.setSystemTime(now + 15 * 60_000);
+    await runBriefingCheck();
+    expect(urls.filter(u => u === WIDGET_URL)).toHaveLength(2);
+    features.widgetLeanLive = false;
+    await loadWidgetData({ stocks: true, briefings: true });
+    const count = urls.filter(u => u === WIDGET_URL).length;
+    vi.setSystemTime(now + 30 * 60_000);
+    await runBriefingCheck();
+    expect(urls.filter(u => u === WIDGET_URL)).toHaveLength(count);
+  });
+  it("주기·크기 변경 조회는 1분 전후에 실제 서버 호출 여부가 달라진다", async () => {
+    const urls = serve(payload({ features: { widgetLeanLive: true } }));
+    await loadWidgetData({ stocks: true, briefings: true });
+    await vi.advanceTimersByTimeAsync(59_999);
+    await loadWidgetData({ stocks: true, briefings: true, reuse: true });
+    expect(urls.filter(u => u === WIDGET_URL)).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await loadWidgetData({ stocks: true, briefings: true, reuse: true });
+    expect(urls.filter(u => u === WIDGET_URL)).toHaveLength(2);
+  });
+});
+
 describe("리뷰 5: 앱에서 방금 본 숫자가 위젯에서 되돌아가지 않는다", () => {
   /** 10:00 백그라운드가 받아 둔 응답 → 10:08 앱이 위젯을 바로 그림 */
   const seedThenAppPush = async () => {

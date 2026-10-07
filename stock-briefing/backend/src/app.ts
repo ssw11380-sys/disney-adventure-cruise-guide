@@ -14,6 +14,7 @@ import { ReceiptStore } from "./notifications/receiptStore.js";
 import { describeProviders, metaStore, type Providers } from "./providers/index.js";
 import { adminRoutes, readTossAccountSnapshot, tossStatus, type AdminDeps } from "./routes/admin.js";
 import { HoldingsAutoSync, TossSyncService } from "./services/tossSyncService.js";
+import { AccountLiveRefresh } from "./services/accountLiveRefresh.js";
 import { analysisRoutes } from "./routes/analysis.js";
 import { appErrorAdminRoutes, appErrorRoutes } from "./routes/appErrors.js";
 import { briefingRoutes } from "./routes/briefings.js";
@@ -210,7 +211,13 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   }
 
   // 서버 → 앱 실시간 가격 스트림 (/api/stream). 토스 웹소켓 체결을 250ms 씩 모아 중계하고, 웹소켓이 없는 종목만 앱이 붙어 있는 동안 3초 폴링
+  const accountLiveRefresh = tossDeps && opts.enableScheduler !== false ? new AccountLiveRefresh({
+    autoSync: tossDeps.autoSync,
+    enabled: async () => await features.enabled("accountLiveRefresh") && await features.enabled("tossAccountSnapshot"),
+    now: () => now().getTime(),
+  }) : null;
   const priceStream = new PriceStream({
+    onActiveChange: (active) => accountLiveRefresh?.setActive(active),
     live: opts.providers.live,
     quickPrices: opts.providers.quickPrices,
     codes: () => stockService.streamCodes(),
