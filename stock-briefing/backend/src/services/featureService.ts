@@ -8,6 +8,7 @@ import { seoulIso } from "../lib/time.js";
  *  - 새 기능(3-19·3-24 의 새 동작, P2 전부)은 플래그 뒤에 둔다
  */
 export const FEATURES = {
+  widgetLeanLive: { default: true, description: "위젯 핵심 숫자 중심 보기와 앱 실행 중 시세 5초 묶음 전달. 끄면 기존 표시와 1분 간격, 수량 즉시 전달·마지막 시세 전달 보완은 유지" },
   watchlistSteps: { default: true, description: "별도 관심종목·관심 시작 가격·구매희망 가격, 관심 기준 및 잔고 전일 종가 기준 5% 구간 서버 알림. 끄면 메뉴·조회·알림 중지, 저장값 보존" },
   settingsSections: { default: true, description: "설정 분류 목록과 선택한 항목만 펼치기. 끄면 기존 전체 설정 화면" },
   widgetClarity: { default: true, description: "위젯 정보 기준 개선: 앱 실시간 평가·시세와 조회 시각·합계 제외와 지난 값 경고·전일 대비·개인화. 끄면 기존 위젯" },

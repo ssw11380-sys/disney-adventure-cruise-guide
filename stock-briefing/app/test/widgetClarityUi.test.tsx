@@ -25,6 +25,25 @@ const words = (x: Tree) => nodes(x).filter((n) => n.type === "TextWidget").map((
 const clarity = { clarity: true, widgetId: 7 };
 
 describe("위젯 정보 기준과 작은 화면", () => {
+  it("간소 보기에서 누적 종목 손익은 덜고 현재가·전일 대비·지연 경고와 상세 연결은 보존한다", () => {
+    const lean=build(<HoldingsWidget {...props} {...clarity} leanLive width={508} height={223} />);
+    const normal=build(<HoldingsWidget {...props} {...clarity} width={508} height={223} />);
+    expect(words(normal)).toContain("수익 "); expect(words(lean)).not.toContain("수익 ");
+    expect(words(lean)).toContain("70,000원"); expect(words(lean)).toContain("+1.40%");
+    expect(words(lean)).toContain("전일 대비");
+    expect(nodes(lean).some(n=>(n.props.clickActionData as {uri?:string})?.uri?.endsWith("stocks/005930"))).toBe(true);
+    const stale=build(<HoldingsWidget {...props} {...clarity} leanLive width={508} height={223} filled={["005930"]} />);
+    expect(words(stale)).toContain("시세 지연");
+    expect(build(<HoldingsWidget {...props} {...clarity} leanLive={false} />)).toEqual(build(<HoldingsWidget {...props} {...clarity} />));
+  });
+  it("간소 시장 위젯은 변동률을 남기고 포인트 반복을 덜며 큰 글씨에서도 숫자를 자르지 않는다", () => {
+    const board=[{code:"KOSPI",name:"코스피",value:7000,change:63,changeRate:0.91,open:true}];
+    for(const scale of [1.15,1.3,2]) {
+      const t=build(<MarketWidget {...clarity} leanLive board={board} boardAt={NOW} enabled error={null} now={NOW} width={508} height={350} fontScale={scale}/>);
+      expect(words(t)).toContain("+0.91%"); expect(words(t)).not.toContain("▲63");
+      expect(words(t)).toContain("7,000.00");
+    }
+  });
   it("기능이 꺼져 있으면 기존 트리와 정확히 같다", () => {
     expect(build(<HoldingsWidget {...props} {...{ clarity: false }} />)).toEqual(build(<HoldingsWidget {...props} />));
     expect(build(<AssetWidget {...props} {...{ clarity: false }} />)).toEqual(build(<AssetWidget {...props} />));

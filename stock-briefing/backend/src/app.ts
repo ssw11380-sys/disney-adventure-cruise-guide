@@ -94,7 +94,9 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   // 기능 켜고 끄기 (3-15): 플래그 목록은 featureService.ts 한 곳
   const features = new FeatureService(opts.db, now);
 
-  const stockService = new StockService({ db: opts.db, ...opts.providers, tossSyncMinutes: opts.config.TOSS_SYNC_MINUTES, now });
+  const stockService = new StockService({ db: opts.db, ...opts.providers, tossSyncMinutes: opts.config.TOSS_SYNC_MINUTES, now,
+    extraLiveCodes: async () => (await features.enabled("watchlistSteps")) ? (await opts.db.selectFrom("watch_items").select("code").orderBy("created_at", "desc").orderBy("code").execute()).map(s => s.code) : [],
+  });
   // 가격·등락률·거래량 알림 (3-29, 플래그 priceAlerts): 조건 저장·울림 기록, 거래량 급증은 차트와 같은 30분봉 캐시(450개)로 계산
   const priceAlerts = new PriceAlertService({ db: opts.db, features, candles: (code) => stockService.getCandles(code, "30m", 450).then((s) => s.candles), now });
   const appErrors = new AppErrorService(opts.db, now);
@@ -140,6 +142,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       // 동기화마다 앱 총평가와 토스 계좌 요약을 대조해 남긴다 (3-13)
       // 대조 기록 뒤 접속한 앱에 알린다 → '숫자 기준' 배지가 바로 바뀐다 (3-32, 플래그 numberBasis). priceStream 은 아래에서 만들고 동기화 때 부른다
       onResult: reconcileAfterSync({ features, reconcile, stocks: stockService, after: () => priceStream.notify("reconcile") }),
+      onSettled: () => priceStream.notify("account"),
       calendar: opts.providers.calendar,
       // 바뀐 게 있으면 실시간 구독 종목을 맞추고, 접속한 앱에 "잔고 변경"을 바로 알린다
       afterSync: async () => {
@@ -210,7 +213,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   const priceStream = new PriceStream({
     live: opts.providers.live,
     quickPrices: opts.providers.quickPrices,
-    codes: async () => (await stockService.list()).map((s) => s.code),
+    codes: () => stockService.streamCodes(),
     // 등록 종목 시장의 거래 세션이 모두 닫혀 있으면 토스 웹 폴링을 30초로 늦춘다 (달력은 5분 캐시).
     // 토스 달력 isOpen 은 미국 정규장만이라 세션(프리·애프터·주간거래 포함)으로 본다 — 그래야 웹소켓이 없는 종목도 3초마다 바뀐다
     marketOpen: async (codes) => anySessionOpen(codes, await opts.providers.calendar.status(), now()),
@@ -280,6 +283,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   });
   // 지수 띠와 잔고 위젯 지수 줄, 계좌 브리핑(3-31)이 같은 목록(30초 캐시·stale 규칙)을 쓰게 하나만 만든다
   const watchlist = new WatchlistService({ db: opts.db, stocks: stockService, features, notifications: notificationService, settings: settingsStore, now,
+    onChange: async () => { await stockService.syncLive().catch(() => log.warn({}, "관심종목 실시간 구독 갱신 실패")); },
     warn: () => log.warn({}, "5% 구간 알림 확인 실패") });
   if (opts.enableScheduler !== false) watchlist.start();
   app.addHook("onClose", async () => watchlist.stop());
@@ -571,7 +575,7 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
   // schedule: 브리핑 위젯 안내에 설정한 브리핑 시간을 쓴다 (BH-68 — 예전에는 늘 '평일 08:30·16:00')
   // 브리핑 위젯 첫 줄(시장 전체 요약): 새 앱이 &ms=1 로 물을 때만, 플래그가 켜져 있을 때만 가장 최근 요약을 읽는다
   await app.register(widgetRoutes, { prefix: "/api/widget", stocks: stockService, briefings: briefingService, calendar: opts.providers.calendar, features, indices: marketIndices, accounts: accountBriefings, schedule: () => settingsStore.get(), ...(summaries ? { summaries } : {}), tossAccount: () => readTossAccountSnapshot(tossDeps, features) });
-  await app.register(featureAdminRoutes, { prefix: "/api/admin/features", features });
+  await app.register(featureAdminRoutes, { prefix: "/api/admin/features", features, afterSet: async (patch) => { if ("watchlistSteps" in patch) await stockService.syncLive(); } });
   await app.register(adminRoutes, { prefix: "/api/admin", service: stockService, dart: opts.providers.dart, toss: tossDeps, outboundIp, backups, features });
   await app.register(tradeRecordRoutes, { prefix: "/api", service: tradeRecords, now });
   await app.register(tradeRecordAdminRoutes, { prefix: "/api/admin/trade-records", service: tradeRecords });

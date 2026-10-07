@@ -242,10 +242,10 @@ function ClarityMarketWidget(props: MarketWidgetProps) {
           {group.map((tile) => {
             const valueFont = readableFont(tile.value, tileWidth, scale, F.big);
             const label = clarityLine([`${tile.label}${tile.stale ? " · 지연" : ""}`, tile.stale ? "시세 지연" : tile.label], tileWidth, scale);
-            const change = clarityLine(tile.changes, tileWidth, scale);
+            const change = clarityLine(props.leanLive ? tile.changes.slice(-1) : tile.changes, tileWidth, scale);
             return <FlexWidget key={tile.code} clickAction="OPEN_URI" clickActionData={{ uri: tile.uri }} accessibilityLabel={sentence([tile.code.endsWith("KRW") ? "시장 환율" : null, tile.speech])} style={{ width: tileWidth, height: tileH, justifyContent: "center", borderTopWidth: BOARD.hairline, borderTopColor: c.line }}>
               <TextWidget text={label ?? tile.label} maxLines={1} truncate="END" style={{ color: tile.stale ? c.warn : c.sub, fontSize: F.base }} />
-              <TextWidget text={valueFont === null ? "앱에서 확인" : tile.value} maxLines={1} style={{ color: tile.stale ? c.muted : tone(tile.change, c), fontSize: valueFont ?? F.base, fontWeight: "700" }} />
+              <TextWidget text={valueFont === null ? "앱에서 확인" : tile.value} maxLines={1} style={{ color: tile.stale ? c.muted : props.leanLive ? c.ink : tone(tile.change, c), fontSize: valueFont ?? F.base, fontWeight: "700" }} />
               {change ? <TextWidget text={change} maxLines={1} style={{ color: tile.stale ? c.muted : tone(tile.change, c), fontSize: F.base }} /> : null}
             </FlexWidget>;
           })}

@@ -15,6 +15,7 @@ export type StreamMessage =
   | { type: "ticks"; ticks: StreamTick[] }
   | ({ type: "tick" } & StreamTick)
   | { type: "ping"; at: number }
+  | { type: "account"; at: number }
   | { type: "holdings"; at: number }
   /** 토스 대조 기록이 새로 생겼다 → '숫자 기준' 배지를 다시 받는다 (3-32, 서버 플래그 numberBasis 일 때만 옴) */
   | { type: "reconcile"; at: number };

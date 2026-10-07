@@ -49,7 +49,7 @@ export function renderOne(name: string, data: WidgetData, o: RenderOpts, palette
   const clarity = data.features.clarity === true;
   const account = data.features.tossAccount === true ? { tossAccount: data.tossAccount ?? null } : {};
   const prefs = o.preferences ?? defaultWidgetPreferences(o.pnlMode);
-  const frame = { width: o.width, height: o.height, fontScale: o.fontScale, palette, ...(clarity ? { clarity: true, widgetId: o.widgetId } : {}), ...(wideExtrasOk(o.width, data.features.foldFit === true) ? {} : { wideExtras: false }) };
+  const frame = { width: o.width, height: o.height, fontScale: o.fontScale, palette, ...(data.features.leanLive ? { leanLive: true } : {}), ...(clarity ? { clarity: true, widgetId: o.widgetId } : {}), ...(wideExtrasOk(o.width, data.features.foldFit === true) ? {} : { wideExtras: false }) };
   switch (name) {
     case WIDGET_NAMES.briefing:
       // 제목·안내 문구를 누르면 브리핑 탭은 다듬은 모습(widgetPolish)에서만 (위젯 검토 7번 — 꺼져 있으면 지금처럼 잔고 탭).

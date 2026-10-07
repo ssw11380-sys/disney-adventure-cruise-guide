@@ -504,6 +504,8 @@ export class HoldingsAutoSync {
       afterSync?: (r: ImportResult) => Promise<void>;
       /** 동기화가 성공할 때마다 (토스 대조 등). 실패해도 동기화는 성공으로 둔다 */
       onResult?: (r: ImportResult) => Promise<void>;
+      /** 계좌 기록 저장/실패 상태 확정 후 알림. 시세 대조가 끝나기를 기다리지 않는다. */
+      onSettled?: () => void;
       intervalMin: number;
       idleIntervalMin?: number;
       startupDelayMs?: number;
@@ -622,6 +624,8 @@ export class HoldingsAutoSync {
       return await this.running;
     } finally {
       this.running = null;
+      try { this.deps.onSettled?.(); }
+      catch { this.deps.log?.warn({}, "계좌 갱신 완료 전달 실패"); }
       if (this.rerun) {
         this.rerun = false;
         void this.run("order").catch(() => null);

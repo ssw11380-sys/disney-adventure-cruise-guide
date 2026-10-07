@@ -8,12 +8,12 @@ import { widgetChip } from "@/lib/liveDot";
 import { personalBlocked, sessionFor, sessionIdentityVersion, sessionVersion, subscribeSession } from "@/lib/session";
 import { useSettings } from "@/lib/settings";
 import { pickBoard, pickWidgetIndices, widgetFeatures } from "@/widgets/payload";
-import { widgetPushDue } from "@/widgets/pushPolicy";
+import { PUSH_EVERY_MS, QUICK_PUSH_EVERY_MS, widgetPushDue } from "@/widgets/pushPolicy";
 import { refreshBriefingWidget, refreshWidgets, widgetBriefingsKey } from "@/widgets/refresh";
 import { resetWidgetAccountSnapshot } from "@/widgets/data";
 
 /**
- * 앱 → 홈 화면 위젯 즉시 갱신 (3-16 규칙: 시세만 바뀌면 1분에 한 번, 표시 설정·장 상태가 바뀌거나 앱을 떠날 때는 바로).
+ * 앱 → 홈 화면 위젯 갱신. 시세만 바뀌면 최대 5초 간격(widgetLeanLive 꺼짐은 1분), 수량·설정·장 상태 변경과 앱 이탈은 바로.
  * 탭 화면이 아니라 앱 맨 위에 둔다 — 숨은 탭은 얼려 두므로(3-17 freezeOnBlur) 설정 탭에서 원화 표시를 바꾸고 홈으로 나가도 반영되게.
  * 잔고·지수·기능 플래그 캐시는 읽기만 한다(스스로 서버를 부르지 않음): 잔고 탭 폴링·체결 스트림·지수 띠가 캐시를 고치면 따라간다.
  * 지수·플래그 캐시는 기기에 며칠 남은 옛 값일 수 있어(플래그는 브리핑·설정 화면에서만 다시 받는다) 받은 시각을 함께 넘기고,
@@ -108,8 +108,17 @@ export function WidgetBridge() {
   // 체결마다 뒤집힐 때마다 1분 규칙을 건너뛰고 넘긴다 (검증 지적). 시세 때문에 바뀐 순서·구성은 다음 1분 넘김(그때 시세로 고름)에 따라간다
   const briefKey = useMemo(() => (briefList ? widgetBriefingsKey(briefList) : ""), [briefList]);
   const last = useRef({ at: 0, key: "" });
+  // 가격과 달리 종목 구성·수량·평단 변경은 바로 넘긴다. 체결마다 바뀌는 평가값은 넣지 않는다.
+  const holdingsKey = useMemo(() => JSON.stringify(data?.map((s) => [s.code, s.name, s.quantity, s.avgPrice]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))) ?? []), [data]);
+  const everyMs = features?.flags.leanLive ? QUICK_PUSH_EVERY_MS : PUSH_EVERY_MS;
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const delivering = useRef(false);
+  const pending = useRef<(() => Promise<void>) | null>(null);
+  const allowed = useRef(!blocked);
   const push = useRef<(leaving: boolean) => void>(() => undefined);
   useEffect(() => {
+    allowed.current = !blocked;
+    const cancel = () => { if (timer.current !== null) clearTimeout(timer.current); timer.current = null; };
     push.current = (leaving: boolean) => {
       const now = Date.now();
       if (!data || blocked) return;
@@ -122,20 +131,34 @@ export function WidgetBridge() {
       const market = widgetChip(ms, data, now);
       const marketPolished = widgetChip(ms, data, now, { markets: true });
       const chipKey = [market?.label ?? "", ...(marketPolished?.markets ?? []).map((m) => m.label)].join("·");
-      const key = `${showKrw}|${afterCost}|${rowKrw}|${chipKey}|${flagKey}|${briefKey}|${accountKey}`;
-      if (!widgetPushDue({ now, fetchedThisSession, lastAt: last.current.at, lastKey: last.current.key, key, leaving })) return;
+      const key = `${showKrw}|${afterCost}|${rowKrw}|${chipKey}|${flagKey}|${briefKey}|${accountKey}|${holdingsKey}|${everyMs}`;
+      if (!widgetPushDue({ now, fetchedThisSession, lastAt: last.current.at, lastKey: last.current.key, key, leaving, everyMs })) {
+        // 다음 체결이 없어도 마지막 값은 넘긴다. 잦은 입력에도 첫 전달의 기한은 뒤로 밀지 않는다.
+        if (fetchedThisSession && timer.current === null) timer.current = setTimeout(() => { timer.current = null; push.current(false); }, Math.max(1, everyMs - (now - last.current.at)));
+        return;
+      }
+      cancel();
       last.current = { at: now, key };
       // 잔고를 받은 시각(dataAt)도 넘긴다: 위젯이 이미 더 새 잔고를 가졌으면(앱이 다른 탭에 있는 동안 백그라운드 작업이 받음) 그쪽을 둔다 (통합 검증 지적)
       const args = { stocks: data, dataAt, showKrw, afterCost, rowKrw, market, marketPolished, features, indices, board, appBriefings, tossAccount };
       const boundary = credentialBoundary.current;
       // 인증 교체 때의 저장본 정리만 끝낸 뒤 전달한다. 평상시에는 기존처럼 곧바로 갱신한다.
-      if (accountReset.current) void accountReset.current.then(() => {
-        if (credentialBoundary.current === boundary) void refreshWidgets(args);
-      }, () => undefined);
-      else void refreshWidgets(args);
+      pending.current = async () => {
+        if (accountReset.current) await accountReset.current;
+        if (allowed.current && credentialBoundary.current === boundary) await refreshWidgets(args);
+      };
+      // 네이티브 렌더가 느릴 때는 대기 중 최신 자료 하나만 남기고 순서대로 그린다.
+      if (!delivering.current) {
+        delivering.current = true;
+        void (async () => {
+          try { while (pending.current) { const next = pending.current; pending.current = null; await next().catch(() => undefined); } }
+          finally { delivering.current = false; }
+        })();
+      }
     };
     push.current(false);
-  }, [data, dataAt, flagKey, briefKey, accountKey, showKrw, afterCost, rowKrw, ms, fetchedThisSession, features, indices, board, appBriefings, tossAccount, blocked]);
+    return cancel;
+  }, [data, dataAt, flagKey, briefKey, accountKey, holdingsKey, everyMs, showKrw, afterCost, rowKrw, ms, fetchedThisSession, features, indices, board, appBriefings, tossAccount, blocked]);
   // 잔고를 이번 실행에서 받지 않았을 때 (검증 지적): 위젯 종목 브리핑·알림으로 앱을 새로 켜 브리핑 상세에 바로 들어가면 잔고 탭이 아래에 가려져
   // 잔고를 받지 않으므로 위의 넘김은 3-16 규칙(기기 저장값 잔고로 위젯을 덮지 않음)에 막힌다. 그래도 목록이 바뀌면(다시 만들기·브리핑 알림으로 받음)
   // 브리핑 위젯만 바로 다시 그린다 — 잔고·자산·지수 위젯과 저장된 잔고·칩은 그대로, 3종목은 저장된 잔고로 고른다 (refresh.tsx refreshBriefingWidget).
@@ -150,7 +173,7 @@ export function WidgetBridge() {
     const sub = AppState.addEventListener("change", (st) => {
       if (st === "background") push.current(true);
     });
-    return () => sub.remove();
+    return () => { sub.remove(); pending.current = null; allowed.current = false; };
   }, []);
   return null;
 }

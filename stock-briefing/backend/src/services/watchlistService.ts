@@ -34,7 +34,7 @@ export class WatchlistService {
   private timer: NodeJS.Timeout | null = null;
   private running: Promise<void> | null = null;
   private stopped = false;
-  constructor(private readonly deps: { db: Db; stocks: StockService; features: FeatureService; notifications: NotificationService; settings: NotificationSettingsStore; now: () => Date; warn: () => void }) {}
+  constructor(private readonly deps: { db: Db; stocks: StockService; features: FeatureService; notifications: NotificationService; settings: NotificationSettingsStore; now: () => Date; warn: () => void; onChange?: () => Promise<void> }) {}
 
   async list(quotes = true) {
     const rows = await this.deps.db.selectFrom("watch_items").selectAll().orderBy("created_at", "desc").orderBy("code").execute();
@@ -59,6 +59,7 @@ export class WatchlistService {
       .onConflict(c => c.column("code").doUpdateSet({ start_price: input.startPrice, desired_price: input.desiredPrice, alerts: Number(input.alerts), revision, updated_at: now })).execute();
     if (prev && prev.revision !== revision) await trx.deleteFrom("movement_events").where("event_key", "like", `movement:watch:${code}:${prev.revision}:%`).execute();
     });
+    await this.deps.onChange?.();
     return { ok: true };
   }
 
@@ -67,6 +68,7 @@ export class WatchlistService {
       await trx.deleteFrom("watch_items").where("code", "=", code).execute();
       await trx.deleteFrom("movement_events").where("code", "=", code).where("scope", "=", "watch").execute();
     });
+    await this.deps.onChange?.();
     // 보유 종목·보고서·토스 동기화 제외 목록은 변경하지 않는다.
   }
 
