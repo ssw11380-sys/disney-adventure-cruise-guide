@@ -4,6 +4,7 @@ import type { MarketIndex } from "../providers/market/indices.js";
 import { seoulDate } from "../lib/time.js";
 import { isKrTradingDate, isUsTradingDate, krRegularHours, marketContext, usRegularCloseMinutes } from "./marketContext.js";
 import type { Evaluation } from "./stockService.js";
+import type { HoldingThemesSnapshot } from "./holdingThemesService.js";
 
 /**
  * 계좌 한 장 브리핑(3-31)의 숫자와 문장. 숫자는 모두 여기서 코드로 계산하고, 모델은 이 숫자를 옮겨 적기만 한다.
@@ -177,6 +178,11 @@ export interface AccountData extends AccountTotals {
   events?: AccountEvents;
   /** 합계에 넣은 종목 시세의 기준 (3-32, 플래그 numberBasis 를 켰을 때 만든 브리핑만). 예전 기록·플래그 끔은 없음 */
   quoteBasis?: QuoteBasis;
+  /**
+   * 내 종목 테마 (3-35, 플래그 holdingThemes): 많이 속한 테마 · 시장별 등락률 높은·낮은 3개. 만들 때 저장한다(그때 기준 그대로).
+   * 꺼짐·서비스 없음·8초 넘음·예전 기록에는 칸이 없다
+   */
+  holdingThemes?: HoldingThemesSnapshot;
 }
 
 /** 다가오는 일정 한 줄 (브리핑 3차 5) */

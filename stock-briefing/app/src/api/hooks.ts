@@ -17,6 +17,7 @@ import { loginRequiredFor, personalBlocked, sessionFor, sessionIdentityVersion, 
 import { TOSS_SNAPSHOT_OFF, TOSS_SNAPSHOT_POLL_MS } from "@/lib/tossAccountSnapshot";
 import { ApiRequestError, createApi, type Api } from "./client";
 import { SCORE_WAIT_REFETCH_MS, valueWaiting } from "@/lib/scoreView";
+import { holdingThemesEvery } from "@/lib/holdingThemes";
 import type { Analysis, AnalysisKind, BriefingSession, CandlePeriod, DiscoverMarket, DiscoverRank, FeatureFlags, NotificationSettings, NotificationSettingsPatch, RankCategory, ThemeKind, ThemePeriod } from "./types";
 
 export function useApi(): Api {
@@ -858,4 +859,29 @@ export function useStockMutations() {
       onSuccess: (data) => qc.setQueryData([apiUrl, "analysis", data.code, data.kind], data),
     }),
   };
+}
+/**
+ * 내 종목 테마 (3-35, 플래그 holdingThemes). enabled 가 거짓(플래그 꺼짐)이면 요청 0건. 꺼진 서버·예전 서버의 404 는 null (오류 아님).
+ * 화면이 보이는 동안만: 어느 시장이든 값이 바뀌는 시간이면 60초, 첫 준비 중이면 30초마다 다시 (그 밖은 받은 값 그대로)
+ */
+export function useHoldingThemes(enabled: boolean) {
+  const api = useApi();
+  const focused = useScreenFocused();
+  return useQuery({
+    subscribed: focused,
+    queryKey: useKey("holdingThemes"),
+    queryFn: async () => {
+      try {
+        return await api.holdingThemes();
+      } catch (e) {
+        if (e instanceof ApiRequestError && e.status === 404) return null;
+        throw e;
+      }
+    },
+    enabled,
+    staleTime: 30_000,
+    retry: 0,
+    refetchInterval: (q) => holdingThemesEvery(q.state.data ?? null),
+    refetchIntervalInBackground: false,
+  });
 }

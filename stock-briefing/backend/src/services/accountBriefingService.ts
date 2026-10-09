@@ -37,6 +37,7 @@ import { compareSinceLast, SINCE_LAST_DAYS } from "./accountSinceLast.js";
 import { EVENTS_BUDGET_MS, mondayOf, weekItems, type CollectedEvents, type CollectInput } from "./holdingEvents.js";
 import { groupCodeOf } from "./indicatorScoreService.js";
 import { checkpointGenerator, GenerationJobs, type GenerationContext } from "./generationJobs.js";
+import type { HoldingThemesSnapshot } from "./holdingThemesService.js";
 
 /** 목록·알림에 쓰는 머리 숫자 (data 에서 뽑는다) */
 export interface AccountHeadline {
@@ -93,7 +94,11 @@ export interface AccountBriefingDeps {
   calendar: { status(): Promise<MarketStatus> } | null;
   generator: TextGenerator;
   prompts: PromptStore;
-  features: { enabled(key: "accountBriefing" | "accountBriefingLlm" | "accountSinceLast" | "accountExposure" | "holdingEvents" | "holdingEarnings" | "numberBasis"): Promise<boolean> };
+  features: { enabled(key: "accountBriefing" | "accountBriefingLlm" | "accountSinceLast" | "accountExposure" | "holdingEvents" | "holdingEarnings" | "numberBasis" | "holdingThemes"): Promise<boolean> };
+  /**
+   * 내 종목 테마 (3-35, 플래그 holdingThemes — services/holdingThemesService.snapshot). 스스로 최대 8초만 기다린다. 없으면(출처를 두지 않은 테스트 기본) 칸 없이 지금 그대로
+   */
+  holdingThemes?: { snapshot(held: Array<{ code: string; name: string; value: number | null }>): Promise<HoldingThemesSnapshot | null> } | null;
   /**
    * 토스 웹 상품 정보 (브리핑 3차 4 비중 한 줄의 레버리지·인버스 — 지표 점수와 같은 출처·같은 24시간 캐시, 시세를 받으며 대부분 이미 캐시에 있음).
    * 없으면 종목 마스터 분류·정적 표·이름 규칙으로만 가린다
@@ -245,6 +250,11 @@ export class AccountBriefingService {
       this.deps.log?.warn({ session, date, err: (e as Error).message }, "다가오는 일정을 받지 못해 칸 없이 저장");
       return null;
     });
+    // 3-35 (플래그 holdingThemes): 내 종목 테마도 시세와 따로 먼저 부르고 아래에서 기다린다 (스스로 최대 8초). 꺼지면 부르지 않는다
+    const themesP = this.themes(holdings).catch((e: unknown) => {
+      this.deps.log?.warn({ session, date, err: (e as Error).message }, "내 종목 테마를 받지 못해 칸 없이 저장");
+      return null;
+    });
     const [indexList, status, disclosures] = await Promise.all([
       this.deps.indices ? this.deps.indices.list({ stale: true }).catch(() => [] as MarketIndex[]) : Promise.resolve([] as MarketIndex[]),
       this.deps.calendar ? this.deps.calendar.status().catch(() => null) : Promise.resolve(null),
@@ -307,6 +317,8 @@ export class AccountBriefingService {
       });
       data.events = { ...events, week };
     }
+    const themes = await themesP;
+    if (themes) data.holdingThemes = themes;
     return data;
   }
 
@@ -392,6 +404,18 @@ export class AccountBriefingService {
       earnings,
       ...(this.deps.eventsBudgetMs !== undefined ? { budgetMs: this.deps.eventsBudgetMs } : {}),
     });
+  }
+
+  /**
+   * 내 종목 테마 (3-35): 플래그 holdingThemes 가 켜져 있고 서비스가 있을 때만. 보유 종목과 원화 평가(비중 한 줄과 같은 positionsOf) — 그때 값 그대로 저장.
+   * 서비스가 스스로 최대 8초만 기다리고 넘으면 null (칸 없이)
+   */
+  private async themes(holdings: AccountHolding[]): Promise<HoldingThemesSnapshot | null> {
+    const src = this.deps.holdingThemes;
+    if (!src || !(await this.deps.features.enabled("holdingThemes").catch(() => false))) return null;
+    const snap = await src.snapshot(positionsOf(holdings, { afterCost: true }).map((p) => ({ code: p.code, name: p.name, value: p.value })));
+    if (!snap) this.deps.log?.warn({}, "내 종목 테마가 제한 시간 안에 오지 않아 칸 없이 저장");
+    return snap;
   }
 
   /**

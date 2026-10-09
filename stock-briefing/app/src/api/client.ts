@@ -348,6 +348,8 @@ export function createApi(baseUrl: string, token = "", opts: ApiOptions = {}) {
     /** 잔고 '숫자 기준' 배지 (3-32, 플래그 numberBasis). 예전 서버는 404 → 부르는 쪽(reconcileBadgeQuery)이 꺼짐으로 본다 */
     reconcileBadge: () => get<ReconcileBadgeBody>("/api/admin/toss/reconcile/badge", 8_000),
     tossAccountSnapshot: () => get<TossAccountSnapshotBody>("/api/admin/toss/account-snapshot", 8_000),
+    /** 내 종목 테마 (3-35, 플래그 holdingThemes). 꺼진 서버·예전 서버는 404 → 부르는 쪽(useHoldingThemes)이 null 로 본다 */
+    holdingThemes: () => get<import("./types").HoldingThemes>("/api/holdings/themes", 20_000),
   };
 }
 

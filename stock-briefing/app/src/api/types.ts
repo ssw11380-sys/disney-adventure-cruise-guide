@@ -313,6 +313,8 @@ export interface AccountData {
   events?: AccountEvents;
   /** 합계에 넣은 종목 시세의 기준 (3-32, 서버 numberBasis 를 켠 뒤 만든 브리핑만). 예전 기록·플래그 끔은 없음 */
   quoteBasis?: QuoteBasis;
+  /** 내 종목 테마 (3-35, 서버 holdingThemes 를 켠 뒤 만든 브리핑만 — 그때 값 그대로). 예전 기록·플래그 끔·8초 넘음은 없음 */
+  holdingThemes?: HoldingThemesSnapshot;
 }
 
 /** 브리핑 3차 5: 다가오는 일정 한 줄 (서버 accountNumbers.AccountEventItem 과 같은 모양) */
@@ -1297,4 +1299,75 @@ export interface WatchItem {
   code: string; name: string; market: string; currency: "KRW" | "USD";
   startPrice: number; desiredPrice: number; alerts: boolean;
   createdAt: string; updatedAt: string; quote: Quote | null;
+}
+/** 3-35 내 종목 테마 (서버 holdingThemesService 와 같은 모양) */
+export type HtMarket = "KR" | "US";
+export type HtKind = "theme" | "sector";
+export type HtTvState = "final" | "partial" | "lastDay" | "collecting" | "none";
+export interface HtStrength {
+  changeRate: number | null;
+  up: number | null;
+  flat: number | null;
+  down: number | null;
+}
+export interface HtVia {
+  code: string;
+  name: string;
+  L: number | null;
+  inverse: boolean;
+  index: string | null;
+}
+export interface HtHolding {
+  code: string;
+  name: string;
+  via: HtVia | null;
+  /** 정규장 기준 오늘 등락률 (거래정지·시세 없음 null) */
+  changeRate: number | null;
+  /** 미국 테마: 등락률 계산(시가총액 상위 30종목)에 드는지. 그 밖은 null */
+  inCalc: boolean | null;
+  /** 거래정지 (서버가 출처에서 확인한 한국 종목 — changeRate 는 null). 예전 서버는 없음 */
+  halted?: boolean;
+}
+export interface HtGroup {
+  key: string;
+  market: HtMarket;
+  kind: HtKind;
+  id: string;
+  name: string;
+  day: HtStrength;
+  week: HtStrength | null;
+  /** truncated: 구성 종목이 300개 넘는 업종이라 합을 내지 않음 (state none, 예전 서버는 없음) */
+  tradingValue: { today: number | null; avg: number | null; days: number; ratioPct: number | null; state: HtTvState; day: string | null; currency: "KRW" | "USD"; truncated?: boolean };
+  inDiscoverList: boolean;
+  holdings: HtHolding[];
+}
+export interface HtMarketInfo {
+  session: DiscoverSession;
+  marketOpen: boolean;
+  asOf: string | null;
+  tvDay: string | null;
+  preparing: boolean;
+  note: string | null;
+  weekNote: string | null;
+  /** 이 시장 보유 종목 원화 평가금액 합 (처음 고를 시장 칩) */
+  heldValue: number;
+}
+export interface HoldingThemes {
+  enabled: true;
+  asOf: string;
+  markets: Partial<Record<HtMarket, HtMarketInfo>>;
+  coverage: { held: number; mapped: number; unmapped: { code: string; name: string; market: HtMarket; reason: "index" | "none" | "failed" | "preparing"; text: string }[] };
+  mostHeld: { key: string; name: string; count: number; codes: string[] }[];
+  groups: HtGroup[];
+  byHolding: { code: string; name: string; market: HtMarket; keys: string[] }[];
+  basis: string[];
+  krIndexAt: string | null;
+  disclaimer: string;
+}
+/** 계좌 브리핑에 저장한 내 종목 테마 (3-35 — 서버 HoldingThemesSnapshot) */
+export interface HoldingThemesSnapshot {
+  asOf: string;
+  coverage: { held: number; mapped: number };
+  mostHeld: { name: string; count: number }[];
+  markets: Partial<Record<HtMarket, { basisDay: string | null; session: DiscoverSession; split: boolean; top: { name: string; changeRate: number }[]; bottom: { name: string; changeRate: number }[]; more: number }>>;
 }
