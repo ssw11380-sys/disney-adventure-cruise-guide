@@ -1,5 +1,6 @@
 import type { FastifyRequest } from "fastify";
 import { normalizeCode } from "../lib/codes.js";
+import { preferredText } from "../services/valueScoreText.js";
 import type { SessionContext } from "./authService.js";
 
 /**
@@ -185,8 +186,20 @@ export function memberFlowView<T extends { supported: boolean; fetchedAt?: strin
 /** 주인 아닌 계정에게 주는 '지난 값' 안내 (재무를 받은 날짜 없이 — 날짜는 주인 등록 종목만 매일 다시 받으므로 캐시 상태가 드러난다, 검증 5차) */
 export const MEMBER_CARRIED_TEXT = "재무 숫자는 예전에 받은 값입니다 (그 뒤 새로 받지 못함).";
 export const MEMBER_CARRIED_BADGE = "지난 값";
+/**
+ * 주인 아닌 계정에게 주는 한국 우선주 이유 글 (main #128 가치 점수 개선 1단계 [9] 합친 뒤): '같은 회사 보통주(○○) 화면에 가치 지표 점수가 있습니다'는
+ * 보통주 재무를 저장해 둔 때만 나온다 — 주인 등록 종목은 서버가 매일 재무를 받아 두므로(첫 채우기에 없는 작은 회사·실적 철의 새 분기) 우선주 화면 본문만으로
+ * 주인이 그 보통주를 등록했는지 갈린다 (검증 6차 M2 와 같은 캐시 상태 신호). 그래서 가입자에게는 늘 첫 문장만
+ */
+export const MEMBER_PREFERRED_TEXT = preferredText(null);
 
-type ScoreValueLike = { asOf?: { fetchedAt: string | null } | null; flags?: Array<{ key: string; text: string }> | null; badges?: string[] | null };
+type ScoreValueLike = {
+  asOf?: { fetchedAt: string | null } | null;
+  flags?: Array<{ key: string; text: string }> | null;
+  badges?: string[] | null;
+  text?: string;
+  reason?: { code: string; text: string } | null;
+};
 type ScoreNameLike = { name?: string; trend?: { basis?: { kind: string; code: string; name: string } | null } | null };
 
 /**
@@ -207,6 +220,10 @@ export function memberScoreView<T extends { computedAt: string; value?: ScoreVal
     ...(v.asOf ? { asOf: { ...v.asOf, fetchedAt: null } } : {}),
     ...(v.flags ? { flags: v.flags.map((f) => (f.key === "carriedForward" ? { ...f, text: MEMBER_CARRIED_TEXT } : f)) } : {}),
     ...(v.badges ? { badges: v.badges.map((b) => (b.startsWith(MEMBER_CARRIED_BADGE) ? MEMBER_CARRIED_BADGE : b)) } : {}),
+    // 한국 우선주 '같은 회사 보통주(○○) 화면에 …' 문장을 뺀다 (보통주 재무 캐시 상태 — MEMBER_PREFERRED_TEXT). 플래그를 끈 예전 글(상수)은 그대로
+    ...(v.reason?.code === "preferred" && v.reason.text.startsWith(MEMBER_PREFERRED_TEXT)
+      ? { reason: { ...v.reason, text: MEMBER_PREFERRED_TEXT }, ...(v.text !== undefined ? { text: MEMBER_PREFERRED_TEXT } : {}) }
+      : {}),
   };
   return { ...r, computedAt: nowIso, value };
 }

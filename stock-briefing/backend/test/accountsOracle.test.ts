@@ -1,8 +1,9 @@
 import type { FastifyInstance, InjectOptions } from "fastify";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
-import { MEMBER_AI_DAILY, MEMBER_CARRIED_BADGE, MEMBER_CARRIED_TEXT, MEMBER_SCORE_DAILY, memberScoreView } from "../src/auth/routePolicy.js";
-import { carriedBadge, carriedText } from "../src/services/valueScoreText.js";
+import { MEMBER_AI_DAILY, MEMBER_CARRIED_BADGE, MEMBER_CARRIED_TEXT, MEMBER_PREFERRED_TEXT, MEMBER_SCORE_DAILY, memberScoreView } from "../src/auth/routePolicy.js";
+import { buildKrReference } from "../src/analysis/krValue.js";
+import { carriedBadge, carriedText, preferredText, VALUE_STATUS_TEXT } from "../src/services/valueScoreText.js";
 import { GLOBAL_LOCK_FAILS, ipKey } from "../src/auth/rateLimit.js";
 import { loadConfig } from "../src/config.js";
 import { createMigratedDb, type Db } from "../src/db/index.js";
@@ -14,6 +15,7 @@ import { ProviderError } from "../src/lib/errors.js";
 import type { LiveTick, QuickPriceSource, StockSessionFacts, TossRealtime } from "../src/providers/market/tossRealtime.js";
 import type { ScoreSources, ScoreStock } from "../src/services/indicatorScoreService.js";
 import { benchOf, candlesOf } from "./fixtures/indicatorScores/load.js";
+import { fakeKrSources, krWorld } from "./fixtures/krValue/load.js";
 import { dailyOf, fakeValueSources, monthlyOf, referenceData } from "./fixtures/valueScores/load.js";
 import { FakeQuoteProvider, fakeProviders, makeQuote } from "./helpers.js";
 
@@ -465,6 +467,70 @@ describe("M2 (검증 6차): 가치 기능을 켠 서버 둘 — 주인이 재무
     // 받기가 끝난 뒤에는 기다림 없이 점수
     const again = await cold.app.indicatorScores.getShared("NVDA", 80);
     expect(again?.value.status).toBe("ok");
+  });
+});
+
+/**
+ * main #128(가치 점수 개선 1단계 [9] valueReasonDetail) 합친 뒤 M2: 한국 우선주 이유 글 '같은 회사 보통주(○○) 화면에 가치 지표 점수가 있습니다'는
+ * 보통주 재무를 저장해 둔 때만 나온다 (네이버 재무 요청 없이 저장한 값만). 주인 등록 종목은 서버가 재무를 매일 받아 두므로, 우선주 화면 본문만으로
+ * 주인이 그 보통주를 등록했는지 갈렸다 — 주인 아닌 계정에게는 늘 첫 문장만 (MEMBER_PREFERRED_TEXT)
+ */
+describe("M2 (main #128 합친 뒤): 한국 우선주 이유 글로 주인이 보통주 재무를 받아 두었는지 드러나지 않는다", () => {
+  const STOCKS: Record<string, ScoreStock> = { "005930": { code: "005930", name: "삼성전자", market: "KOSPI" }, "005935": { code: "005935", name: "삼성전자우", market: "KOSPI" } };
+
+  async function server(o: { commonFacts: boolean }) {
+    const clock = { t: T0 };
+    const db = await createMigratedDb(":memory:");
+    const world = krWorld();
+    const kr = fakeKrSources({ members: world.members });
+    const cs = candlesOf("005930.KS");
+    const src: ScoreSources = {
+      stock: async (c) => STOCKS[c] ?? null,
+      candles: async (c, n) => ({ code: c, period: "D", candles: cs.slice(-n), source: "yahoo" }),
+      benchmark: async (c) => (c === "KOSPI" ? benchOf("005930.KS") : null),
+      product: async () => null,
+      registered: async () => [STOCKS["005930"]!],
+      monthly: async () => null,
+    };
+    const app = await buildApp({
+      config: loadConfig({ DATABASE_URL: ":memory:" }),
+      db,
+      providers: fakeProviders({ scoreSources: src, valueSources: fakeValueSources().src, krValueSources: kr.src }),
+      logger: false,
+      enableScheduler: false,
+      now: () => new Date(clock.t),
+      auth: { scryptN: 1024 },
+    });
+    opened.push({ app, db, clock });
+    await app.krValue.saveReference(buildKrReference(world.members, world.facts, "2026-09-27"));
+    // 주인 등록 보통주처럼 재무를 미리 받아 둔 서버 (매일 warm · 장 마감 뒤 refreshIfStale)
+    if (o.commonFacts) await app.krValue.refreshFacts("005930");
+    const owner = (await login(app, OWNER, "1111")).json().token as string;
+    const member = (await app.inject({ method: "POST", url: "/api/auth/signup", payload: { loginId: "member1", password: "abcd1234", passwordConfirm: "abcd1234", email: "m@example.com" } })).json().token as string;
+    return { app, owner, member };
+  }
+
+  it("보통주 재무를 받아 둔 서버와 아닌 서버에서 가입자의 우선주 점수 본문이 같다 — 주인은 그대로 '같은 회사 보통주(삼성전자) …'", async () => {
+    const warm = await server({ commonFacts: true });
+    const cold = await server({ commonFacts: false });
+    // 주인에게는 #128 그대로 (받아 둔 서버만 보통주 문장 — 이 차이가 가입자에게 신호였다)
+    const ownerWarm = (await warm.app.inject({ method: "GET", url: "/api/scores/005935", headers: S(warm.owner) })).json();
+    expect(ownerWarm.value).toMatchObject({ status: "excluded", reason: { code: "preferred", text: preferredText("삼성전자") } });
+    const a = await warm.app.inject({ method: "GET", url: "/api/scores/005935", headers: S(warm.member) });
+    const b = await cold.app.inject({ method: "GET", url: "/api/scores/005935", headers: S(cold.member) });
+    expect(a.statusCode, a.body).toBe(200);
+    expect(b.statusCode, b.body).toBe(200);
+    expect(a.json().value).toMatchObject({ status: "excluded", text: MEMBER_PREFERRED_TEXT, reason: { code: "preferred", text: MEMBER_PREFERRED_TEXT } });
+    expect(b.json()).toEqual(a.json());
+  });
+
+  it("memberScoreView: 보통주 이름이 있든 없든 같은 글, 플래그를 끈 예전 글(상수)·다른 이유는 그대로", () => {
+    const pref = (text: string) => ({ computedAt: "a", value: { status: "excluded", text, reason: { code: "preferred", text } } });
+    expect(memberScoreView(pref(preferredText("삼성전자")), "b")).toEqual(memberScoreView(pref(preferredText(null)), "b"));
+    expect(JSON.stringify(memberScoreView(pref(preferredText("삼성전자")), "b"))).not.toContain("삼성전자");
+    expect(memberScoreView(pref(VALUE_STATUS_TEXT.preferred), "b").value).toEqual(pref(VALUE_STATUS_TEXT.preferred).value);
+    const spac = { computedAt: "a", value: { status: "excluded", text: VALUE_STATUS_TEXT.spac, reason: { code: "spac", text: VALUE_STATUS_TEXT.spac } } };
+    expect(memberScoreView(spac, "b").value).toEqual(spac.value);
   });
 });
 

@@ -129,6 +129,50 @@ describe("AI 분석: 글은 공개 이름으로 (주인 등록 표 이름이 공
     expect(b.statusCode).toBe(404);
     expect(a.body.replaceAll(REGISTERED_ONLY, "X")).toBe(b.body.replaceAll(UNKNOWN, "X"));
   });
+
+  // main #128(가치 점수 개선 1단계 [8], 플래그 valueAiSafeWording — 서버 기본 켬)과 합친 뒤: 가입자 경로(공개 이름 캐시만)에도 같은 문장 검사
+  it("가치분석 문장 검사도 가입자 경로에 — 공개 이름 캐시 글은 걸린 줄을 빼고 주고, 예전 형식 글은 새로 만들며, 등록 표 이름 글은 그대로 주지 않는다", async () => {
+    const s = await server({ registered: true, warm: [] });
+    const at = seoulIso(new Date(T0));
+    const row = (code: string, content: string, name: string, market: string) => ({ code, kind: "value", content, data_snapshot: JSON.stringify({ stock: { code, name, market } }), missing_data: "[]", model: "old", created_at: at });
+    await s.db
+      .insertInto("analyses")
+      .values([
+        // 005930: 공개 이름으로 만든 새 형식 글 + 금지어 한 줄
+        row("005930", `## 주가와 재무 숫자\n종목: ${PUBLIC["005930"]} (005930)\n지금 사셔도 됩니다.`, PUBLIC["005930"], "KOSPI"),
+        // SOXX: 공개 이름으로 만든 예전 프롬프트 형식 글 ('## 강점' — safe 이면 새로 만든다)
+        row("SOXX", "## 강점\n좋은 회사입니다.\n## 리스크\n없음", PUBLIC.SOXX, "NASDAQ"),
+      ])
+      .execute();
+    s.clock.t += 60_000;
+    const count = async () => (await s.db.selectFrom("analyses").select("id").execute()).length;
+    const n0 = await count();
+
+    const a = await s.app.inject({ method: "GET", url: "/api/stocks/005930/analysis/value", headers: S(s.member) });
+    expect(a.statusCode, a.body).toBe(200);
+    expect(a.json().content).toContain(`종목: ${PUBLIC["005930"]} (005930)`);
+    expect(a.json().content).not.toContain("사셔도");
+    expect(a.json().content).toContain("(문장 검사에서 1줄을 뺐습니다)");
+    // 가림은 그대로 (번호·만든 시각·캐시 표시 = 요청 시각 값)
+    expect(a.json()).toMatchObject({ id: 0, cached: false, createdAt: seoulIso(new Date(s.clock.t)) });
+    expect(await count()).toBe(n0);
+
+    const b = await s.app.inject({ method: "GET", url: "/api/stocks/SOXX/analysis/value", headers: S(s.member) });
+    expect(b.statusCode, b.body).toBe(200);
+    expect(b.json().content).not.toContain("## 강점");
+    expect(b.json().content).not.toContain("좋은 회사");
+    expect(b.json().content).toContain(`종목: ${PUBLIC.SOXX} (SOXX)`);
+    noMarks(b.body, "SOXX/value 새 글");
+    expect(await count()).toBe(n0 + 1);
+
+    // 등록 표 이름으로 만든 새 형식 글 (금지어 없음)도 가입자에게는 주지 않는다 — 문장 검사가 켜져 있어도 8차 규칙 그대로
+    await s.db.insertInto("analyses").values(row("005930", `## 주가와 재무 숫자\n종목: ${NAME_CANARY.stock} (005930)`, NAME_CANARY.stock, "KOSPI")).execute();
+    s.clock.t += 60_000;
+    const c = await s.app.inject({ method: "GET", url: "/api/stocks/005930/analysis/value", headers: S(s.member) });
+    expect(c.statusCode, c.body).toBe(200);
+    noMarks(c.body, "005930/value 등록 표 이름 캐시 뒤");
+    expect(c.json().content).toContain(`종목: ${PUBLIC["005930"]} (005930)`);
+  });
 });
 
 describe("지표 점수: 계산을 공개 이름·시장으로 (기초자산 참고 줄·'기초자산 기준'·상품 분류·비교 지수)", () => {

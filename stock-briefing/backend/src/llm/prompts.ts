@@ -16,6 +16,8 @@ export type PromptName =
   | "briefing_summary_safe"
   | "company_overview"
   | "value_analysis"
+  // 가치 점수 개선 1단계 [8] (플래그 valueAiSafeWording): '평가하는 애널리스트'·강점/리스크 없는 숫자 정리
+  | "value_analysis_safe"
   | "technical_analysis"
   | "account_briefing";
 

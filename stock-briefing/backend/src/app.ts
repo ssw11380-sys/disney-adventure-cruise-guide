@@ -312,7 +312,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     safeWording: () => features.enabled("briefingSafeWording"),
     parallel: () => features.enabled("briefingParallel"),
   });
-  const analysisService = new AnalysisService({ db: opts.db, collector, generator, prompts, lookup: (code) => stockService.preview(code), now, log, jobs: generationJobs });
+  const analysisService = new AnalysisService({ db: opts.db, collector, generator, prompts, lookup: (code) => stockService.preview(code), valueSafe: () => features.enabled("valueAiSafeWording"), now, log, jobs: generationJobs });
 
   // 알림/시간 설정: DB 에 저장된 값이 .env 기본값을 덮어쓴다
   const settingsStore = new NotificationSettingsStore(

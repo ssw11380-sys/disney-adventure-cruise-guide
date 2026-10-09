@@ -9,6 +9,7 @@ import { FlashPrice } from "@/components/FlashPrice";
 import { MarkdownView } from "@/components/MarkdownView";
 import { ReportVerificationNotice } from "@/components/ReportVerification";
 import { Button, Card, ErrorView, LiveDot, Loading, Muted, SectionTitle, Stat } from "@/components/ui";
+import { VALUE_AI_NOTE } from "@/lib/disclaimer";
 import { chunkRows, detailHeaderLayout, fillChartHeight, HEAD_PAD, headPriceParts, headTitleMaxWidth, markdownPreview, shortStamp } from "@/lib/detailLayout";
 import { formatDateKo, relativeTime } from "@/lib/format";
 import { openSourceLink } from "@/lib/openSourceLink";
@@ -50,6 +51,17 @@ export function Range52({ range, low, high, color, compact = false }: { range: n
 }
 
 /**
+ * AI 가치분석 글 바로 위 한 줄 'AI가 쓴 글 · 틀릴 수 있음 · 참고 정보이며 투자 권유가 아닙니다' (가치 점수 개선 1단계 [8] 안전망, 서버 플래그 valueAiSafeWording).
+ * 금지어 검사가 놓친 말이 있어도 글과 함께 늘 보이게, 글을 그리는 모든 길(휴대폰·넓은 창 탭 · 울트라 펼침 미리보기 · 예전/분석 대기 개선 경로)에 둔다 —
+ * 지표 점수 플래그('AI 가치분석 [AI가 쓴 글]' 제목은 indicatorScores·valueScore 가 켜졌을 때만)와 상관없이. 앱 fallback 켜짐(플래그를 아직 못 받았어도 붙임),
+ * 서버가 끄면 지금 화면 그대로. 기업개요·기술분석 글에는 붙이지 않는다
+ */
+function ValueAiNote({ kind }: { kind: AnalysisKind }) {
+  const on = useFeature("valueAiSafeWording", true);
+  return kind === "value" && on ? <Muted>{VALUE_AI_NOTE}</Muted> : null;
+}
+
+/**
  * requested=false: 발견 탭 등에서 잠깐 들여다보는 미등록 종목 — AI 분석은 눌렀을 때만 만든다 (비용·시간).
  * 이미 받아 둔 분석(캐시)이 있으면 누르지 않아도 보여 준다.
  */
@@ -83,6 +95,7 @@ function LegacyAnalysisTab({ code, kind, requested, onRequest }: { code: string;
         </Text>
       ) : null}
       <ReportVerificationNotice verification={d.verification} />
+      <ValueAiNote kind={kind} />
       <MarkdownView>{d.content}</MarkdownView>
       {d.missing.length ? <Muted>데이터 미확인: {d.missing.join(", ")}</Muted> : null}
       <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: space.xs }}>
@@ -147,6 +160,7 @@ function LegacyAnalysisPeek({ code, kind, title, lines, requested, onRequest, to
           ) : null}
           <ReportVerificationNotice verification={d.verification} />
           {d.missing.length ? <Muted>데이터 미확인: {d.missing.join(", ")}</Muted> : null}
+          <ValueAiNote kind={kind} />
           {lines !== null ? (
             <Text style={{ color: t.ink, fontSize: font.body, lineHeight: foldDetail.previewLineH }} numberOfLines={lines}>
               {markdownPreview(d.content)}
@@ -200,6 +214,7 @@ function AnalysisWaitBody({ code, kind, requested, onRequest, title, lines = nul
           ) : !d ? <Loading label="저장된 분석 확인 중" /> : null}
           {d ? <ReportVerificationNotice verification={d.verification} /> : null}
           {d?.missing.length ? <Muted>데이터 미확인: {d.missing.join(", ")}</Muted> : null}
+          {d ? <ValueAiNote kind={kind} /> : null}
           {d ? lines !== null ? (
             <Text style={{ color: t.ink, fontSize: font.body, lineHeight: foldDetail.previewLineH }} numberOfLines={lines}>{markdownPreview(d.content)}</Text>
           ) : (

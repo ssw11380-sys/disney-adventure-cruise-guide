@@ -22,6 +22,8 @@ const h = vi.hoisted(() => ({
   stock: undefined as unknown,
   scores: undefined as unknown,
   scoresError: false,
+  // 받은 AI 분석 글 (종류별) — 없으면 지금처럼 '분석 생성 중'
+  analysis: {} as Record<string, unknown>,
   scoreCalls: [] as Array<[string, boolean]>,
   push: vi.fn(),
   setParams: vi.fn(),
@@ -55,7 +57,7 @@ vi.mock("@/api/hooks", () => ({
   useStock: () => ({ ...idle, data: h.stock }),
   useCandles: () => idle,
   useBriefings: () => ({ ...idle, data: [] }),
-  useAnalysis: () => ({ ...idle, isLoading: true }),
+  useAnalysis: (_code: string, kind: string) => (h.analysis[kind] ? { ...idle, data: h.analysis[kind] } : { ...idle, isLoading: true }),
   useStockNews: () => ({ ...idle, data: { code: "NVDA", name: "엔비디아", news: [], newsError: null, disclosures: [], disclosuresError: null } }),
   useAnyMarketOpen: () => ({ open: false, fresh: false }),
   useStockMutations: () => ({ register: { mutate: vi.fn() }, remove: { mutate: vi.fn() }, refreshAnalysis: { mutate: vi.fn(), isPending: false, isError: false, error: null } }),
@@ -101,11 +103,11 @@ const NV = FX.cases["NVDA"]!.value;
 const nvdaStock = () => ({ ...holding("NVDA", quote("NVDA", 178.2, { currency: "USD", change: 3.05, changeRate: 1.74, fxRate: 1391.5 }), 40, 120, {}, "엔비디아"), market: "NASDAQ" as const, registered: true });
 const soxlStock = () => ({ ...holding("SOXL", quote("SOXL", 151.45, { currency: "USD", change: 2.2, changeRate: 1.47, fxRate: 1391.5 }), 30, 40, {}, "SOXL"), market: "AMEX" as const, registered: true });
 
-function open(stock: RegisteredWithQuote, scoresCase: string | null, extra: { flag?: boolean; valueFlag?: boolean; krFlag?: boolean; tab?: string; size?: [number, number]; fontScale?: number } = {}) {
+function open(stock: RegisteredWithQuote, scoresCase: string | null, extra: { flag?: boolean; valueFlag?: boolean; krFlag?: boolean; tab?: string; size?: [number, number]; fontScale?: number; flags?: Record<string, boolean> } = {}) {
   h.stock = stock;
   h.scores = scoresCase ? FX.cases[scoresCase] : undefined;
   // 서버 /api/features 가 주는 세 플래그 (가치 끔 픽스처는 valueScore, 한국 가치 끔 픽스처는 krValueScore 도 꺼진 서버). krFlag null = 예전 서버(플래그 없음 → 앱 fallback 꺼짐)
-  h.flags = { indicatorScores: extra.flag ?? true, valueScore: extra.valueFlag ?? scoresCase !== "NVDA_valueOff", foldLayout: true };
+  h.flags = { indicatorScores: extra.flag ?? true, valueScore: extra.valueFlag ?? scoresCase !== "NVDA_valueOff", foldLayout: true, ...extra.flags };
   const kr = extra.krFlag ?? scoresCase !== "005930_krOff";
   if (kr) h.flags["krValueScore"] = true;
   else h.flags["krValueScore"] = false;
@@ -124,6 +126,7 @@ const order = (r: ReturnType<typeof render>, ...needles: string[]) => needles.ma
 beforeEach(() => {
   h.scoreCalls.length = 0;
   h.scoresError = false;
+  h.analysis = {};
   h.push.mockReset();
   h.setParams.mockReset();
   forgetWindowClass();
@@ -181,12 +184,45 @@ describe("접은 화면 475×751 — 기업개요 탭 요약 카드", () => {
     expect(r.text()).not.toContain("재무 SEC");
   });
 
-  it("두 점수 차이가 30 이상이면 종합 아래 안내 한 줄 (예시 종목)", () => {
-    const r = open({ ...nvdaStock(), code: "ZZGAP", name: "예시 종목" }, "ZZGAP");
+  it("두 점수 차이가 30 이상이면 종합 아래 안내 한 줄 (예시 종목 — 가치 점수 개선 1단계 플래그를 끈 서버·지금 운영 서버 응답)", () => {
+    const r = open({ ...nvdaStock(), code: "ZZGAP", name: "예시 종목" }, "ZZGAP_stage1Off");
     const text = r.text();
     expect(text).toContain("종합 지표50두 점수의 평균");
     expect(text).toContain("두 점수의 차이가 39점이라 평균만으로는 상태가 잘 드러나지 않습니다. 두 점수를 함께 보세요.");
     expect(order(r, "종합 지표", "두 점수의 차이가", "가격 9월 25일").every((p, i, a) => i === 0 || p > a[i - 1]!)).toBe(true);
+  });
+
+  it("가치 점수 개선 1단계 [4] compositeGapHide 서버: 차이 30 넘으면 종합 숫자 대신 '없음 · 까닭' (앱 플래그와 상관없이 — 예전 앱도 같은 모양)", () => {
+    for (const flags of [{ compositeFormula: false }, { compositeFormula: true }] as Array<Record<string, boolean>>) {
+      const r = open({ ...nvdaStock(), code: "ZZGAP", name: "예시 종목" }, "ZZGAP", { flags });
+      const text = r.text();
+      expect(text).toContain("종합 지표없음두 점수 차이가 39점이라 평균을 보이지 않습니다");
+      expect(text).not.toContain("종합 지표50");
+      expect(text).not.toContain("함께 보세요");
+      expect(r.has("지표 점수. 가치 지표 30점, 0에서 100 중, 낮은 편. 추세 지표 69점, 다소 강함. 종합 지표 없음, 두 점수 차이가 39점이라 평균을 보이지 않습니다.")).toBe(true);
+    }
+  });
+
+  it("가치 점수 개선 1단계 [4] compositeFormula: 종합 숫자는 두 점수보다 작게(20 → 16)·식 '= (67 + 69) ÷ 2' 옆에, 화면 읽기 '67과 69를 더해 2로 나눈 값' — 끄면 지금 모양", () => {
+    const on = open(nvdaStock(), "NVDA", { flags: { compositeFormula: true } });
+    expect(on.text()).toContain("종합 지표68= (67 + 69) ÷ 2두 점수의 평균");
+    const nums = on.all().filter((n) => n.type === "Text" && ["67", "69", "68"].includes(textOf(n)));
+    const size = (s: string) => flat(nums.find((n) => textOf(n) === s)!).fontSize as number;
+    expect([size("67"), size("69"), size("68")]).toEqual([20, 20, 16]);
+    expect(on.has("지표 점수. 가치 지표 67점, 0에서 100 중, 높은 편. 추세 지표 69점, 다소 강함. 종합 지표 68점, 두 점수의 평균, 67과 69를 더해 2로 나눈 값.")).toBe(true);
+    // 앱 플래그가 꺼져 있으면(서버가 식을 주어도) 지금 모양 그대로
+    const off = open(nvdaStock(), "NVDA");
+    expect(off.text()).toContain("종합 지표68두 점수의 평균");
+    expect(off.text()).not.toContain("÷");
+    const offNums = off.all().filter((n) => n.type === "Text" && textOf(n) === "68");
+    expect(flat(offNums[0]!).fontSize).toBe(20);
+    // 예전 서버(식 없음) + 앱 플래그 켬: 식 없이 크기도 그대로
+    const old = open(nvdaStock(), "NVDA_stage1Off", { flags: { compositeFormula: true } });
+    expect(old.text()).toContain("종합 지표68두 점수의 평균");
+    expect(flat(old.all().filter((n) => n.type === "Text" && textOf(n) === "68")[0]!).fontSize).toBe(20);
+    // 큰 글씨(200%)에서도 식이 숫자·설명과 한 줄로 흐른다 (줄 바꿈 칸 — 잘림 없음은 웹 미리보기 캡처로 확인)
+    const big = open(nvdaStock(), "NVDA", { flags: { compositeFormula: true }, fontScale: 2 });
+    expect(big.text()).toContain("= (67 + 69) ÷ 2");
   });
 
   it("한국 가치를 끈 서버·SEC 재무 없음·받는 중: 가치 줄은 상태 글과 이유 (0점·50점으로 채우지 않음)", () => {
@@ -378,7 +414,8 @@ describe("가치분석 탭 — 가치 지표 상세 카드 (2단계)", () => {
     // 화면 읽기: 지표 줄 하나가 보이는 글을 모두 담은 한 문장 (리뷰 — 예전에는 위치 문장·가운데값·비교별 위치가 빠졌다)
     expect(r.has(metricSpeech(a1))).toBe(true);
     expect(metricSpeech(a1)).toContain(a1.text.replace(/\.$/, ""));
-    expect(metricSpeech(a1)).toContain(a1.peerMedian!);
+    // 가운데값 글의 ' · '는 화면 읽기에서 쉼표 ('흑자 회사 가운데값 58.6배, 비교한 업종 68곳 중 43%는 적자' — 가치 점수 개선 1단계 [3])
+    expect(metricSpeech(a1)).toContain(a1.peerMedian!.replace(/ · /g, ", "));
     // 같은 값이 많은 지표 안내 (무배당 0% 사이의 0.1%) — 주주환원 머리 문장은 배당이 아닌 주식 수 변화
     const e1 = v.families![4]!.metrics.find((m) => m.key === "E1")!;
     expect(t2).toContain(e1.note!);
@@ -648,5 +685,44 @@ describe("3단계 — 한국 간이 가치 (삼성전자·SK하이닉스·KB금�
     const small = open(nvdaStock(), "NVDA");
     small.act(() => (small.byLabel("구성·계산 방법 보기").props.onPress as () => void)());
     expect(small.all().filter((n) => n.type === "Text").map(textOf)).toContain("가격 안정성 · 10");
+  });
+});
+
+describe("AI 가치분석 안전망 (1단계 [8], 서버 플래그 valueAiSafeWording — 앱 fallback 켜짐)", () => {
+  const NOTE = "AI가 쓴 글 · 틀릴 수 있음 · 참고 정보이며 투자 권유가 아닙니다";
+  const BODY = "## 매출과 이익\n매출은 3년 연속 늘었습니다.";
+  const withValueText = () => {
+    h.analysis = { value: { id: 1, code: "NVDA", kind: "value", content: BODY, missing: [], model: "fake", cached: true, createdAt: "2026-09-28T10:00:00+09:00" } };
+  };
+  // 접은 화면 · 펼친 가로(좌우) · 펼친 세로(한 단) · 울트라 펼침 세로(윗줄+아랫줄 — 오른쪽 칸 미리보기), 지표 점수 켬/끔 · 가치 되돌리기 스위치 끔
+  const SIZES: Array<[number, number]> = [[475, 751], [933, 704], [704, 933], [859, 954]];
+  const FLAGS = [
+    { name: "지표 점수 켬", scoresCase: "NVDA", extra: {} },
+    { name: "지표 점수 끔", scoresCase: "NVDA", extra: { flag: false } },
+    { name: "가치 되돌리기 스위치 끔", scoresCase: "NVDA_valueOff", extra: {} },
+  ];
+  it.each(SIZES.flatMap((size) => FLAGS.map((f) => ({ size, ...f }))))(
+    "$size · $name: 가치분석 글 바로 위에 'AI가 쓴 글' + 고지 한 줄이 한 번, 화면 아래 공통 고지도 그대로",
+    ({ size, scoresCase, extra }) => {
+      withValueText();
+      const r = open(nvdaStock(), scoresCase, { tab: "value", size, ...extra });
+      const text = r.text();
+      expect(text).toContain("매출은 3년 연속 늘었습니다");
+      expect(text.split(NOTE)).toHaveLength(2);
+      expect(text.indexOf(NOTE)).toBeLessThan(text.indexOf("매출은 3년 연속"));
+      // 화면 아래 공통 고지: Screen 의 disclaimer(접은 화면·펼친 세로·울트라) 또는 두 칸 화면(SplitScreen — 펼친 가로)이 늘 그리는 Disclaimer
+      const screen = r.all().find((n) => n.type === "Screen");
+      expect(screen ? screen.props.disclaimer === true : r.all().filter((n) => n.type === "Disclaimer").length === 1).toBe(true);
+    },
+  );
+  it("서버가 valueAiSafeWording 을 끄면 지금 화면 그대로 (한 줄 없음) · 다른 탭 AI 글에는 붙지 않음", () => {
+    withValueText();
+    const off = open(nvdaStock(), "NVDA", { tab: "value", flags: { valueAiSafeWording: false } });
+    expect(off.text()).toContain("매출은 3년 연속 늘었습니다");
+    expect(off.text()).not.toContain(NOTE);
+    h.analysis = { company: { id: 2, code: "NVDA", kind: "company", content: "기업개요 본문", missing: [], model: "fake", cached: true, createdAt: "2026-09-28T10:00:00+09:00" } };
+    const company = open(nvdaStock(), "NVDA", { tab: "company" });
+    expect(company.text()).toContain("기업개요 본문");
+    expect(company.text()).not.toContain(NOTE);
   });
 });
