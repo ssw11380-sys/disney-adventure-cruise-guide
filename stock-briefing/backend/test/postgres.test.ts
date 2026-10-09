@@ -58,7 +58,7 @@ describe.skipIf(!url)("postgres dialect", () => {
   it("마이그레이션이 두 번 실행돼도 안전하다", async () => {
     await migrate(db, "postgres");
     const rows = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
-    expect(rows.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+    expect(rows.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
     const idx12 = await sql<{ indexdef: string }>`select indexdef from pg_indexes where schemaname = current_schema() and indexname = 'idx_briefings_date_created'`.execute(db);
     expect(idx12.rows).toHaveLength(1);
     expect(idx12.rows[0]!.indexdef).toContain("(briefing_date DESC, created_at DESC)");
@@ -83,6 +83,19 @@ describe.skipIf(!url)("postgres dialect", () => {
     expect(idx16.rows.map((r) => r.indexname)).toEqual(expect.arrayContaining(["uq_trade_notes_account_order", "uq_fx_rates_kind_at"]));
     const types16 = await sql<{ data_type: string }>`select data_type from information_schema.columns where table_name = 'fx_rates' and column_name = 'rate'`.execute(db);
     expect(types16.rows.map((r) => r.data_type)).toEqual(["double precision"]);
+    // 17 = 관심 종목 그룹 (3-34, 처음 12 로 만들었다가 병합 때 다시 매김): 새 표 watch_groups (id 는 identity) + registered_stocks 의 비어 있을 수 있는 정수 칸 둘
+    const types17 = await sql<{ table_name: string; column_name: string; data_type: string; is_nullable: string; is_identity: string }>`
+      select table_name, column_name, data_type, is_nullable, is_identity from information_schema.columns
+      where table_schema = current_schema()
+        and ((table_name = 'registered_stocks' and column_name in ('watch_group_id', 'watch_position'))
+          or (table_name = 'watch_groups' and column_name in ('id', 'position')))
+      order by table_name, column_name`.execute(db);
+    expect(types17.rows).toEqual([
+      { table_name: "registered_stocks", column_name: "watch_group_id", data_type: "integer", is_nullable: "YES", is_identity: "NO" },
+      { table_name: "registered_stocks", column_name: "watch_position", data_type: "integer", is_nullable: "YES", is_identity: "NO" },
+      { table_name: "watch_groups", column_name: "id", data_type: "integer", is_nullable: "NO", is_identity: "YES" },
+      { table_name: "watch_groups", column_name: "position", data_type: "integer", is_nullable: "NO", is_identity: "NO" },
+    ]);
   });
 
   it("지표 점수 기록 (3-44): 같은 종목·기준일은 덮어쓴다 (Postgres on conflict)", async () => {
@@ -168,7 +181,7 @@ describe.skipIf(!url)("postgres dialect", () => {
       await migrate(db, "postgres");
       expect(await read()).toEqual({ quantity: 16.123455, avg_price: 1234.5677 });
       const versions = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
-      expect(versions.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+      expect(versions.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
       const doubles = await sql<{ n: number }>`select count(*) as n from information_schema.columns where table_name = 'registered_stocks' and data_type = 'double precision'`.execute(db);
       expect(Number(doubles.rows[0]!.n)).toBe(2);
     } finally {
@@ -301,6 +314,20 @@ describe.skipIf(!url)("postgres dialect", () => {
     });
     await db.insertInto("account_snapshots").values(snapRow("2026-09-28")).execute();
     await db.insertInto("trade_executions").values(tradeRow("pg-bk-1")).execute();
+    // 관심 종목 그룹 (3-34): 그룹 둘 + 그룹·자리가 정해진 관심 종목 하나 — 그룹 id 도 identity 라 복구에 overriding·setval 이 필요하다
+    const groupRows = await db
+      .insertInto("watch_groups")
+      .values([
+        { name: "반도체", position: 0, created_at: ts, updated_at: ts },
+        { name: "배당", position: 1, created_at: ts, updated_at: ts },
+      ])
+      .returning(["id", "name", "position"])
+      .execute();
+    const semi = Number(groupRows[0]!.id);
+    await db
+      .insertInto("registered_stocks")
+      .values({ code: "005930", name: "삼성전자", market: "KOSPI", quantity: null, avg_price: null, memo: null, created_at: ts, updated_at: ts, watch_group_id: semi, watch_position: 0 })
+      .execute();
     // 매매일지 두 표 (3-37): 메모·환율도 되살아나야 복구 뒤 같은 메모·같은 세액
     await db.insertInto("trade_notes").values({ account: 3, order_id: "pg-bk-1", note: "실적 발표 뒤 일부 정리", created_at: ts, updated_at: ts }).execute();
     await db.insertInto("fx_rates").values({ kind: "krw-std", at: "2026-09-28", rate: 1352.35, source: "smbs", fetched_at: ts }).execute();
@@ -339,10 +366,25 @@ describe.skipIf(!url)("postgres dialect", () => {
     expect(await db.selectFrom("fx_rates").select(["kind", "at", "rate"]).execute()).toEqual([{ kind: "krw-std", at: "2026-09-28", rate: 1352.35 }]);
     await db.insertInto("trade_notes").values({ account: 3, order_id: "pg-bk-2", note: "메모", created_at: ts, updated_at: ts }).execute();
     expect((await db.selectFrom("trade_notes").select("id").execute()).length).toBe(2);
+    // 관심 그룹: 되살린 그룹(id 그대로)·종목 칸, 새 그룹이 id 충돌 없이 맨 끝에 (앱 경로로)
+    expect(before["watch_groups"]).toBe(2);
+    expect((await db.selectFrom("watch_groups").select(["id", "name", "position"]).orderBy("id").execute()).map((g) => ({ ...g, id: Number(g.id) }))).toEqual(
+      groupRows.map((g) => ({ id: Number(g.id), name: g.name, position: g.position })),
+    );
+    expect(await db.selectFrom("registered_stocks").select(["code", "watch_group_id", "watch_position"]).where("code", "=", "005930").execute()).toEqual([
+      { code: "005930", watch_group_id: semi, watch_position: 0 },
+    ]);
+    const made = await app.inject({ method: "POST", url: "/api/watch-groups", payload: { name: "성장" } });
+    expect(made.statusCode).toBe(201);
+    expect(made.json().created.id).toBe(Math.max(...groupRows.map((g) => Number(g.id))) + 1);
+    expect(made.json().groups.map((g: { name: string }) => g.name)).toEqual(["반도체", "배당", "성장"]);
+    expect(made.json().items).toEqual([{ code: "005930", groupId: semi, position: 0 }]);
     await db.deleteFrom("account_snapshots").execute();
     await db.deleteFrom("trade_executions").execute();
     await db.deleteFrom("trade_notes").execute();
     await db.deleteFrom("fx_rates").execute();
+    await db.deleteFrom("watch_groups").execute();
+    await db.deleteFrom("registered_stocks").where("code", "=", "005930").execute();
   });
 
   it("계좌 보고서의 실패 upsert는 기존 성공 행을 보존한다 (Postgres 조건부 충돌 처리)", async () => {

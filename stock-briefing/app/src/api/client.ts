@@ -53,6 +53,7 @@ import type { AppErrorSummary, Evaluation, WatchItem,
 } from "./types";
 import { authMessage, NOT_JSON, SESSION_INVALID, SESSION_REQUIRED } from "@/lib/connectionError";
 import { assertSessionIdentity, handleSessionInvalid, markAccountsSeen, sessionFor, sessionIdentityVersion, sessionTokenFor, SessionReadError, type AccountUser } from "@/lib/session";
+import type { WatchLayout } from "@/lib/watchGroups";
 
 import { condDrop, condGet, condHeaders, condKey, condNote, condPut, isDelta, rebuild } from "./condCache";
 
@@ -382,6 +383,13 @@ export function createApi(baseUrl: string, token = "", opts: ApiOptions = {}) {
     },
     journalTax: (year?: number) => get<JournalTax>(`/api/journal/tax${year ? `?year=${year}` : ""}`, 20_000),
     saveTradeNote: (body: { account: number; orderId: string; note: string }) => send<{ account: number; orderId: string; note: string | null; updatedAt: string }>("PUT", "/api/journal/notes", body, 15_000),
+    /** 관심 종목 그룹·순서 (3-34, 플래그 watchGroups). 모든 응답이 배치 전체. 예전 서버는 404 → 부르는 쪽(WatchGroupsProvider)이 꺼짐으로 본다 */
+    watchGroups: () => get<WatchLayout>("/api/watch-groups", 10_000),
+    createWatchGroup: (name: string) => send<WatchLayout>("POST", "/api/watch-groups", { name }, 15_000),
+    renameWatchGroup: (id: number, name: string) => send<WatchLayout>("PATCH", `/api/watch-groups/${id}`, { name }, 15_000),
+    deleteWatchGroup: (id: number) => send<WatchLayout>("DELETE", `/api/watch-groups/${id}`, undefined, 15_000),
+    orderWatchGroups: (ids: number[]) => send<WatchLayout>("PUT", "/api/watch-groups/order", { ids }, 15_000),
+    moveWatchStock: (body: { code: string; groupId: number | null; index: number }) => send<WatchLayout>("POST", "/api/watch-groups/move", body, 15_000),
   };
 }
 

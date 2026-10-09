@@ -20,6 +20,10 @@ export interface RegisteredStockTable {
   memo: string | null;
   created_at: ColumnType<string, string, never>;
   updated_at: string;
+  /** 관심 종목 그룹 (3-34, 플래그 watchGroups). null = 그룹 없음. 넣기(insert)에서 빼도 되는 칸 — 토스 동기화·등록 코드는 쓰지 않는다 */
+  watch_group_id: ColumnType<number | null, number | null | undefined, number | null>;
+  /** 그 그룹 안 자리 0,1,2… null = 아직 정하지 않음 (정한 종목들 뒤에 등록순) */
+  watch_position: ColumnType<number | null, number | null | undefined, number | null>;
 }
 
 export interface QuoteCacheTable {
@@ -320,6 +324,19 @@ export interface FxRateTable {
   fetched_at: string;
 }
 
+/**
+ * 관심 종목 그룹 (3-34, 플래그 watchGroups): 그룹 하나 = 1줄. 이름 겹침은 색인이 아니라 서비스 규칙(대소문자·빈칸 무시)으로 막는다 —
+ * 나중에 사용자별(user_id)로 바꿀 때 색인을 다시 만들지 않게. 종목의 그룹·자리는 registered_stocks 의 두 칸.
+ * 관심 탭의 별도 관심종목(watch_items — 관심 시작·구매희망 가격, 플래그 watchlistSteps)과는 따로다: 이 그룹은 잔고 탭 '관심' 칸(수량 없는 등록 종목)만 묶는다
+ */
+export interface WatchGroupTable {
+  id: Generated<number>;
+  name: string; // 보이는 이름 (정리한 뒤 1~10자)
+  position: number; // 칩·목록 순서 0,1,2… (서버가 빈틈 없이 다시 매긴다)
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Database {
   watch_items: { code: string; name: string; market: string; start_price: number; desired_price: number; alerts: number; revision: string; created_at: string; updated_at: string };
   movement_marks: { mark_key: string; up: number; down: number; created_at: string };
@@ -348,4 +365,5 @@ export interface Database {
   trade_executions: TradeExecutionTable;
   indicator_scores: IndicatorScoreTable;
   price_alerts: PriceAlertTable;
+  watch_groups: WatchGroupTable;
 }

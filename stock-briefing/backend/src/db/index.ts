@@ -6,6 +6,8 @@ import pg from "pg";
 import type { Database } from "./schema.js";
 import { migrate, type Dialect } from "./migrate.js";
 
+export { sameTimeOrder } from "./order.js";
+
 export type Db = Kysely<Database>;
 
 export function detectDialect(databaseUrl: string): Dialect {

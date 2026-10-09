@@ -22,6 +22,7 @@ export function TableHeadRow({
   title,
   sort,
   sortLabel,
+  sortA11y,
   onSort,
   onOpenSort,
   action,
@@ -30,6 +31,8 @@ export function TableHeadRow({
   title: string;
   sort: SortKey;
   sortLabel: string;
+  /** 정렬 버튼 화면 읽기 문장 (없으면 '정렬 바꾸기, 지금 등록순' — 3-34 관심 칸 '내 순서'는 휴대폰과 같은 긴 문장을 넘긴다) */
+  sortA11y?: string;
   onSort: (k: SortKey) => void;
   onOpenSort: () => void;
   action?: React.ReactNode;
@@ -49,7 +52,7 @@ export function TableHeadRow({
         >
           {title}
         </Text>
-        <Pressable onPress={onOpenSort} hitSlop={HEAD_SLOP} accessibilityRole="button" accessibilityLabel={`정렬 바꾸기, 지금 ${sortLabel}`} style={styles.sortBtn}>
+        <Pressable onPress={onOpenSort} hitSlop={HEAD_SLOP} accessibilityRole="button" accessibilityLabel={sortA11y ?? `정렬 바꾸기, 지금 ${sortLabel}`} style={styles.sortBtn}>
           <Text style={{ color: t.muted, fontSize: font.small }} numberOfLines={1} maxFontSizeMultiplier={fontCap.row}>
             {sortLabel}
           </Text>

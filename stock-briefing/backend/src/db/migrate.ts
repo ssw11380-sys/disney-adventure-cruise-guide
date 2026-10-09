@@ -479,7 +479,36 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>, dialect: D
       await sql`create unique index if not exists uq_fx_rates_kind_at on fx_rates (kind, at)`.execute(db);
     },
   },
+  {
+    // main 의 가장 큰 번호(16) + 1 (처음 12 로 만들었다가 main 에 12~16 이 먼저 들어가 병합 때 다시 매김) — 'if not exists'·칸 있음 검사라 번호가 바뀌어도 안전.
+    // 새 표 하나 + registered_stocks 에 비어 있을 수 있는 칸 둘 (예전 서버로 되돌려도 모르고 지나갈 뿐)
+    version: 17,
+    up: async (db, dialect) => {
+      // 관심 종목 그룹·순서 (3-34, 플래그 watchGroups)
+      await db.schema
+        .createTable("watch_groups")
+        .ifNotExists()
+        .addColumn("id", "integer", idColumn(dialect))
+        .addColumn("name", "text", (c) => c.notNull())
+        .addColumn("position", "integer", (c) => c.notNull())
+        .addColumn("created_at", "text", (c) => c.notNull())
+        .addColumn("updated_at", "text", (c) => c.notNull())
+        .execute();
+      // SQLite 는 ALTER TABLE 한 번에 칸 하나 → 칸마다 따로. 중간에 멈췄다 다시 돌 때 이미 있는 칸은 건너뛴다
+      for (const col of ["watch_group_id", "watch_position"] as const)
+        if (!(await hasColumn(db, dialect, "registered_stocks", col))) await db.schema.alterTable("registered_stocks").addColumn(col, "integer").execute();
+    },
+  },
 ];
+
+/** 표에 그 칸이 이미 있는지 (칸을 더하는 마이그레이션을 다시 돌려도 안전하게) */
+async function hasColumn(db: Kysely<Database>, dialect: Dialect, table: string, column: string): Promise<boolean> {
+  const rows =
+    dialect === "postgres"
+      ? await sql<{ name: string }>`select column_name as name from information_schema.columns where table_schema = current_schema() and table_name = ${table}`.execute(db)
+      : await sql<{ name: string }>`select name from pragma_table_info(${table})`.execute(db);
+  return rows.rows.some((r) => r.name === column);
+}
 
 export async function migrate(db: Kysely<Database>, dialect: Dialect = "sqlite"): Promise<void> {
   await sql`create table if not exists schema_version (version integer primary key)`.execute(db);

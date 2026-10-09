@@ -22,7 +22,8 @@ jobs:
     timeout-minutes: 10
     services:
       postgres:
-        image: postgres:16
+        # Docker Hub 익명 받기 횟수 제한(toomanyrequests)으로 CI 가 서지 않아, 같은 공식 postgres:16 을 AWS 공개 미러에서 받는다 (2026-10-10)
+        image: public.ecr.aws/docker/library/postgres:16
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: stockbriefing_test

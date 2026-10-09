@@ -7,6 +7,7 @@ import { keepTossCalendar, realtimeOf, sessionAt, toQuoteSession, tradedInSessio
 import { wsCovered } from "./priceStream.js";
 import type { MarketStatus } from "../providers/market/calendar.js";
 import type { Db } from "../db/index.js";
+import { sameTimeOrder } from "../db/order.js";
 import type { CandlePeriod, CandleSeries, ListedStock, Quote, RegisteredStock, SessionPhase } from "../domain/types.js";
 import { CODE_RE, isKrCode, normalizeCode } from "../lib/codes.js";
 import { mapLimit } from "../lib/concurrency.js";
@@ -534,7 +535,8 @@ export class StockService {
   }
 
   async list(): Promise<RegisteredStock[]> {
-    const rows = await this.deps.db.selectFrom("registered_stocks").selectAll().orderBy("created_at", "asc").execute();
+    // 같은 등록 시각(토스 가져오기 한 번)은 넣은 차례 — 관심 그룹 순서(3-34)와 같은 차례 (db/order.ts)
+    const rows = await this.deps.db.selectFrom("registered_stocks").selectAll().orderBy("created_at", "asc").orderBy(sameTimeOrder(this.deps.db)).execute();
     return rows.map(toRegistered);
   }
 

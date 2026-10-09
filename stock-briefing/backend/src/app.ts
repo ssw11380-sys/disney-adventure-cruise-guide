@@ -62,6 +62,8 @@ import { scoreRoutes } from "./routes/scores.js";
 import { PriceAlertService } from "./services/priceAlertService.js";
 import { BriefingStatusService } from "./services/briefingStatus.js";
 import { priceAlertRoutes } from "./routes/priceAlerts.js";
+import { WatchGroupService } from "./services/watchGroupService.js";
+import { watchGroupRoutes } from "./routes/watchGroups.js";
 import { watchlistRoutes } from "./routes/watchlist.js";
 import { WatchlistService } from "./services/watchlistService.js";
 import { InvestorFlowService } from "./services/investorFlowService.js";
@@ -118,6 +120,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   });
   // 가격·등락률·거래량 알림 (3-29, 플래그 priceAlerts): 조건 저장·울림 기록, 거래량 급증은 차트와 같은 30분봉 캐시(450개)로 계산
   const priceAlerts = new PriceAlertService({ db: opts.db, features, candles: (code) => stockService.getCandles(code, "30m", 450).then((s) => s.candles), now });
+  // 관심 종목 그룹·순서 (3-34, 플래그 watchGroups): 그룹 표 watch_groups + registered_stocks 두 칸
+  const watchGroups = new WatchGroupService({ db: opts.db, features, now });
   const appErrors = new AppErrorService(opts.db, now);
   const backups = new BackupService({ db: opts.db, dialect: detectDialect(opts.config.DATABASE_URL), dir: opts.config.BACKUP_DIR, key: opts.config.BACKUP_KEY, now, log });
   if (opts.enableScheduler !== false) backups.start();
@@ -670,6 +674,7 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
   await app.register(stockRoutes, { prefix: "/api/stocks", service: stockService });
   await app.register(priceAlertRoutes, { prefix: "/api/price-alerts", service: priceAlerts });
   await app.register(watchlistRoutes, { prefix: "/api/watchlist", service: watchlist, features });
+  await app.register(watchGroupRoutes, { prefix: "/api/watch-groups", service: watchGroups });
   await app.register(analysisRoutes, {
     prefix: "/api/stocks",
     service: analysisService,

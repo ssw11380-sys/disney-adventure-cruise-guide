@@ -1,9 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useApi } from "@/api/hooks";
 import type { RegisteredWithQuote } from "@/api/types";
 import { sortHoldings, splitHoldings } from "@/lib/portfolio";
 import { useSettings, type SortKey } from "@/lib/settings";
+import { registeredSeq, visibleWatch, watchModel, type WatchLayout } from "@/lib/watchGroups";
+import { useWatchGroups } from "@/lib/watchGroupsQuery";
+import type { WatchView } from "@/lib/watchView";
 
 /**
  * 종목 상세의 ‹ n/17 › (3-42 웨이브 C, 기능 플래그 foldLayout): 잔고 화면과 같은 순서로 이전·다음 보유 종목으로 바꿔 끼운다.
@@ -47,10 +50,14 @@ export interface HoldingsNav {
 
 const item = (s: RegisteredWithQuote): NavItem => ({ code: s.code, name: s.name });
 
-/** 잔고 화면과 같은 순서 (정렬 설정·비용 차감 설정이 같으면 화면 줄 순서와 같다) */
-export function holdingsOrder(list: readonly RegisteredWithQuote[], sort: SortKey, afterCost: boolean): HoldingsOrder {
-  const { held, watch } = splitHoldings(sortHoldings([...list], sort, afterCost));
-  return { held: held.map(item), watch: watch.map(item) };
+/**
+ * 잔고 화면과 같은 순서 (정렬 설정·비용 차감 설정이 같으면 화면 줄 순서와 같다).
+ * watch 를 주면(3-34 관심 그룹 켜짐) 관심 순서는 화면에 보이는 순서 — 고른 칩의 종목만, 접은 그룹은 건너뛰고, 정렬 '등록순'이면 내 순서
+ */
+export function holdingsOrder(list: readonly RegisteredWithQuote[], sort: SortKey, afterCost: boolean, watch?: { layout: WatchLayout; view: WatchView }): HoldingsOrder {
+  const split = splitHoldings(sortHoldings([...list], sort, afterCost));
+  const shown = watch ? visibleWatch(watchModel(split.watch, watch.layout, watch.view, sort === "created", registeredSeq(list))) : split.watch;
+  return { held: split.held.map(item), watch: shown.map(item) };
 }
 
 /** 이 종목이 든 구역 (없으면 null — 미등록 종목) */
@@ -123,11 +130,14 @@ export function recallNav(code: string, fromNav: boolean): NavSection | null {
 export function useHoldingsNav(code: string, fromNav: boolean, active: boolean): HoldingsNav | null {
   const api = useApi();
   const { apiUrl, sort, afterCost } = useSettings();
+  // 3-34 관심 그룹이 켜져 있으면 관심 종목은 잔고에 보이는 순서대로 (꺼져 있으면 undefined — 지금 그대로)
+  const wg = useWatchGroups();
+  const watch = useMemo(() => (wg.on ? { layout: wg.layout, view: wg.view } : undefined), [wg.on, wg.layout, wg.view]);
   const [frozen, setFrozen] = useState<NavSection | null>(() => recallNav(code, fromNav));
   const want = active && !frozen;
   const select = useCallback(
-    (list: RegisteredWithQuote[]) => (want ? sectionOf(holdingsOrder(list, sort, afterCost), code) : null),
-    [want, sort, afterCost, code],
+    (list: RegisteredWithQuote[]) => (want ? sectionOf(holdingsOrder(list, sort, afterCost, watch), code) : null),
+    [want, sort, afterCost, code, watch],
   );
   // 잔고 목록 캐시를 읽기만 한다 (enabled: false — 서버에 묻지 않음). 고정한 뒤에는 select 가 null 이라 체결이 와도 다시 그리지 않는다
   const fresh = useQuery<RegisteredWithQuote[], Error, NavSection | null>({ queryKey: [apiUrl, "stocks"], queryFn: api.listStocks, enabled: false, select }).data;

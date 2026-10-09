@@ -232,6 +232,11 @@ export const FEATURES = {
     description:
       "매매일지 '양도세 추정' 탭 (3-37, tradeJournal 이 켜져 있을 때만 뜻이 있음, 기본 끔): 해외주식 결제일 기준환율(서울외국환중개 매매기준율, 못 받으면 하나은행 고시)·22%·250만 원 공제로 계산한 참고용 추정, 매매기준율 배경 받기. 끄면 탭·화면·합계가 없고 /api/journal/tax 는 { enabled: false }, 매매기준율·하나은행 요청 0건 — 기록(매도별 실현손익·'확인 필요' 표시)·수익률은 그대로",
   },
+  watchGroups: {
+    default: true,
+    description:
+      "관심 종목 그룹·순서 (3-34): 잔고 탭 '관심' 칸(수량 없는 등록 종목)만 — 관심 탭의 별도 관심종목(watch_items, watchlistSteps)은 건드리지 않음. 잔고 관심 칸 칩(전체·그룹·그룹 없음)·그룹 머리 접기·'관심 그룹·순서' 화면(만들기·이름·지우기·끌기·↑↓), 관심 줄 메뉴 '그룹 옮기기·위로·아래로'. 서버 /api/watch-groups (표 watch_groups + registered_stocks 칸 watch_group_id·watch_position). 끄면 앱이 부르지 않고 잔고가 지금 그대로(관심은 등록순), 서버 GET 빈 값·쓰기 409, 저장값은 지우지 않음",
+  },
 } as const satisfies Record<string, { default: boolean; description: string }>;
 
 export type FeatureKey = keyof typeof FEATURES;
