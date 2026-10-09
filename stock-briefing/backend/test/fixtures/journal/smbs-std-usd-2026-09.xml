@@ -1,0 +1,123 @@
+
+
+
+
+
+
+
+ 
+<?xml version="1.0" encoding="EUC-KR"?>   
+     
+<!-- 	
+	bgColor='EEEEEE, FFFFFF' 
+ -->
+<chart 
+	showToolTip='1'
+	useEllipsesWhenOverflow='0' 
+	labelDisplay='WRAP'
+	caption='기간별 매매기준율' 
+	yAxisName='Rate (Won)' 
+	xAxisName='Date'
+	showNames='1' 
+	showValues='0' 
+rotateNames='0' 
+AlternateHGridColor='EBEBEB' 
+	showColumnShadow='0' 
+	animation='1' 
+	showAlternateHGridColor='1' 
+	divLineColor='CFDAE0' 
+	numVDivLines='5'
+	numDivLines='6'
+canvasBorderThickness='2'
+canvasBorderColor='666666'
+	baseFontColor='666666' 
+	lineColor='c93749' 
+	lineAlpha='85'
+	anchorAlpha='0'	
+	bgColor='D2E0E8, F3F7FA' 
+	setAdaptiveYMin='1' 
+		lineThickness='2' 
+	alternateHGridColor='F3F7FA'
+showLabels='1'
+	formatNumberScale='0'
+		showPlotBorder='1'
+		plotBorderColor='85661B'
+showBorder='0'
+	labelStep='2' 
+	>
+	<!--
+	legendPadding='20' 
+	showValues='0' 
+	rotateNames='0' 
+	divLineColor='C7C7C7' 
+	divLineAlpha='20' 
+	setAdaptiveYMin='1' 
+	chartLeftMargin='0'
+	chartTopMargin='10' '
+	chartBottomMargin='0'
+	-->
+	
+	<set color='c93749' label='26.09.01' value='1373.6' />
+	
+	<set color='c93749' label='26.09.02' value='1370.3' />
+	
+	<set color='c93749' label='26.09.03' value='1369.4' />
+	
+	<set color='c93749' label='26.09.04' value='1359.5' />
+	
+	<set color='c93749' label='26.09.07' value='1355.2' />
+	
+	<set color='c93749' label='26.09.08' value='1342.6' />
+	
+	<set color='c93749' label='26.09.09' value='1341.1' />
+	
+	<set color='c93749' label='26.09.10' value='1337.9' />
+	
+	<set color='c93749' label='26.09.11' value='1338.2' />
+	
+	<set color='c93749' label='26.09.14' value='1346.4' />
+	
+	<set color='c93749' label='26.09.15' value='1345.3' />
+	
+	<set color='c93749' label='26.09.16' value='1353.3' />
+	
+	<set color='c93749' label='26.09.17' value='1368.3' />
+	
+	<set color='c93749' label='26.09.18' value='1380.3' />
+	
+	<set color='c93749' label='26.09.21' value='1383.8' />
+	
+	<set color='c93749' label='26.09.22' value='1384.3' />
+	
+	<set color='c93749' label='26.09.23' value='1360' />
+	
+	<set color='c93749' label='26.09.28' value='1352' />
+	
+<styles>
+<definition>
+<style name='CaptionFont' type='font' size='12' color='666666'>
+</style>
+</definition>
+<application>
+<apply toObject='CAPTION' styles='CaptionFont' />
+<apply toObject='SUBCAPTION' styles='CaptionFont' />
+</application>
+</styles>
+
+<styles>
+	<definition>
+		<style name="XScaleAnim" type="ANIMATION" duration="0.3" start="0" param="_xScale" /> 
+		<style name="YScaleAnim" type="ANIMATION" duration="0.3" start="0" param="_yscale" /> 
+		<style name="XAnim" type="ANIMATION" duration="0.2" start="0" param="_yscale" /> 
+		<style name="AlphaAnim" type="ANIMATION" duration="0.2" start="0" param="_alpha" /> 
+		<style name='DataShadow' type='Shadow' alpha='40'/>
+	</definition>
+	<application>
+		<apply toObject="CANVAS" styles="XScaleAnim, YScaleAnim,AlphaAnim" /> 
+		<apply toObject="DIVLINES" styles="XScaleAnim,AlphaAnim" /> 
+		<apply toObject="VDIVLINES" styles="YScaleAnim,AlphaAnim" /> 
+		<apply toObject="HGRID" styles="YScaleAnim,AlphaAnim" /> 
+		<apply toObject='DATALABELS' styles='DataShadow,Anim2' />
+	</application>
+</styles>
+</chart>

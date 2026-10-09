@@ -33,6 +33,7 @@ import type { AppErrorSummary, Evaluation, WatchItem,
   TossOpenApiStatus,
   FeatureFlags,
   IndicatorScores,
+  InvestorFlow,
   PriceAlertKind,
   PriceAlertRule,
   VolumeStatus,
@@ -41,9 +42,18 @@ import type { AppErrorSummary, Evaluation, WatchItem,
   BriefingStatus,
   ReconcileBadgeBody,
   TossAccountSnapshotBody,
+  FilingAlertItem,
+  HoldingSchedule,
+  JournalResponse,
+  JournalStockResponse,
+  JournalReturns,
+  JournalTax,
+  ReturnsMarket,
+  ReturnsPreset,
 } from "./types";
 import { authMessage, NOT_JSON, SESSION_INVALID, SESSION_REQUIRED } from "@/lib/connectionError";
 import { assertSessionIdentity, handleSessionInvalid, markAccountsSeen, sessionFor, sessionIdentityVersion, sessionTokenFor, SessionReadError, type AccountUser } from "@/lib/session";
+import type { WatchLayout } from "@/lib/watchGroups";
 
 import { condDrop, condGet, condHeaders, condKey, condNote, condPut, isDelta, rebuild } from "./condCache";
 
@@ -280,6 +290,8 @@ export function createApi(baseUrl: string, token = "", opts: ApiOptions = {}) {
     getStockNews: (code: string) => get<StockNews>(`${stockPath(code)}/news`),
     /** 지표 점수 (3-44, 플래그 indicatorScores). 플래그가 꺼져 있거나 예전 서버·모르는 종목이면 404 → 부르는 쪽이 "없음"으로 본다 */
     indicatorScores: (code: string) => get<IndicatorScores>(`/api/scores/${encodeURIComponent(code)}`, 20_000),
+    /** 수급 탭 (3-33, 플래그 flowTab). 꺼져 있거나 예전 서버면 404 → 부르는 쪽이 "없음"으로 본다 */
+    investorFlow: (code: string) => get<InvestorFlow>(`/api/investor-flow/${encodeURIComponent(code)}`, 20_000),
 
     latestBriefings: () => get<LatestBriefing[]>("/api/briefings/latest"),
     listBriefings: (filter: { code?: string; date?: string; session?: BriefingSession; limit?: number } = {}) => {
@@ -345,6 +357,39 @@ export function createApi(baseUrl: string, token = "", opts: ApiOptions = {}) {
     /** 잔고 '숫자 기준' 배지 (3-32, 플래그 numberBasis). 예전 서버는 404 → 부르는 쪽(reconcileBadgeQuery)이 꺼짐으로 본다 */
     reconcileBadge: () => get<ReconcileBadgeBody>("/api/admin/toss/reconcile/badge", 8_000),
     tossAccountSnapshot: () => get<TossAccountSnapshotBody>("/api/admin/toss/account-snapshot", 8_000),
+    /** 내 종목 테마 (3-35, 플래그 holdingThemes). 꺼진 서버·예전 서버는 404 → 부르는 쪽(useHoldingThemes)이 null 로 본다 */
+    holdingThemes: () => get<import("./types").HoldingThemes>("/api/holdings/themes", 20_000),
+    /** '일정·공시' 화면 (3-38, 플래그 holdingSchedule). 꺼져 있거나 예전 서버면 404 */
+    holdingSchedule: () => get<HoldingSchedule>("/api/schedule", 20_000),
+    /** 새 공시 알림 목록 (3-38, 플래그 filingAlerts — 앱이 앞에 있을 때 확인). 꺼져 있으면 404 */
+    filingAlerts: () => get<{ asOf: string; items: FilingAlertItem[] }>("/api/filings/alerts?days=3", 12_000),
+    /**
+     * 매매일지 (3-37, 플래그 tradeJournal). 새 경로라 예전 서버는 404 → 부르는 쪽(훅)이 꺼짐으로 본다.
+     * 서버가 플래그를 끄면 { enabled: false } 빈 값, 메모 쓰기는 409
+     */
+    journal: (q: { from: string; to: string; code?: string | null }) => {
+      const p = new URLSearchParams({ from: q.from, to: q.to });
+      if (q.code) p.set("code", q.code);
+      return get<JournalResponse>(`/api/journal?${p.toString()}`, 20_000);
+    },
+    journalStock: (code: string) => get<JournalStockResponse>(`/api/journal/stock/${encodeURIComponent(code)}`, 15_000),
+    journalReturns: (q: { preset: ReturnsPreset; market: ReturnsMarket; from?: string; to?: string }) => {
+      const p = new URLSearchParams({ preset: q.preset, market: q.market });
+      if (q.preset === "custom" && q.from && q.to) {
+        p.set("from", q.from);
+        p.set("to", q.to);
+      }
+      return get<JournalReturns>(`/api/journal/returns?${p.toString()}`, 20_000);
+    },
+    journalTax: (year?: number) => get<JournalTax>(`/api/journal/tax${year ? `?year=${year}` : ""}`, 20_000),
+    saveTradeNote: (body: { account: number; orderId: string; note: string }) => send<{ account: number; orderId: string; note: string | null; updatedAt: string }>("PUT", "/api/journal/notes", body, 15_000),
+    /** 관심 종목 그룹·순서 (3-34, 플래그 watchGroups). 모든 응답이 배치 전체. 예전 서버는 404 → 부르는 쪽(WatchGroupsProvider)이 꺼짐으로 본다 */
+    watchGroups: () => get<WatchLayout>("/api/watch-groups", 10_000),
+    createWatchGroup: (name: string) => send<WatchLayout>("POST", "/api/watch-groups", { name }, 15_000),
+    renameWatchGroup: (id: number, name: string) => send<WatchLayout>("PATCH", `/api/watch-groups/${id}`, { name }, 15_000),
+    deleteWatchGroup: (id: number) => send<WatchLayout>("DELETE", `/api/watch-groups/${id}`, undefined, 15_000),
+    orderWatchGroups: (ids: number[]) => send<WatchLayout>("PUT", "/api/watch-groups/order", { ids }, 15_000),
+    moveWatchStock: (body: { code: string; groupId: number | null; index: number }) => send<WatchLayout>("POST", "/api/watch-groups/move", body, 15_000),
   };
 }
 

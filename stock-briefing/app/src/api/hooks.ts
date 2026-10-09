@@ -17,7 +17,9 @@ import { loginRequiredFor, personalBlocked, sessionFor, sessionIdentityVersion, 
 import { TOSS_SNAPSHOT_OFF, TOSS_SNAPSHOT_POLL_MS } from "@/lib/tossAccountSnapshot";
 import { ApiRequestError, createApi, type Api } from "./client";
 import { SCORE_WAIT_REFETCH_MS, valueWaiting } from "@/lib/scoreView";
-import type { Analysis, AnalysisKind, BriefingSession, CandlePeriod, DiscoverMarket, DiscoverRank, FeatureFlags, NotificationSettings, NotificationSettingsPatch, RankCategory, ThemeKind, ThemePeriod } from "./types";
+import { holdingThemesEvery } from "@/lib/holdingThemes";
+import { pendingStart, taxRefetch } from "@/lib/journal";
+import type { Analysis, AnalysisKind, BriefingSession, CandlePeriod, DiscoverMarket, DiscoverRank, FeatureFlags, JournalResponse, JournalReturns, JournalStockResponse, JournalTax, NotificationSettings, NotificationSettingsPatch, RankCategory, ReturnsMarket, ReturnsPreset, ThemeKind, ThemePeriod } from "./types";
 
 export function useApi(): Api {
   const { apiUrl, apiToken, ready } = useSettings();
@@ -587,6 +589,28 @@ export function useIndicatorScores(code: string, enabled: boolean) {
   });
 }
 
+/**
+ * 수급 탭 (3-33, 플래그 flowTab — 탭을 연 한국 종목만 enabled). 서버가 장 시간 10분·그 밖 60분 캐시하므로 5분 동안 새로 묻지 않는다.
+ * 404(플래그 꺼짐·예전 서버)는 오류가 아니라 없음(null)
+ */
+export function useInvestorFlow(code: string, enabled: boolean) {
+  const api = useApi();
+  return useQuery({
+    queryKey: useKey("investorFlow", code),
+    queryFn: async () => {
+      try {
+        return await api.investorFlow(code);
+      } catch (e) {
+        if (e instanceof ApiRequestError && e.status === 404) return null;
+        throw e;
+      }
+    },
+    enabled: enabled && !!code,
+    staleTime: 5 * 60_000,
+    retry: 0,
+  });
+}
+
 export function useStockNews(code: string, enabled = true) {
   const api = useApi();
   return useQuery({ queryKey: useKey("news", code), queryFn: () => api.getStockNews(code), enabled, staleTime: 5 * 60_000 });
@@ -719,6 +743,97 @@ export async function orNullOn404<T>(p: Promise<T>): Promise<T | null> {
   }
 }
 
+// ── 매매일지 (3-37, 플래그 tradeJournal · tradeRecords — 부르는 화면이 켜져 있을 때만 enabled) ──
+// 예전 서버(404)는 오류가 아니라 꺼짐({ enabled: false })으로 본다. 기록은 장 마감 뒤에 바뀌므로 1분 동안 새로 묻지 않는다
+
+async function offOn404<T>(p: Promise<T>, off: T): Promise<T> {
+  try {
+    return await p;
+  } catch (e) {
+    if (e instanceof ApiRequestError && e.status === 404) return off;
+    throw e;
+  }
+}
+
+export function useJournal(q: { from: string; to: string; code?: string | null }, enabled: boolean) {
+  const api = useApi();
+  return useQuery({
+    queryKey: useKey("journal", "list", q.from, q.to, q.code ?? null),
+    queryFn: () => offOn404<JournalResponse>(api.journal(q), { enabled: false, days: [], stocks: [] }),
+    enabled,
+    staleTime: 60_000,
+    retry: 0,
+    placeholderData: keepPreviousData,
+  });
+}
+
+/** 종목 상세 '매매 기록' 칸 (지금 보유가 없는 종목에서만 부른다) */
+export function useJournalStock(code: string, enabled: boolean) {
+  const api = useApi();
+  return useQuery({
+    queryKey: useKey("journal", "stock", code),
+    queryFn: () => offOn404<JournalStockResponse>(api.journalStock(code), { enabled: false }),
+    enabled: enabled && !!code,
+    staleTime: 5 * 60_000,
+    retry: 0,
+  });
+}
+
+export function useJournalReturns(q: { preset: ReturnsPreset; market: ReturnsMarket; from?: string; to?: string }, enabled: boolean) {
+  const api = useApi();
+  return useQuery({
+    queryKey: useKey("journal", "returns", q.preset, q.market, q.from ?? null, q.to ?? null),
+    queryFn: () => offOn404<JournalReturns>(api.journalReturns(q), { enabled: false, ready: false }),
+    enabled,
+    staleTime: 5 * 60_000,
+    retry: 0,
+    placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * 양도세 추정. 환율을 받는 중이면 1분마다 다시 묻되 5번까지 (lib/journal taxRefetch — 끝나지 않는 '받는 중' 막기).
+ * 횟수는 '받는 중'이 된 때부터 센다 (lib/journal pendingStart) — 앱을 다시 열어 새로 받은 횟수가 쌓여 있어도 새 매도의 '받는 중'은 처음부터 다시 묻는다
+ */
+export function useJournalTax(year: number | undefined, enabled: boolean) {
+  const api = useApi();
+  const qc = useQueryClient();
+  const key = useKey("journal", "tax", year ?? null);
+  const q = useQuery({
+    queryKey: key,
+    queryFn: () => offOn404<JournalTax>(api.journalTax(year), { enabled: false }),
+    enabled,
+    staleTime: 5 * 60_000,
+    retry: 0,
+    placeholderData: keepPreviousData,
+    refetchInterval: (query) => taxRefetch(query.state.data, taxTries(query, query.state.data, query.state.dataUpdateCount)),
+    refetchIntervalInBackground: false,
+  });
+  // 받는 중이 된 뒤 다시 물은 횟수 — 다 쓰면 화면이 빠진 매도로 보여 준다
+  const query = qc.getQueryCache().find<JournalTax>({ queryKey: key, exact: true });
+  return { ...q, tries: taxTries(query, query?.state.data, query?.state.dataUpdateCount ?? 0) };
+}
+
+/** 양도세 쿼리마다 '받는 중'이 된 때의 받은 횟수 (쿼리가 캐시에서 빠지면 같이 사라진다) */
+const taxPendingAt = new WeakMap<object, number | null>();
+function taxTries(query: object | undefined, data: JournalTax | undefined, count: number): number {
+  if (!query) return 0;
+  const at = pendingStart(taxPendingAt.get(query) ?? null, data, count);
+  taxPendingAt.set(query, at);
+  return at === null ? 0 : count - at;
+}
+
+/** 거래 메모 저장 — 끝나면 매매일지 목록을 다시 받는다 */
+export function useSaveTradeNote() {
+  const api = useApi();
+  const qc = useQueryClient();
+  const { apiUrl } = useSettings();
+  return useMutation({
+    mutationFn: api.saveTradeNote,
+    onSuccess: () => void qc.invalidateQueries({ queryKey: [apiUrl, "journal", "list"] }),
+  });
+}
+
 /** 예전 서버에 없는 경로(404)는 빈 목록으로 */
 export async function orEmptyOn404<T>(p: Promise<T[]>): Promise<T[]> {
   try {
@@ -836,4 +951,29 @@ export function useStockMutations() {
       onSuccess: (data) => qc.setQueryData([apiUrl, "analysis", data.code, data.kind], data),
     }),
   };
+}
+/**
+ * 내 종목 테마 (3-35, 플래그 holdingThemes). enabled 가 거짓(플래그 꺼짐)이면 요청 0건. 꺼진 서버·예전 서버의 404 는 null (오류 아님).
+ * 화면이 보이는 동안만: 어느 시장이든 값이 바뀌는 시간이면 60초, 첫 준비 중이면 30초마다 다시 (그 밖은 받은 값 그대로)
+ */
+export function useHoldingThemes(enabled: boolean) {
+  const api = useApi();
+  const focused = useScreenFocused();
+  return useQuery({
+    subscribed: focused,
+    queryKey: useKey("holdingThemes"),
+    queryFn: async () => {
+      try {
+        return await api.holdingThemes();
+      } catch (e) {
+        if (e instanceof ApiRequestError && e.status === 404) return null;
+        throw e;
+      }
+    },
+    enabled,
+    staleTime: 30_000,
+    retry: 0,
+    refetchInterval: (q) => holdingThemesEvery(q.state.data ?? null),
+    refetchIntervalInBackground: false,
+  });
 }

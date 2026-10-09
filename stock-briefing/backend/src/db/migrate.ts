@@ -413,7 +413,102 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>, dialect: D
       await sql`create index if not exists idx_movement_events_created on movement_events (created_at)`.execute(db);
     },
   },
+  {
+    version: 15, // main 의 가장 큰 번호(14) + 1 (병합 때 다시 맞춤). 새 표만 추가 — 예전 서버로 되돌려도 모르고 지나갈 뿐
+    up: async (db, dialect) => {
+      // SEC 공시 확인 (3-38, 플래그 filingAlerts): CIK 마다 기준 잡기·마지막 성공 — 공용(공개 자료, 누구의 것도 아님)
+      await db.schema
+        .createTable("sec_filing_watch")
+        .ifNotExists()
+        .addColumn("cik", "text", (c) => c.primaryKey())
+        .addColumn("first_ok_at", "text") // null = 아직 기준을 잡지 않음
+        .addColumn("last_try_at", "text")
+        .addColumn("last_ok_at", "text")
+        .addColumn("last_error", "text")
+        .execute();
+      // 받은 공시 (알림 서식만, 90일 보관) — 공용
+      await db.schema
+        .createTable("sec_filings")
+        .ifNotExists()
+        .addColumn("id", "integer", idColumn(dialect))
+        .addColumn("cik", "text", (c) => c.notNull())
+        .addColumn("accession", "text", (c) => c.notNull())
+        .addColumn("form", "text", (c) => c.notNull())
+        .addColumn("items", "text", (c) => c.notNull()) // "2.02,9.01" · ""
+        .addColumn("accepted_at", "text") // ISO UTC · null
+        .addColumn("filing_date", "text", (c) => c.notNull())
+        .addColumn("report_date", "text")
+        .addColumn("primary_doc", "text", (c) => c.notNull())
+        .addColumn("description", "text", (c) => c.notNull())
+        .addColumn("baseline", "integer", (c) => c.notNull()) // 1 = 알리지 않음(기준 잡기·24시간 넘음)
+        .addColumn("first_seen_at", "text", (c) => c.notNull())
+        .execute();
+      await sql`create unique index if not exists uq_sec_filings_cik_acc on sec_filings (cik, accession)`.execute(db);
+      await sql`create index if not exists ix_sec_filings_seen on sec_filings (first_seen_at)`.execute(db);
+    },
+  },
+  {
+    // main 의 가장 큰 번호(15) + 1 (처음 12 로 만들었다가 main 에 12~15 가 먼저 들어가 병합 때 다시 매김) — 'if not exists' 라 번호가 바뀌어도 안전.
+    // 새 표만 추가하고 기존 표는 건드리지 않는다 (예전 서버로 되돌려도 모르고 지나갈 뿐)
+    version: 16,
+    up: async (db, dialect) => {
+      // 매매일지 (3-37, 플래그 tradeJournal): 거래 메모(주문 하나 = 메모 하나 — 체결 표와 따로 둬 토스 동기화가 덮어쓰지 않게)와
+      // 환율 기록(세법 기준환율·토스 과거 환율 — 지난 값은 바뀌지 않아 받은 대로 둔다). 환율은 8바이트 실수 (Postgres real 은 4바이트 — BH-48)
+      const dbl = dialect === "postgres" ? "double precision" : "real";
+      await db.schema
+        .createTable("trade_notes")
+        .ifNotExists()
+        .addColumn("id", "integer", idColumn(dialect))
+        .addColumn("account", "integer", (c) => c.notNull())
+        .addColumn("order_id", "text", (c) => c.notNull())
+        .addColumn("note", "text", (c) => c.notNull())
+        .addColumn("created_at", "text", (c) => c.notNull())
+        .addColumn("updated_at", "text", (c) => c.notNull())
+        .execute();
+      await sql`create unique index if not exists uq_trade_notes_account_order on trade_notes (account, order_id)`.execute(db);
+      await db.schema
+        .createTable("fx_rates")
+        .ifNotExists()
+        .addColumn("id", "integer", idColumn(dialect))
+        .addColumn("kind", "text", (c) => c.notNull())
+        .addColumn("at", "text", (c) => c.notNull())
+        .addColumn("rate", dbl, (c) => c.notNull())
+        .addColumn("source", "text", (c) => c.notNull())
+        .addColumn("fetched_at", "text", (c) => c.notNull())
+        .execute();
+      await sql`create unique index if not exists uq_fx_rates_kind_at on fx_rates (kind, at)`.execute(db);
+    },
+  },
+  {
+    // main 의 가장 큰 번호(16) + 1 (처음 12 로 만들었다가 main 에 12~16 이 먼저 들어가 병합 때 다시 매김) — 'if not exists'·칸 있음 검사라 번호가 바뀌어도 안전.
+    // 새 표 하나 + registered_stocks 에 비어 있을 수 있는 칸 둘 (예전 서버로 되돌려도 모르고 지나갈 뿐)
+    version: 17,
+    up: async (db, dialect) => {
+      // 관심 종목 그룹·순서 (3-34, 플래그 watchGroups)
+      await db.schema
+        .createTable("watch_groups")
+        .ifNotExists()
+        .addColumn("id", "integer", idColumn(dialect))
+        .addColumn("name", "text", (c) => c.notNull())
+        .addColumn("position", "integer", (c) => c.notNull())
+        .addColumn("created_at", "text", (c) => c.notNull())
+        .addColumn("updated_at", "text", (c) => c.notNull())
+        .execute();
+      // SQLite 는 ALTER TABLE 한 번에 칸 하나 → 칸마다 따로. 중간에 멈췄다 다시 돌 때 이미 있는 칸은 건너뛴다
+      for (const col of ["watch_group_id", "watch_position"] as const)
+        if (!(await hasColumn(db, dialect, "registered_stocks", col))) await db.schema.alterTable("registered_stocks").addColumn(col, "integer").execute();
+    },
+  },
 ];
+
+/** 표에 그 칸이 이미 있는지 (칸을 더하는 마이그레이션을 다시 돌려도 안전하게) */
+async function hasColumn(db: Kysely<Database>, dialect: Dialect, table: string, column: string): Promise<boolean> {
+  const rows =
+    dialect === "postgres"
+      ? await sql<{ name: string }>`select column_name as name from information_schema.columns where table_schema = current_schema() and table_name = ${table}`.execute(db)
+      : await sql<{ name: string }>`select name from pragma_table_info(${table})`.execute(db);
+  return rows.rows.some((r) => r.name === column);
+}
 
 export async function migrate(db: Kysely<Database>, dialect: Dialect = "sqlite"): Promise<void> {
   await sql`create table if not exists schema_version (version integer primary key)`.execute(db);

@@ -5,19 +5,19 @@ import { accountsSeenFor, SESSION_READ_TIMEOUT_MS, sessionFor, sessionIdentityVe
 
 /**
  * 앱을 켜자마자 마지막 잔고·지수를 보이게 하려고 react-query 캐시 일부를 기기에 저장한다.
- *  - 잔고(stocks)와 지수 띠(indices), 기능 플래그(features)만. 장 상태·분석·뉴스·발견 목록은 저장하지 않는다
+ *  - 잔고(stocks)와 지수 띠(indices), 기능 플래그(features), 관심 그룹 배치(watchGroups — 3-34, 켤 때 칩·순서가 바로 보이게)만. 장 상태·분석·뉴스·발견 목록은 저장하지 않는다
  *    (옛 장 상태가 "장중/장 마감" 판단과 폴링 주기를 좌우하지 않게)
  *  - 새로고침이 실패해도 마지막으로 받은 값은 계속 저장한다 → 다음에 오프라인으로 켜도 보인다
  *  - 받은 지 7일 지난 값은 저장·복원하지 않는다. 3일 지난 값도 "M/D HH:MM 기준"으로 보인다(긴 휴장 대비)
  *  - 토큰이 틀려(401) 실패 중인 값은 저장하지 않는다
  *  - 쿼리 키 첫 칸이 서버 주소라 서버를 바꾸면 다른 캐시를 쓴다
- *  - 계정 A단계: 자동 로그인을 끈 세션(공용 폰 등)이면 개인 데이터(잔고)는 기기에 적지 않는다 — 앱을 완전히 닫으면 세션과 함께 사라지게.
+ *  - 계정 A단계: 자동 로그인을 끈 세션(공용 폰 등)이면 개인 데이터(잔고·관심 그룹 배치)는 기기에 적지 않는다 — 앱을 완전히 닫으면 세션과 함께 사라지게.
  *    지수·플래그는 개인 데이터가 아니라 그대로
  */
 
-export const PERSIST_KEYS: ReadonlySet<string> = new Set(["stocks", "indices", "features"]);
-/** 그중 개인 데이터 (자동 로그인을 끈 세션이면 적지 않는다) */
-export const PERSONAL_PERSIST_KEYS: ReadonlySet<string> = new Set(["stocks"]);
+export const PERSIST_KEYS: ReadonlySet<string> = new Set(["stocks", "indices", "features", "watchGroups"]);
+/** 그중 개인 데이터 (자동 로그인을 끈 세션이면 적지 않는다) — 관심 그룹 배치(3-34)도 사람이 만든 그룹 이름이라 잔고와 같이 다룬다 */
+export const PERSONAL_PERSIST_KEYS: ReadonlySet<string> = new Set(["stocks", "watchGroups"]);
 export const PERSIST_MAX_AGE_MS = 7 * 86_400_000;
 /** 기기 저장 키 (백그라운드 알림이 마지막으로 받은 기능 플래그를 여기서 읽는다 — lib/marketSummaryLoad) */
 export const PERSIST_STORAGE_KEY = "rq.cache";

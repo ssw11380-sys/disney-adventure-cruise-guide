@@ -10,6 +10,7 @@ import { useAccountView } from "@/lib/account";
 import { getStoredToken, PushSetupError, registerForPush, unregisterPush } from "@/lib/notifications";
 import { font, radius, slopFor, space, touch, useTheme } from "@/theme";
 import { Button, Card, Loading, Muted, Row, SectionTitle, Toggle } from "./ui";
+import { FilingAlertSettings } from "./FilingAlertSettings";
 
 /**
  * 설정 > 알림 카드.
@@ -237,6 +238,9 @@ export function NotificationSettingsCard() {
           ))}
         </View>
       ) : null}
+
+      {/* 3-38 새 공시 알림 (플래그 filingAlerts — 꺼져 있으면 아무것도 그리지 않아 카드가 지금과 같다) */}
+      <FilingAlertSettings deviceOn={alertsOn} quiet={s?.digest === true && s.quietEnabled && s.quietStart && s.quietEnd ? { start: s.quietStart, end: s.quietEnd } : null} mutedCount={mutedCount} />
 
       <Button
         title={localMode && !token ? "지금 확인해서 알림 테스트" : "테스트 알림 보내기"}

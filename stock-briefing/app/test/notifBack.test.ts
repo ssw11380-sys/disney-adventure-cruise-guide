@@ -174,4 +174,14 @@ describe("계정 A단계: 주인 아닌 계정의 알림 이동 (memberNotificat
           }
     expect(memberNotificationNav(null, { type: "briefing" })).toBeNull();
   });
+
+  it("새 공시 알림(3-38 → '일정·공시')도 주인 아닌 계정은 브리핑 탭만 — 접수 번호가 있든 없든", () => {
+    for (const data of [{ type: "filing", focus: "0001193125-26-323632" }, { type: "filing" }] as Record<string, unknown>[])
+      for (const back of [true, false])
+        for (const twoPane of [true, false]) {
+          const nav = notificationNav(data, { back, twoPane, path: "/" });
+          expect(nav).not.toBeNull();
+          expect(memberNotificationNav(nav, data)).toEqual({ kind: "tab" });
+        }
+  });
 });

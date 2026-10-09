@@ -31,6 +31,8 @@ describe("JSON 백업 복구의 묶음 경계와 장기 이력 (격리 SQLite)",
     const db = await createMigratedDb(":memory:");
     const sentinel = { key: "restore-sentinel", value: "기존 값을 보존" };
     const stock = { code: "005930", name: "기존 종목", market: "KOSPI", quantity: 2, avg_price: 3, memo: "기존 메모", created_at: CREATED_AT, updated_at: CREATED_AT };
+    // 읽으면 관심 그룹 칸 둘(3-34)이 비어 있는 채로 함께 온다
+    const stored = { ...stock, watch_group_id: null, watch_position: null };
     const rows = Array.from({ length: 225 }, (_, i) => reportRow(i));
     const payload: BackupPayload = { version: 1, createdAt: CREATED_AT, tables: {
       registered_stocks: [{ ...stock, quantity: 999, memo: "덮어쓰면 안 되는 백업 값" }],
@@ -47,12 +49,12 @@ describe("JSON 백업 복구의 묶음 경계와 장기 이력 (격리 SQLite)",
       await expect(restoreBackup(db, "sqlite", payload)).rejects.toThrow("복구 두 번째 묶음 저장 실패");
       expect(await db.selectFrom("briefings").selectAll().execute()).toEqual([]);
       expect(await db.selectFrom("meta").selectAll().execute()).toEqual([sentinel]);
-      expect(await db.selectFrom("registered_stocks").selectAll().execute()).toEqual([stock]);
+      expect(await db.selectFrom("registered_stocks").selectAll().execute()).toEqual([stored]);
       await sql`drop trigger fail_second_restore_batch`.execute(db);
       expect(await restoreBackup(db, "sqlite", payload)).toMatchObject({ registered_stocks: "skipped", meta: "skipped", briefings: 225 });
       expect(await db.selectFrom("briefings").selectAll().orderBy("id").execute()).toEqual(rows);
       expect(await db.selectFrom("meta").selectAll().execute()).toEqual([sentinel]);
-      expect(await db.selectFrom("registered_stocks").selectAll().execute()).toEqual([stock]);
+      expect(await db.selectFrom("registered_stocks").selectAll().execute()).toEqual([stored]);
       expect((await restoreBackup(db, "sqlite", payload)).briefings).toBe("skipped");
     } finally {
       await db.destroy();

@@ -15,7 +15,8 @@ describe("생성 복구·재무 캐시 스키마와 보존", () => {
       for (const table of ["generation_requests", "generation_jobs", "fundamentals_cache"] as const) await db.schema.dropTable(table).execute();
       await sql`delete from schema_version where version = 13`.execute(db);
       await migrate(db);
-      expect(await db.selectFrom("registered_stocks").selectAll().execute()).toEqual([holding]);
+      // 관심 그룹 칸 둘(3-34, 마이그레이션 17)은 비어 있는 채로 더해질 뿐 — 기존 값은 그대로
+      expect(await db.selectFrom("registered_stocks").selectAll().execute()).toEqual([{ ...holding, watch_group_id: null, watch_position: null }]);
       expect(await db.selectFrom("analyses").selectAll().execute()).toEqual([{ id: 1, ...analysis }]);
       expect(await db.selectFrom("generation_jobs").selectAll().execute()).toEqual([]);
       expect(await db.selectFrom("fundamentals_cache").selectAll().execute()).toEqual([]);

@@ -62,8 +62,28 @@ import { scoreRoutes } from "./routes/scores.js";
 import { PriceAlertService } from "./services/priceAlertService.js";
 import { BriefingStatusService } from "./services/briefingStatus.js";
 import { priceAlertRoutes } from "./routes/priceAlerts.js";
+import { WatchGroupService } from "./services/watchGroupService.js";
+import { watchGroupRoutes } from "./routes/watchGroups.js";
 import { watchlistRoutes } from "./routes/watchlist.js";
 import { WatchlistService } from "./services/watchlistService.js";
+import { InvestorFlowService } from "./services/investorFlowService.js";
+import { investorFlowAdminRoutes, investorFlowRoutes } from "./routes/investorFlow.js";
+import { HoldingThemesService } from "./services/holdingThemesService.js";
+import { HoldingThemeMaps } from "./services/holdingThemeMaps.js";
+import { KrThemeIndex } from "./services/krThemeIndex.js";
+import { ThemeTvHistory } from "./services/themeTvHistory.js";
+import { underlyingOfKind } from "./services/holdingThemesCalc.js";
+import { holdingThemeAdminRoutes, holdingThemeRoutes } from "./routes/holdingThemes.js";
+import { productKindOf } from "./analysis/leveraged.js";
+import { positionsOf } from "./services/accountNumbers.js";
+import { groupCodeOf } from "./services/indicatorScoreService.js";
+import { within } from "./lib/errors.js";
+import { FilingWatchService, inEdgarHours } from "./services/filingAlerts.js";
+import { filingRoutes } from "./routes/filings.js";
+import { isKrCode } from "./lib/codes.js";
+import { journalAdminRoutes, journalRoutes } from "./routes/journal.js";
+import { JournalService } from "./services/journalService.js";
+import { SmbsStdRates } from "./providers/market/fxStd.js";
 
 export interface BuildAppOptions {
   config: AppConfig;
@@ -100,6 +120,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   });
   // 가격·등락률·거래량 알림 (3-29, 플래그 priceAlerts): 조건 저장·울림 기록, 거래량 급증은 차트와 같은 30분봉 캐시(450개)로 계산
   const priceAlerts = new PriceAlertService({ db: opts.db, features, candles: (code) => stockService.getCandles(code, "30m", 450).then((s) => s.candles), now });
+  // 관심 종목 그룹·순서 (3-34, 플래그 watchGroups): 그룹 표 watch_groups + registered_stocks 두 칸
+  const watchGroups = new WatchGroupService({ db: opts.db, features, now });
   const appErrors = new AppErrorService(opts.db, now);
   const backups = new BackupService({ db: opts.db, dialect: detectDialect(opts.config.DATABASE_URL), dir: opts.config.BACKUP_DIR, key: opts.config.BACKUP_KEY, now, log });
   if (opts.enableScheduler !== false) backups.start();
@@ -315,6 +337,51 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   }
   // 다가오는 일정 (브리핑 3차 5, 플래그 holdingEvents·holdingEarnings): 계좌 브리핑이 만들 때 부른다. 출처가 없으면(테스트 기본) 두지 않는다
   const holdingEvents = opts.providers.holdingEvents ? new HoldingEventsService({ sources: opts.providers.holdingEvents, now, log }) : null;
+  // 내 종목 테마 (3-35, 플래그 holdingThemes): 아래 발견 탭 서비스를 만든 뒤 채운다 (계좌 브리핑은 부를 때 찾는다). 출처가 없으면(테스트 기본) 두지 않는다
+  let holdingThemes: HoldingThemesService | null = null;
+  // 새 공시 알림 (3-38, 플래그 filingAlerts): 보유 미국 종목의 SEC 새 공시를 5분마다(미국 동부 평일 06:00~22:59 — SEC 접수 시간) 확인해 표에 넣는다.
+  // 표·확인 작업은 공용(SEC 공개 자료), 경로는 보유 종목으로 거른다. 출처가 없으면(테스트 기본) 두지 않는다 — 네트워크 없이
+  const heldStocks = async () => (await stockService.list()).filter((s) => (s.quantity ?? 0) > 0);
+  const filingHoldings = async () => {
+    const held = await heldStocks();
+    const us = held.filter((s) => !isKrCode(s.code)).map((s) => s.code);
+    // ETF·ETN 가리기: 종목 마스터 분류(ST·EF·EN)가 있으면 그것 (네트워크 없음). 미국 종목은 보통 이 표에 없어 아래 토스 상품 정보로 본다
+    const groups = us.length ? new Map((await opts.db.selectFrom("listed_stocks").select(["code", "group_code"]).where("code", "in", us).execute()).map((r) => [r.code, r.group_code])) : new Map<string, string | null>();
+    return held.map((s) => ({ code: s.code, name: s.name, groupCode: groups.get(s.code) ?? null }));
+  };
+  // ETF·ETN 가리기: 미국 종목은 종목 마스터에 없어 토스 웹 상품 정보(group EF·EN — 지표 점수·계좌 비중과 같은 출처, 24시간 캐시)로 본다
+  const productInfo = opts.providers.productInfo ?? null;
+  const filingWatch = opts.providers.secFilings
+    ? new FilingWatchService({ db: opts.db, features, source: opts.providers.secFilings, holdings: filingHoldings, now, log, product: productInfo ? (code) => productInfo.productFacts(code) : null })
+    : null;
+  if (filingWatch && opts.enableScheduler !== false) {
+    const sweep = () => void filingWatch.sweep().catch((e: unknown) => log.warn({ err: e instanceof Error ? e.message : String(e) }, "SEC 공시 확인 실패"));
+    const task = cron.schedule("*/5 6-22 * * 1-5", sweep, { timezone: "America/New_York", name: "sec-filings" });
+    // 서버를 켤 때 SEC 접수 시간 안이면 바로 한 번 (자동 배포 뒤 5분을 기다리지 않게)
+    if (inEdgarHours(now())) sweep();
+    app.addHook("onClose", async () => void task.stop());
+  }
+  // 매매일지 (3-37, 플래그 tradeJournal): 3-36 원자료로 체결 목록·실현손익·기간 수익률·해외주식 양도세 추정. 요청은 저장한 환율만 쓰고,
+  // 없는 환율(토스 과거 환율·결제일 매매기준율 — 서울외국환중개 공개 값, 못 받으면 하나은행 고시)은 배경 작업이 10분마다 받는다(플래그가 켜져 있을 때만).
+  // 테스트(예약 없음)는 네트워크를 쓰지 않는다
+  const journal = new JournalService({
+    db: opts.db,
+    features,
+    fx:
+      opts.enableScheduler === false
+        ? null
+        : {
+            tossAt: opts.providers.tossOpenApi ? (iso) => opts.providers.tossOpenApi!.usdKrwAt(iso) : null,
+            std: (from, to) => new SmbsStdRates().range(from, to),
+            naver: async () => ((await marketIndices.candles("USDKRW", "D", 250))?.candles ?? []).map((c) => ({ date: c.date, rate: c.close })),
+          },
+    now,
+    log,
+  });
+  if (opts.enableScheduler !== false) {
+    journal.start();
+    app.addHook("onClose", async () => journal.stop());
+  }
   // 계좌 한 장 브리핑 (3-31, 플래그 accountBriefing): 종목별 브리핑 실행이 끝나면 계좌 요약 1건을 만든다
   const accountBriefings = new AccountBriefingService({
     db: opts.db,
@@ -328,6 +395,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     // 브리핑 3차 4 비중 한 줄 (플래그 accountExposure): 레버리지·인버스는 지표 점수와 같은 토스 웹 상품 정보(같은 인스턴스·24시간 캐시)로 가린다
     productInfo: opts.providers.productInfo ?? null,
     holdingEvents,
+    // 3-35 내 종목 테마 카드 (플래그 holdingThemes): 만들 때 그때 값을 저장 (최대 8초 — 넘으면 칸 없이)
+    holdingThemes: { snapshot: (held) => (holdingThemes ? holdingThemes.snapshot(held) : Promise.resolve(null)) },
     now,
     log,
   });
@@ -372,6 +441,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   app.decorate("indicatorScores", indicatorScores);
   app.decorate("valueScores", valueScores);
   app.decorate("krValue", krValue);
+  app.decorate("filingWatch", filingWatch);
+  app.decorate("journal", journal);
 
   // 서버 처리 시간 (응답 헤더 Server-Timing: app;dur=ms) — 네트워크를 뺀 서버 몫을 앱·측정 스크립트가 볼 수 있게
   app.addHook("onRequest", async (req) => {
@@ -477,6 +548,10 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
     ...((await features.enabled("tradeRecords")) ? { tradeRecords: await tradeRecords.status().catch(() => null) } : {}),
     // 다가오는 일정(브리핑 3차 5): 켜져 있고 출처가 있을 때만 (끄면 응답이 예전과 같게). 마지막으로 모두 받은 시각 · 받지 못한 것·두 출처가 다른 것 경고
     ...(holdingEvents && (await features.enabled("holdingEvents")) ? { holdingEvents: holdingEvents.health() } : {}),
+    // 내 종목 테마(3-35): 켜져 있고 서비스가 있을 때만 (끄면 응답이 예전과 같게). 한국 테마 표 시각·테마 수, 거래대금 마지막 기록일, 경고
+    ...(holdingThemes && (await features.enabled("holdingThemes")) ? { holdingThemes: holdingThemes.health() } : {}),
+    // 새 공시 알림(3-38): 켜져 있고 출처가 있을 때만 (끄면 응답이 예전과 같게). 마지막으로 모두 받은 시각 · 확인 종목 수 · 경고(stale·partial·shape·blocked)
+    ...(filingWatch && (await features.enabled("filingAlerts")) ? { filingAlerts: await filingWatch.health().catch(() => null) } : {}),
     disclaimer: DISCLAIMER,
   });
 
@@ -515,6 +590,49 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
     });
   }
   await app.register(discoverRoutes, { prefix: "/api/discover", service: discoverService });
+
+  // 내 보유 종목 × 테마 강도 (3-35, 플래그 holdingThemes): 발견 탭과 같은 인스턴스(목록·미국 테마북·시세 캐시)를 부르기만 한다.
+  // 분류(토스 회사 테마·네이버 업종)·한국 테마 표·거래대금 기록은 meta 표에 (마이그레이션 없음). 예약 작업은 도는 순간 플래그를 확인한다 (꺼지면 요청 0건)
+  if (opts.providers.holdingThemes) {
+    const store = metaStore(opts.db);
+    const productInfo = opts.providers.productInfo ?? null;
+    const ht = new HoldingThemesService({
+      features,
+      discover: discoverService,
+      naver: discoverNaver,
+      krIndex: new KrThemeIndex({ naver: discoverNaver, store, now, log }),
+      maps: new HoldingThemeMaps({ sources: opts.providers.holdingThemes, store, now, log }),
+      tv: new ThemeTvHistory({ store }),
+      // 잔고 탭 '보유'와 같은 판정 (수량 > 0 · 평단 있음), 평가금액은 계좌 브리핑과 같은 원화 환산
+      holdings: async () => positionsOf(await stockService.listWithQuotes(), { afterCost: true }).map((p) => ({ code: p.code, name: p.name, value: p.value })),
+      // 레버리지 단일 종목의 기초 (지표 점수·비중 한 줄과 같은 가리기 — 토스 웹 상품 정보 24시간 캐시 + 종목 마스터 분류)
+      underlying: async (code, name) => {
+        const [facts, group] = await Promise.all([productInfo ? within(productInfo.productFacts(code), 3_000, null) : Promise.resolve(null), groupCodeOf(opts.db, code).catch(() => null)]);
+        return underlyingOfKind(productKindOf(code, name, facts, group));
+      },
+      disclaimer: DISCLAIMER,
+      now,
+      log,
+    });
+    holdingThemes = ht;
+    await app.register(holdingThemeRoutes, { prefix: "/api/holdings", service: ht });
+    await app.register(holdingThemeAdminRoutes, { prefix: "/api/admin/holding-themes", service: ht });
+    if (opts.enableScheduler !== false) {
+      const warm = setTimeout(() => void ht.warm().catch((e: unknown) => app.log.warn({ err: String(e) }, "한국 테마 표 준비 실패")), 60_000);
+      const idxTask = cron.schedule("40 5 * * 0", () => void ht.rebuildKrIndex().catch((e: unknown) => app.log.warn({ err: String(e) }, "한국 테마 표 주간 갱신 실패")), { timezone: "Asia/Seoul", name: "holding-themes-kr-index" });
+      const krTv = cron.schedule("10 20 * * 1-5", () => void ht.recordTv("KR").catch((e: unknown) => app.log.warn({ err: String(e) }, "한국 테마 거래대금 기록 실패")), { timezone: "Asia/Seoul", name: "holding-themes-kr-tv" });
+      const usTv = cron.schedule("15 16 * * 1-5", () => void ht.recordTv("US").catch((e: unknown) => app.log.warn({ err: String(e) }, "미국 테마 거래대금 기록 실패")), { timezone: "America/New_York", name: "holding-themes-us-tv" });
+      // 16:15 에 아직 장이 끝난 값이 아니어서(출처 상태 OPEN) 건너뛰었으면 한 번 더 (적었으면 요청 0건)
+      const usTvRetry = cron.schedule("45 16 * * 1-5", () => void ht.recordTv("US", { onlyIfMissing: true }).catch((e: unknown) => app.log.warn({ err: String(e) }, "미국 테마 거래대금 기록 실패")), { timezone: "America/New_York", name: "holding-themes-us-tv-retry" });
+      app.addHook("onClose", async () => {
+        clearTimeout(warm);
+        void idxTask.stop();
+        void krTv.stop();
+        void usTv.stop();
+        void usTvRetry.stop();
+      });
+    }
+  }
 
   // 시장 전체 요약: 지수·환율은 지수 띠와 같은 인스턴스, 한국 업종은 발견 탭과 같은 계산, 뉴스는 구글 뉴스 RSS(키 없음).
   // 테스트 기본 출처 묶음(fakeProviders)은 null → 서비스를 두지 않는다 (네트워크 없음)
@@ -556,6 +674,7 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
   await app.register(stockRoutes, { prefix: "/api/stocks", service: stockService });
   await app.register(priceAlertRoutes, { prefix: "/api/price-alerts", service: priceAlerts });
   await app.register(watchlistRoutes, { prefix: "/api/watchlist", service: watchlist, features });
+  await app.register(watchGroupRoutes, { prefix: "/api/watch-groups", service: watchGroups });
   await app.register(analysisRoutes, {
     prefix: "/api/stocks",
     service: analysisService,
@@ -581,12 +700,28 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
   // accounts: 계좌 한 장 브리핑(3-31)이 켜져 있으면 최근 id 를 위젯 응답에 넣어 앱 백그라운드 알림이 새 계좌 브리핑도 알아보게
   // schedule: 브리핑 위젯 안내에 설정한 브리핑 시간을 쓴다 (BH-68 — 예전에는 늘 '평일 08:30·16:00')
   // 브리핑 위젯 첫 줄(시장 전체 요약): 새 앱이 &ms=1 로 물을 때만, 플래그가 켜져 있을 때만 가장 최근 요약을 읽는다
-  await app.register(widgetRoutes, { prefix: "/api/widget", stocks: stockService, briefings: briefingService, calendar: opts.providers.calendar, features, indices: marketIndices, accounts: accountBriefings, schedule: () => settingsStore.get(), ...(summaries ? { summaries } : {}), tossAccount: () => readTossAccountSnapshot(tossDeps, features) });
+  await app.register(widgetRoutes, { prefix: "/api/widget", stocks: stockService, briefings: briefingService, calendar: opts.providers.calendar, features, indices: marketIndices, accounts: accountBriefings, schedule: () => settingsStore.get(), ...(summaries ? { summaries } : {}), tossAccount: () => readTossAccountSnapshot(tossDeps, features), filings: filingWatch });
+  // 새 공시 알림·일정 화면 (3-38): GET /api/filings/alerts (filingAlerts) · GET /api/schedule (holdingSchedule) — 둘 다 개인 경로(보유 종목 기준)
+  await app.register(filingRoutes, {
+    prefix: "/api",
+    features,
+    filings: filingWatch,
+    events: holdingEvents,
+    holdings: async () => (await heldStocks()).map((s) => ({ code: s.code, name: s.name })),
+    dartKey: Boolean(opts.config.DART_API_KEY),
+    now,
+  });
   await app.register(featureAdminRoutes, { prefix: "/api/admin/features", features, afterSet: async (patch) => { if ("watchlistSteps" in patch) await stockService.syncLive(); } });
   await app.register(adminRoutes, { prefix: "/api/admin", service: stockService, dart: opts.providers.dart, toss: tossDeps, outboundIp, backups, features });
   await app.register(tradeRecordRoutes, { prefix: "/api", service: tradeRecords, now });
   await app.register(tradeRecordAdminRoutes, { prefix: "/api/admin/trade-records", service: tradeRecords });
   await app.register(scoreRoutes, { prefix: "/api/scores", service: indicatorScores });
+  // 수급 탭 (3-33, 플래그 flowTab): 공용 경로(시장 자료) + 관리 경로(토스 Open API 대조 원자료). 출처 묶음이 없으면(테스트 기본) 404
+  const investorFlow = new InvestorFlowService({ features, sources: opts.providers.investorFlowSources ?? null, now, log });
+  await app.register(investorFlowRoutes, { prefix: "/api/investor-flow", service: investorFlow });
+  await app.register(investorFlowAdminRoutes, { prefix: "/api/admin/investor-flow", service: investorFlow });
+  await app.register(journalRoutes, { prefix: "/api", service: journal, now });
+  await app.register(journalAdminRoutes, { prefix: "/api/admin/journal", service: journal, now });
   await app.register(appErrorRoutes, { prefix: "/api/app-errors", service: appErrors });
   await app.register(appErrorAdminRoutes, { prefix: "/api/admin/app-errors", service: appErrors });
   // running: 종목 브리핑과 이어지는 계좌 브리핑·시장 요약을 만드는 동안 (앱 백그라운드 알림이 기다렸다가 한 번에 알리게)
@@ -625,6 +760,10 @@ declare module "fastify" {
     valueScores: ValueScoreService;
     /** 한국 간이 가치 (3-44 3단계) */
     krValue: KrValueService;
+    /** 새 공시 알림 (3-38): SEC 확인 작업 (출처가 없는 테스트 기본은 null) */
+    filingWatch: FilingWatchService | null;
+    /** 매매일지 (3-37): 체결 목록·실현손익·기간 수익률·양도세 추정 */
+    journal: JournalService;
   }
 }
 
