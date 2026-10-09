@@ -5,7 +5,7 @@ import { Alert, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, 
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAnyMarketOpen, useFeature, useHealth, useStockMutations, useStocks } from "@/api/hooks";
 import type { RegisteredWithQuote } from "@/api/types";
-import { AccountBand, accountFigures, accountSpeech, fxNote, lineProfit, type AccountData } from "@/components/AccountBand";
+import { AccountBand, accountFigures, accountSpeech, bandJournalShown, fxNote, lineProfit, type AccountData } from "@/components/AccountBand";
 import { LiveStatus, StaleBanner, useFeedState, usePull } from "@/components/Freshness";
 import { TableHeadRow } from "@/components/HoldingsTableHead";
 import { MemberNotice } from "@/components/MemberNotice";
@@ -14,6 +14,7 @@ import { MarketStrip } from "@/components/MarketStrip";
 import { BasisMark } from "@/components/NumberBasis";
 import { useReturnMark } from "@/components/ReturnMark";
 import { HoldingsSkeleton } from "@/components/Skeleton";
+import { JournalButton, JournalIconButton, openJournal } from "@/components/journal/JournalEntry";
 import { Screen } from "@/components/Screen";
 import { StockRow } from "@/components/StockRow";
 import { PRICE_HEAD, useLineCols } from "@/components/StockLine";
@@ -27,13 +28,14 @@ import { formatPct, formatPrice, formatQuote } from "@/lib/format";
 import { holdingsSuffix, openMaxAge, staleQuoteCount, viewState } from "@/lib/freshness";
 import { haptic } from "@/lib/haptics";
 import { holdingsLayoutKey, useHoldingsAnchor } from "@/lib/holdingsAnchor";
+import { useJournalOn } from "@/lib/journalFlag";
 import { bandOneLine, bandRates, holdingWeights, pickCols, pickWatchCols } from "@/lib/holdingsColumns";
 import { quoteLive, sessionOpen } from "@/lib/liveDot";
 import { excludedLabel, isHolding, sortHoldings, splitHoldings, summarize } from "@/lib/portfolio";
 import { removeConfirm, removeKind, removeLabel } from "@/lib/rowActions";
 import { SORT_OPTIONS, useSettings, type SortKey } from "@/lib/settings";
 import { useSettingsGuide } from "@/lib/settingsLink";
-import { TAB_ICON } from "@/lib/textScale";
+import { clampScale, TAB_ICON } from "@/lib/textScale";
 import { useFoldLayout } from "@/lib/useFoldLayout";
 import { useGuideMarks, useUx } from "@/lib/uxFlags";
 import { isWide, railWidth } from "@/lib/windowClass";
@@ -68,6 +70,8 @@ export default function StocksScreen() {
   const basisOn = useFeature("numberBasis", false);
   const tossSnapshotOn = useFeature("tossAccountSnapshot", false);
   const informationFocus = useFeature("informationFocus", false);
+  // 매매일지 (3-37, 플래그 tradeJournal · tradeRecords): 휴대폰 기본은 계좌 패널 '비중' 앞 [매매일지], 촘촘·넓은 창은 보유 구역 머리에 아이콘만
+  const journalOn = useJournalOn();
   // 촘촘 모드 (3-39): 서버 플래그 + 설정 '잔고 표시 촘촘'. 불러오는 중 화면도 쓰므로 일찍 돌아가는 줄보다 위에서 정한다
   const densityOn = useFeature("densityMode", false);
   const dense = densityOn && density === "dense";
@@ -299,7 +303,8 @@ export default function StocksScreen() {
   const rates = bandRates(tableW, fontScale);
   // 3-35 (플래그 holdingThemes): 토스 계좌 평가 요약이 계좌 패널을 접어 두므로 요약의 '종목 비중 보기' 옆에도 '내 종목 테마 보기' (꺼지면 지금 그대로)
   // 계정 A단계: 주인 아닌 계정은 맨 위에 '개인 종목 기능은 준비 중' 안내 (주인·플래그 꺼짐이면 없음)
-  const wrapAccount = (content: React.ReactNode) => gated(tossSnapshotOn && !member, true) ? <TossAccountSummary focused={gated(informationFocus, true)} onAllocation={gated(allocationOn && summary.held > 0, openAllocation)} {...(themesOn && summary.held > 0 ? { onThemes: openThemes } : null)}>{content}</TossAccountSummary> : content;
+  // 3-37 (플래그 tradeJournal · tradeRecords): 요약이 계좌 패널·띠(그 안의 [매매일지])를 접어 두므로 요약 끝에도 '매매일지 보기' (꺼지면 지금 그대로)
+  const wrapAccount = (content: React.ReactNode) => gated(tossSnapshotOn && !member, true) ? <TossAccountSummary focused={gated(informationFocus, true)} onAllocation={gated(allocationOn && summary.held > 0, openAllocation)} {...(themesOn && summary.held > 0 ? { onThemes: openThemes } : null)} {...(journalOn ? { onJournal: () => openJournal() } : null)}>{content}</TossAccountSummary> : content;
   const header = wide ? (
     <View>
       <MemberNotice />
@@ -313,6 +318,7 @@ export default function StocksScreen() {
           {...(themesOn ? { onThemes: openThemes } : null)}
           {...(dense ? { dense: true } : null)}
           {...(basisOn ? { basis: basisMark, width: tableW } : null)}
+          {...(journalOn ? { journal: <JournalIconButton />, width: tableW } : null)}
         />
       ) : null)}
     </View>
@@ -325,6 +331,7 @@ export default function StocksScreen() {
           data={account}
           onAllocation={gated(allocationOn, openAllocation)}
           {...(themesOn ? { onThemes: openThemes } : null)}
+          {...(journalOn ? { journal: true } : null)}
           status={status}
           {...(dense ? { dense: true } : null)}
           // 휴대폰 목록은 창 폭을 다 쓴다 (좌우 여백은 패널 안에서)
@@ -337,6 +344,8 @@ export default function StocksScreen() {
   // 3-35: 촘촘 보유 구역 머리에 '테마'까지 버튼 셋 — 한 줄에 안 들어가면(폭 360·글자 200%) 제목을 끊지 않고 버튼 묶음을 다음 줄 오른쪽으로.
   // 플래그가 꺼져 있으면 지금 나무 그대로
   const wrapBar = (key: string) => dense && themesOn && key === "held";
+  // 매매일지 아이콘 (3-37): 휴대폰 촘촘의 보유 구역 머리 (휴대폰 기본은 계좌 패널 버튼, 넓은 창은 계좌 띠). 끄면 없음 — 머리가 지금 그대로
+  const journalIcon = (key: string) => (key === "held" && journalOn && dense ? <JournalIconButton /> : null);
   const sectionHeader = (section: (typeof sections)[number]) => (
     <View style={{ backgroundColor: t.bg }}>
       {dense ? (
@@ -347,6 +356,7 @@ export default function StocksScreen() {
             {section.title}
           </Text>
           <View style={wrapBar(section.key) ? [styles.barEnd, styles.barEndWrap] : styles.barEnd}>
+            {journalIcon(section.key)}
             {section.key === "held" && allocationOn ? (
               <Pressable onPress={openAllocation} hitSlop={BAR_SLOP} accessibilityRole="button" accessibilityLabel="비중 보기" style={styles.barBtn}>
                 <Ionicons name="pie-chart-outline" size={font.small} color={t.muted} />
@@ -387,9 +397,23 @@ export default function StocksScreen() {
       </TableHead>
     </View>
   );
+  // 매매일지 아이콘 (3-37): 넓은 계좌 띠에 자리가 없으면(폴드 세로 704 × 큰 글씨 + 숫자 기준 점 등 — 띠 줄 수를 켜기 전과 같게 두느라) 보유 표 머리에.
+  // 띠와 같은 판단(bandJournalShown)이라 입구는 늘 하나. 끄면 머리 속성이 지금과 같다
+  const journalInHead =
+    wide && journalOn && heldPlan && summary.held > 0
+      ? !bandJournalShown({ data: account, oneLine: oneLineBand, dense, pad: heldPlan.pad, width: tableW, fontScale: clampScale(fontScale), action: !!gated(allocationOn, openAllocation), themes: themesOn, basis: basisOn })
+      : false;
   // 넓은 창 표 머리: 열 이름을 누르면 정렬 (설정의 정렬 값 그대로), 이름 칸의 "등록순 ▾" 는 정렬 창
   const tableHeader = (section: (typeof sections)[number]) => (
-    <TableHeadRow plan={(section.key === "held" ? heldPlan : watchPlan)!} title={section.title} sort={sort} sortLabel={sortLabel} onSort={pickSort} onOpenSort={() => setSortOpen(true)} />
+    <TableHeadRow
+      plan={(section.key === "held" ? heldPlan : watchPlan)!}
+      title={section.title}
+      sort={sort}
+      sortLabel={sortLabel}
+      onSort={pickSort}
+      onOpenSort={() => setSortOpen(true)}
+      {...(section.key === "held" && journalInHead ? { action: <JournalIconButton /> } : null)}
+    />
   );
   // 계정 A단계: 주인 아닌 계정은 종목을 아직 추가할 수 없으므로(서버가 막는다) '종목 검색' 대신 차분한 안내 + [시장·종목 둘러보기] (발견 탭 — 검증 4차)
   const empty = member ? (
@@ -620,6 +644,7 @@ function AccountPanel({
   status,
   onAllocation,
   onThemes,
+  journal = false,
   dense = false,
   basis,
   width,
@@ -631,6 +656,8 @@ function AccountPanel({
   onAllocation?: () => void;
   /** 내 종목 테마 화면 열기 (3-35, 플래그 holdingThemes 가 꺼져 있으면 없음 → 버튼도 없고 지금 나무 그대로). 촘촘이면 구역 머리에 있어 그리지 않는다 */
   onThemes?: () => void;
+  /** 매매일지 버튼 (3-37, 플래그 tradeJournal · tradeRecords) — '비중' 앞, 같은 줄. 비중이 꺼져 있으면 이 버튼만으로 그 줄. 촘촘은 받아도 그리지 않는다(구역 머리) */
+  journal?: boolean;
   /** 촘촘 세 줄 (3-39) — 비중 버튼은 받아도 그리지 않는다 (구역 머리에 있음) */
   dense?: boolean;
   /**
@@ -792,10 +819,17 @@ function AccountPanel({
       ) : null}
       {/* 요약 문장(accessible) 밖에 둔다: 안에 두면 화면 읽기로 버튼을 고를 수 없다 (3-22) */}
       {onThemes ? (
-        // 3-35: '비중' 오른쪽에 같은 모양 '테마'. 폭 360·글자 200% 로 한 줄에 안 들어가면 다음 줄로 (글자 줄이기·말줄임 없음)
+        // 3-35: '비중' 오른쪽에 같은 모양 '테마'. 폭 360·글자 200% 로 한 줄에 안 들어가면 다음 줄로 (글자 줄이기·말줄임 없음).
+        // 매매일지(3-37)가 켜져 있으면 맨 앞에 [매매일지] (꺼져 있으면 지금 나무 그대로)
         <View style={[styles.panelActions, styles.panelActionsWrap]}>
+          {journal ? <JournalButton /> : null}
           {onAllocation ? <Button title="비중" icon="pie-chart-outline" variant="secondary" compact accessibilityLabel="비중 보기" onPress={onAllocation} /> : null}
           <Button title="테마" icon="pricetags-outline" variant="secondary" compact accessibilityLabel="내 종목 테마 보기" onPress={onThemes} />
+        </View>
+      ) : journal ? (
+        <View style={[styles.panelActions, styles.panelActionsGap]}>
+          <JournalButton />
+          {onAllocation ? <Button title="비중" icon="pie-chart-outline" variant="secondary" compact accessibilityLabel="비중 보기" onPress={onAllocation} /> : null}
         </View>
       ) : onAllocation ? (
         <View style={styles.panelActions}>
@@ -872,6 +906,8 @@ const styles = StyleSheet.create({
   panelActions: { flexDirection: "row", justifyContent: "flex-end", marginTop: space.xs },
   // 3-35 '비중'·'테마' 두 버튼: 줄이 모자라면 다음 줄로 (버튼 사이 12 — 누르는 칸 44 가 겹치지 않게 위아래 줄 간격도)
   panelActionsWrap: { flexWrap: "wrap", columnGap: space.md, rowGap: space.md },
+  // 매매일지·비중 두 버튼 사이 (3-37 — 매매일지가 켜졌을 때만 더한다)
+  panelActionsGap: { gap: space.sm },
   sectionBar: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.s },
   // ── 촘촘(3-39) ── 계좌 세 줄 · 구역 머리 44 (위아래 여백 없음 — 버튼 둘이 머리 높이를 다 채워 누르는 곳이 머리 안)
   panelDense: { paddingTop: space.s, paddingBottom: space.s, gap: space.xxs },

@@ -44,6 +44,12 @@ import type { AppErrorSummary, Evaluation, WatchItem,
   TossAccountSnapshotBody,
   FilingAlertItem,
   HoldingSchedule,
+  JournalResponse,
+  JournalStockResponse,
+  JournalReturns,
+  JournalTax,
+  ReturnsMarket,
+  ReturnsPreset,
 } from "./types";
 import { authMessage, NOT_JSON, SESSION_INVALID, SESSION_REQUIRED } from "@/lib/connectionError";
 import { assertSessionIdentity, handleSessionInvalid, markAccountsSeen, sessionFor, sessionIdentityVersion, sessionTokenFor, SessionReadError, type AccountUser } from "@/lib/session";
@@ -356,6 +362,26 @@ export function createApi(baseUrl: string, token = "", opts: ApiOptions = {}) {
     holdingSchedule: () => get<HoldingSchedule>("/api/schedule", 20_000),
     /** 새 공시 알림 목록 (3-38, 플래그 filingAlerts — 앱이 앞에 있을 때 확인). 꺼져 있으면 404 */
     filingAlerts: () => get<{ asOf: string; items: FilingAlertItem[] }>("/api/filings/alerts?days=3", 12_000),
+    /**
+     * 매매일지 (3-37, 플래그 tradeJournal). 새 경로라 예전 서버는 404 → 부르는 쪽(훅)이 꺼짐으로 본다.
+     * 서버가 플래그를 끄면 { enabled: false } 빈 값, 메모 쓰기는 409
+     */
+    journal: (q: { from: string; to: string; code?: string | null }) => {
+      const p = new URLSearchParams({ from: q.from, to: q.to });
+      if (q.code) p.set("code", q.code);
+      return get<JournalResponse>(`/api/journal?${p.toString()}`, 20_000);
+    },
+    journalStock: (code: string) => get<JournalStockResponse>(`/api/journal/stock/${encodeURIComponent(code)}`, 15_000),
+    journalReturns: (q: { preset: ReturnsPreset; market: ReturnsMarket; from?: string; to?: string }) => {
+      const p = new URLSearchParams({ preset: q.preset, market: q.market });
+      if (q.preset === "custom" && q.from && q.to) {
+        p.set("from", q.from);
+        p.set("to", q.to);
+      }
+      return get<JournalReturns>(`/api/journal/returns?${p.toString()}`, 20_000);
+    },
+    journalTax: (year?: number) => get<JournalTax>(`/api/journal/tax${year ? `?year=${year}` : ""}`, 20_000),
+    saveTradeNote: (body: { account: number; orderId: string; note: string }) => send<{ account: number; orderId: string; note: string | null; updatedAt: string }>("PUT", "/api/journal/notes", body, 15_000),
   };
 }
 

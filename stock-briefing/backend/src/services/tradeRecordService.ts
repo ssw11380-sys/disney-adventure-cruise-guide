@@ -1332,7 +1332,7 @@ function warningText(markets: Record<RecordMarket, MarketRecordStatus>): string 
   return null;
 }
 
-function parseData(value: string): SnapshotData | null {
+export function parseData(value: string): SnapshotData | null {
   try {
     const v = JSON.parse(value) as Partial<SnapshotData> | null;
     if (!v || !Array.isArray(v.holdings)) return null;
@@ -1382,7 +1382,7 @@ function snapshotView(r: SnapshotRow): SnapshotView {
   };
 }
 
-type TradeRow = {
+export type TradeRow = {
   id: number;
   account: number;
   order_id: string;
@@ -1441,7 +1441,7 @@ function fillDate(at: string, r: Pick<TradeRow, "market" | "executed_date">): st
   return tradingDate(at, r.market === "KR");
 }
 
-function tradeView(r: TradeRow): TradeView {
+export function tradeView(r: TradeRow): TradeView {
   return {
     id: Number(r.id),
     account: Number(r.account),

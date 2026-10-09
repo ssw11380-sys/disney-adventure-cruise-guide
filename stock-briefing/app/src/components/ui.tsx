@@ -90,9 +90,10 @@ export function Button({
 
 /**
  * 작은 선택 칩 (사각). 보이는 높이 32 + 위아래 hitSlop 6 = 44 (3-22).
+ * minWidth: 짧은 글의 칩도 누르는 폭을 맞출 때 (3-37 매매일지 기간 칩 — 없으면 지금 그대로).
  * wideTouch: 이름이 짧은 칩('5일')도 누르는 폭이 44 가 되게 보이는 폭을 40 이상으로(좌우 hitSlop 2 씩 — 3-33 수급 탭 기간 칩). 없으면 지금 그대로
  */
-export function Chip({ label, active, onPress, icon, accessibilityLabel, wideTouch }: { label: string; active?: boolean; onPress: () => void; icon?: keyof typeof Ionicons.glyphMap; accessibilityLabel?: string; wideTouch?: boolean }) {
+export function Chip({ label, active, onPress, icon, accessibilityLabel, wideTouch, minWidth }: { label: string; active?: boolean; onPress: () => void; icon?: keyof typeof Ionicons.glyphMap; accessibilityLabel?: string; wideTouch?: boolean; minWidth?: number }) {
   const t = useTheme();
   return (
     <Pressable
@@ -101,8 +102,8 @@ export function Chip({ label, active, onPress, icon, accessibilityLabel, wideTou
       accessibilityLabel={accessibilityLabel ?? label}
       accessibilityState={{ selected: !!active }}
       hitSlop={slopFor(CHIP_H, space.xxs)}
-      // wideTouch 가 없으면 style 배열 모양까지 지금 그대로
-      style={({ pressed }) => [styles.chip, { backgroundColor: active ? t.surfaceAlt : "transparent", borderColor: active ? t.accent : t.lineStrong, opacity: pressed ? 0.75 : 1 }, ...(wideTouch ? [styles.chipWide] : [])]}
+      // wideTouch·minWidth 가 없으면 style 배열 모양까지 지금 그대로
+      style={({ pressed }) => [styles.chip, { backgroundColor: active ? t.surfaceAlt : "transparent", borderColor: active ? t.accent : t.lineStrong, opacity: pressed ? 0.75 : 1 }, ...(wideTouch ? [styles.chipWide] : []), ...(minWidth ? [{ minWidth, justifyContent: "center" as const }] : [])]}
     >
       {icon ? <Ionicons name={icon} size={12} color={active ? t.accent : t.muted} /> : null}
       <Text style={{ color: active ? t.ink : t.muted, fontSize: font.small, fontWeight: active ? "700" : "500" }}>{label}</Text>

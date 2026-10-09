@@ -19,6 +19,8 @@ import { NotificationSettingsCard } from "@/components/NotificationSettingsCard"
 import { PriceAlertSettingsCard } from "@/components/PriceAlertSettingsCard";
 import { ScreenInfoCard } from "@/components/ScreenInfoCard";
 import { TossOpenApiCard } from "@/components/TossOpenApiCard";
+import { TradeJournalCard } from "@/components/journal/TradeJournalCard";
+import { useJournalOn } from "@/lib/journalFlag";
 import { WidgetRefreshStatus } from "@/components/WidgetRefreshStatus";
 import { Screen } from "@/components/Screen";
 import { Badge, Button, Card, Chip, Muted, Row, RowWrapContext, SectionTitle, Toggle } from "@/components/ui";
@@ -83,6 +85,8 @@ export default function SettingsScreen() {
   // 매매 기록 (3-36): 서버가 쌓는 일별 계좌 스냅샷 상태 한 줄 (읽기만). 꺼져 있거나 예전 서버면 줄 없음
   const tradeRecordsOn = useFeature("tradeRecords", false);
   const recordsLabel = owner ? tradeRecordsLabel(gated(tradeRecordsOn, health.data?.tradeRecords)) : null;
+  // 매매일지 (3-37, 플래그 tradeJournal · tradeRecords): 토스증권 연동 카드 바로 아래 카드 (꺼져 있으면 없음 — 지금 화면 그대로)
+  const journalOn = useJournalOn();
   const [advanced, setAdvanced] = useState(false);
   const [groupRequest, setGroupRequest] = useState<string | null>(null);
   // 3-24 (emptyGuide — 플래그를 못 받은 채 서버에 닿지 않을 때도, lib/uxFlags connectionGuide): 오류 화면·끊김 띠의 '설정 열기'로 오면(주소 검색어 open=server) '서버 연결' 칸을 펼치고 그 칸까지 스크롤한다.
@@ -389,6 +393,7 @@ export default function SettingsScreen() {
   // 가격 알림 칸 (3-29): 서버에 연결됐고 켜져 있을 때만, 알림 칸 바로 아래
   const priceAlertCard = full && alerts.on && !member ? <PriceAlertSettingsCard /> : null;
   const toss = full && !member ? <TossOpenApiCard /> : null;
+  const journalCard = full && journalOn ? <TradeJournalCard records={health.data?.tradeRecords} /> : null;
   // 3-24 빈 칸 안내 (플래그 emptyGuide): 서버에 연결되지 않았거나 토큰이 맞지 않아 알림·토스 칸이 비었을 때 까닭과 버튼 하나
   const serverGap =
     ux.connectionGuide && !full && (health.isError || health.data?.limited) ? (
@@ -405,7 +410,10 @@ export default function SettingsScreen() {
     const groupedScreen = <SettingsSections openServerRequest={groupRequest ?? openReq} refreshing={pulling} onRefresh={onPull} sections={[
       { id: "display", title: "화면·숫자 표시", detail: "테마, 원화 환산, 잔고 정렬, 차트, 위젯", content: display },
       { id: "notifications", title: "알림", detail: "5% 구간 알림, 브리핑 시간, 기기 수신", content: <>{full && owner && movementOn ? <MovementSettingsCard /> : null}{notify}{priceAlertCard}{serverGap}</> },
-      { id: "account", title: "계정·증권사 연동", detail: "계정 정보, 토스 연동과 시세 대조", content: <><AccountCard />{toss}{serverGap}</> },
+      // 매매일지 (3-37): 켜져 있을 때만 토스 연동 카드 바로 아래 카드와 설명 끝 '매매일지' (꺼지면 지금 그대로)
+      journalCard
+        ? { id: "account", title: "계정·증권사 연동", detail: "계정 정보, 토스 연동과 시세 대조, 매매일지", content: <><AccountCard />{toss}{journalCard}{serverGap}</> }
+        : { id: "account", title: "계정·증권사 연동", detail: "계정 정보, 토스 연동과 시세 대조", content: <><AccountCard />{toss}{serverGap}</> },
       { id: "update", title: "앱 업데이트", detail: `현재 ${appVersion} · 새 버전 확인 및 적용`, content: <AppUpdateCard /> },
       { id: "server", title: "연결·진단", detail: health.isError || health.data?.limited ? "연결 확인 필요 · 서버 주소와 토큰" : "서버 상태, 연결 설정, 화면 정보", content: <>{server}{connectBox}<ScreenInfoCard /></> },
       { id: "info", title: "앱 정보·도움말", detail: "버전, 자료 출처, 처음 사용 안내", content: info },
@@ -437,6 +445,7 @@ export default function SettingsScreen() {
           </View>
           <View style={two ? [styles.column, { maxWidth: colMax }] : styles.stackedPart} {...(measure ? { onLayout: onColumnLayout } : null)}>
             {toss}
+            {journalCard}
             <AppUpdateCard />
             {server}
             {connectBox}
@@ -456,6 +465,7 @@ export default function SettingsScreen() {
       {full && owner && movementOn ? <MovementSettingsCard /> : null}
       {priceAlertCard}
       {toss}
+      {journalCard}
       {serverGap}
       <AppUpdateCard />
       {server}

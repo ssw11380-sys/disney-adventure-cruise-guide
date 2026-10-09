@@ -262,6 +262,22 @@ describe("핵심 금액 우선 표시", () => {
     expect(label(plain)).toHaveLength(1);
     press(plain, "내 종목 테마 보기"); expect(themes).toHaveBeenCalledTimes(2);
   });
+  it("3-37 매매일지: onJournal 을 줄 때만 '내 종목 테마 보기' 뒤에 '매매일지 보기' (접힌·종전 표시 모두), 없으면 지금 그대로", () => {
+    const journal = vi.fn();
+    const labels = (r: ReturnType<typeof render>) => all(r.tree).map((n) => n.props.accessibilityLabel).filter((l): l is string => typeof l === "string");
+    const off = render(focused(body(), { onAllocation: vi.fn(), onThemes: vi.fn() }));
+    expect(labels(off)).not.toContain("매매일지 보기");
+    expect(text(off.tree)).not.toContain("매매일지");
+    for (const extra of [{}, { focused: false }]) {
+      const on = render(focused(body(), { onAllocation: vi.fn(), onThemes: vi.fn(), onJournal: journal, ...extra }));
+      const l = labels(on);
+      expect(l.indexOf("매매일지 보기")).toBe(l.indexOf("내 종목 테마 보기") + 1);
+      const link = all(on.tree).find((n) => n.props.accessibilityLabel === "매매일지 보기")!;
+      expect((link.props.style as { minHeight: number }).minHeight).toBeGreaterThanOrEqual(44);
+      press(on, "매매일지 보기");
+    }
+    expect(journal).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("토스 수신 금액 최신성", () => {

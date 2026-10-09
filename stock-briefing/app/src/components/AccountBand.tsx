@@ -3,7 +3,7 @@ import { StyleSheet, Text, View } from "react-native";
 import type { Currency } from "@/api/types";
 import { Button } from "@/components/ui";
 import { sentence, speakAmount, speakProfit, speakRate } from "@/lib/a11y";
-import { bandActionWidth, bandBasisFit } from "@/lib/basisFit";
+import { bandActionWidth, bandBasisFit, bandJournalFits, type BandCellText } from "@/lib/basisFit";
 import { formatPct, formatPrice, formatQuote, shownSign } from "@/lib/format";
 import type { Bucket as Totals } from "@/lib/portfolio";
 import { changeColor, font, fontCap, layout, space, useFontScale, useTheme } from "@/theme";
@@ -91,6 +91,54 @@ export function fxNote(d: AccountData): string | null {
 }
 
 /**
+ * 띠의 점·매매일지 아이콘 배치를 어림할 칸 글 (점·아이콘과 같은 줄의 칸 — 두 줄 띠는 둘째 줄, 촘촘은 첫 줄).
+ * AccountBand 와 잔고 화면(bandJournalShown — 띠에 아이콘이 들지 않으면 보유 표 머리에 둔다)이 같은 값을 쓴다
+ */
+function bandFitCells(d: AccountData, dense: boolean): BandCellText[] {
+  const { main, profit, rate, lines, showSplit } = accountFigures(d);
+  if (dense) {
+    const dayRate = dayRateOf(d);
+    return [
+      { label: bandTotalLabel(d), value: formatQuote(main.value, "KRW"), unit: "원", big: true, first: true },
+      { label: "평가손익 · 수익률", value: formatPrice(profit, "KRW", { sign: true }), sub: formatPct(rate) },
+      { label: "당일손익", value: formatPrice(main.day, "KRW", { sign: true }), sub: dayRate === null ? null : formatPct(dayRate) },
+    ];
+  }
+  return [
+    ...(showSplit ? lines.map((l, i) => ({ label: bandSplitLabel(d, l), value: formatPrice(l.tot.value, l.cur), sub: formatPct(lineProfit(l).r), first: i === 0 })) : []),
+    { label: "매입금액", value: formatPrice(main.cost, "KRW"), first: !showSplit },
+  ];
+}
+
+const bandTotalLabel = (d: AccountData) => `총 평가금액${d.total ? "" : " (원화 종목)"}${d.afterCost ? " · 비용 차감" : ""}`;
+/** 국내·해외 칸 이름 (해외는 환율을 붙인다) */
+const bandSplitLabel = (d: AccountData, l: AccountLine) => (l.label === "해외" && d.fx ? `해외 · 환율 ${d.fx.toLocaleString("ko-KR", { maximumFractionDigits: 2 })}` : l.label);
+
+/**
+ * 띠 오른쪽 버튼 자리 (3-35 비중·테마 두 버튼): 큰 글씨(130% 이상)의 줄바꿈 띠는 위아래로 쌓고(stack), 옆으로 둘 때는 둘째 버튼 폭만큼(extraW) 좁은 띠로 어림한다.
+ * AccountBand 와 잔고 화면(bandJournalShown)이 같은 값을 쓴다. 테마 버튼이 없으면 지금 그대로 (extraW 0 · action = 비중 버튼 유무)
+ */
+function bandActions(o: { oneLine: boolean; fontScale: number; allocation: boolean; themes: boolean }): { stack: boolean; extraW: number; action: boolean } {
+  const two = o.themes && o.allocation;
+  const stack = two && !o.oneLine && o.fontScale >= STACK_ACTIONS_SCALE;
+  return { stack, extraW: two && !stack ? bandActionWidth(o.fontScale) - space.sm + space.md : 0, action: o.allocation || o.themes };
+}
+
+/**
+ * 넓은 계좌 띠에 매매일지 아이콘(3-37)이 들어가는지 — AccountBand 가 그리는 것과 같은 판단. 거짓이면 잔고 화면이 보유 표 머리에 아이콘을 둔다
+ * (폴드 세로 704 × 큰 글씨 + 숫자 기준 점이면 띠에는 자리가 없다 — 그래도 잔고 탭에서 열 수 있게). fontScale 은 useFontScale 과 같은 정리된 배율.
+ * action: '비중' 버튼 유무, themes: '테마' 버튼 유무 (3-35 — 두 버튼이 옆으로 서면 그만큼 좁은 띠로 어림)
+ */
+export function bandJournalShown(o: { data: AccountData; oneLine: boolean; dense: boolean; pad: number; width: number; fontScale: number; action: boolean; themes?: boolean; basis: boolean }): boolean {
+  if (o.oneLine) return true;
+  const acts = bandActions({ oneLine: o.oneLine, fontScale: o.fontScale, allocation: o.action, themes: !!o.themes });
+  const width = o.width - acts.extraW;
+  const cells = bandFitCells(o.data, o.dense);
+  const mark = o.basis ? (bandBasisFit({ width, pad: o.pad, fontScale: o.fontScale, action: acts.action, cells }).dotOnly ? "dot" : "text") : null;
+  return bandJournalFits({ width, pad: o.pad, fontScale: o.fontScale, cells, action: acts.action, mark });
+}
+
+/**
  * 넓은 창 계좌 띠 (3-42 웨이브 B, 기능 플래그 foldLayout — 잔고 탭이 넓은 창에서만 쓴다).
  *  - 한 줄(oneLine, 펼친 폴드8 가로·울트라 펼침): 총 평가금액 | 평가손익·수익률 | 당일손익·% | 국내·% | 해외·환율·% | [비중]
  *    국내·해외 수익률은 rates(표 폭 layout.bandRatesMin 이상 — lib/holdingsColumns bandRates)일 때만. 좁은 한 줄 띠는 금액만
@@ -115,6 +163,7 @@ export function AccountBand({
   pad,
   onAllocation,
   onThemes,
+  journal,
   dense = false,
   basis,
   width,
@@ -126,6 +175,11 @@ export function AccountBand({
   onAllocation?: () => void;
   /** 내 종목 테마 화면 열기 (3-35, 플래그 holdingThemes). 없으면 지금 나무 그대로 */
   onThemes?: () => void;
+  /**
+   * 매매일지 아이콘 (3-37, 기능 플래그 tradeJournal · tradeRecords): '비중'(·'테마') 뒤 44×44. 한 줄 띠는 늘, 두 줄 띠·촘촘 띠는 칸 묶음이 아이콘과 한 줄에 들 때만
+   * (bandJournalShown — 띠 줄 수가 켜기 전과 같게. 들지 않으면 잔고 화면이 보유 표 머리에 둔다). 없으면 지금 그대로
+   */
+  journal?: React.ReactNode;
   dense?: boolean;
   /** 숫자 기준 점 그리기 (dotOnly: 글 없이 점만) */
   basis?: (dotOnly: boolean) => React.ReactNode;
@@ -139,7 +193,7 @@ export function AccountBand({
   const dc = changeColor(t, shownSign(main.day, dayText));
   const dayRate = dayRateOf(data);
   const dayRateText = dayRate === null ? null : formatPct(dayRate);
-  const totalLabel = `총 평가금액${data.total ? "" : " (원화 종목)"}${data.afterCost ? " · 비용 차감" : ""}`;
+  const totalLabel = bandTotalLabel(data);
   const totalValue = formatQuote(main.value, "KRW");
   const profitValue = formatPrice(profit, "KRW", { sign: true });
   const rateText = formatPct(rate);
@@ -148,7 +202,7 @@ export function AccountBand({
   const profitCell = <Cell key="profit" label="평가손익 · 수익률" value={profitValue} color={pc} sub={rateText} subColor={pc} />;
   const day = <Cell key="day" label="당일손익" value={dayText} color={dc} sub={dayRateText} subColor={changeColor(t, dayRateText ? shownSign(dayRate, dayRateText) : 0)} />;
   // 국내·해외 칸 이름 (해외는 환율을 붙인다)
-  const splitLabel = (l: AccountLine) => (l.label === "해외" && data.fx ? `해외 · 환율 ${data.fx.toLocaleString("ko-KR", { maximumFractionDigits: 2 })}` : l.label);
+  const splitLabel = (l: AccountLine) => bandSplitLabel(data, l);
   // 국내·해외 칸 (firstAt0: 줄의 첫 칸이면 왼쪽 구분선 없음).
   // 수익률은 두 줄 띠와 넓은 한 줄 띠(rates)에서 — 좁은 한 줄 띠(800~839)는 금액만 (화면 읽기 문장에는 늘 있다)
   const split = (firstAt0: boolean, withRate: boolean) =>
@@ -162,30 +216,18 @@ export function AccountBand({
   // 숫자 기준 점 배치 (3-32 '큰 글씨면 점만'): 점과 같은 줄의 칸 글(두 줄 띠는 둘째 줄, 촘촘은 첫 줄)로 어림한다.
   // 한 줄 띠는 칸이 다음 줄로 넘어가지 않고 글자가 줄어드는 띠라 지금처럼 rates 로만 (좁은 한 줄 띠는 점만)
   // 3-35 비중·테마 두 버튼: 큰 글씨(130% 이상)의 줄바꿈 띠는 위아래로 쌓는다 — 옆으로 두면 칸 자리가 버튼 하나만큼 줄어 '매입금액'이 셋째 줄로 밀린다.
-  // 옆으로 둘 때는 둘째 버튼 폭만큼 좁은 띠로 어림한다 (테마 버튼이 없으면 지금 그대로)
-  const twoActions = !!onThemes && !!onAllocation;
-  const stackActions = twoActions && !oneLine && fontScale >= STACK_ACTIONS_SCALE;
-  const extraActionW = twoActions && !stackActions ? bandActionWidth(fontScale) - space.sm + space.md : 0;
-  const fit =
-    basis && !oneLine
-      ? bandBasisFit({
-          width: (width ?? 0) - extraActionW,
-          pad,
-          fontScale,
-          action: !!onAllocation || !!onThemes,
-          cells: dense
-            ? [
-                { label: totalLabel, value: totalValue, unit: "원", big: true, first: true },
-                { label: "평가손익 · 수익률", value: profitValue, sub: rateText },
-                { label: "당일손익", value: dayText, sub: dayRateText },
-              ]
-            : [
-                ...(showSplit ? lines.map((l, i) => ({ label: splitLabel(l), value: formatPrice(l.tot.value, l.cur), sub: formatPct(lineProfit(l).r), first: i === 0 })) : []),
-                { label: "매입금액", value: costValue, first: !showSplit },
-              ],
-        })
-      : null;
+  // 옆으로 둘 때는 둘째 버튼 폭만큼 좁은 띠로 어림한다 (테마 버튼이 없으면 지금 그대로 — bandActions, 매매일지 아이콘 판단과 같은 값)
+  const acts = bandActions({ oneLine, fontScale, allocation: !!onAllocation, themes: !!onThemes });
+  const stackActions = acts.stack;
+  const fit = basis && !oneLine ? bandBasisFit({ width: (width ?? 0) - acts.extraW, pad, fontScale, action: acts.action, cells: bandFitCells(data, dense) }) : null;
   const mark = basis ? basis(oneLine ? !rates : fit!.dotOnly) : null;
+  // 매매일지 아이콘 (3-37): 점과 같은 줄의 칸 글로 어림 — 두 줄 띠는 둘째 줄, 촘촘은 첫 줄 (잔고 화면의 보유 표 머리 판단과 같은 함수)
+  const journalIcon =
+    journal && bandJournalShown({ data, oneLine, dense, pad, width: width ?? 0, fontScale, action: !!onAllocation, themes: !!onThemes, basis: !!basis }) ? (
+      <View style={styles.journal}>
+        {journal}
+      </View>
+    ) : null;
   // 줄바꿈하는 칸 묶음: 끄고는 한 줄인 칸이 점 때문에 다음 줄로 가면 줄바꿈을 막는다 (칸 글자가 조금 줄어든다 — 한 줄 띠와 같은 규칙).
   // 끄고도 다음 줄로 넘어가는 칸(큰 글씨·좁은 폭·큰 금액)은 그대로 줄바꿈. 점이 없으면 지금 그대로
   const wrap = fit?.noWrap ? null : styles.wrap;
@@ -221,6 +263,7 @@ export function AccountBand({
           </View>
           {mark}
           {button}
+          {journalIcon}
         </View>
       ) : dense ? (
         // 촘촘 두 줄 띠 → 한 줄 (48): 칸 묶음과 비중 버튼이 같은 줄. 글자가 커져 칸이 한 줄에 안 들어가면 다음 줄로 넘긴다
@@ -232,6 +275,7 @@ export function AccountBand({
           </View>
           {mark}
           {button}
+          {journalIcon}
         </View>
       ) : (
         <>
@@ -249,6 +293,7 @@ export function AccountBand({
             </View>
             {mark}
             {button}
+            {journalIcon}
           </View>
         </>
       )}
@@ -305,5 +350,7 @@ const styles = StyleSheet.create({
   // 3-35 비중·테마 두 버튼 (누르는 칸 44 가 겹치지 않게 사이 12)
   actions: { flexDirection: "row", columnGap: space.md },
   actionsStack: { flexDirection: "column", rowGap: space.md, alignItems: "stretch" },
+  // 매매일지 아이콘 (3-37): '비중' 버튼과 같은 앞 간격
+  journal: { paddingLeft: space.xs },
   notes: { paddingBottom: space.s, gap: space.xxs },
 });

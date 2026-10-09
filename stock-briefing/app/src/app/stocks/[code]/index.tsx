@@ -48,6 +48,8 @@ import { tossAppTarget } from "@/lib/tossApp";
 import { FlowTab } from "@/components/flow/FlowTab";
 import { detailTabLabels } from "@/lib/flowView";
 import { FLOW_TAB } from "@/lib/flowText";
+import { JournalStockLink, JournalStockPanel, JournalStockRow } from "@/components/journal/JournalEntry";
+import { useJournalOn } from "@/lib/journalFlag";
 
 type Tab = AnalysisKind | "news";
 const TABS: { value: Tab; label: string }[] = [
@@ -164,6 +166,9 @@ export default function StockDetailScreen() {
   // 수급 탭 (3-33, 기능 플래그 flowTab — 앱 fallback 꺼짐): 탭 끝에 '수급'(자리가 모자라면 다른 탭 이름을 줄이되 화면 읽기는 원래 이름),
   // 윗줄+아랫줄 배치는 아래 전체 폭 칸. 꺼져 있으면 탭 목록·내용이 지금 그대로이고 서버에 묻지 않는다
   const flowOn = useFeature("flowTab", false);
+  // 매매일지 (3-37, 플래그 tradeJournal · tradeRecords): 휴대폰 '잔고' 칸 맨 아래 '이 종목 매매 기록 ›', 넓은 창 '내 보유' 제목 오른쪽 '매매 기록 ›',
+  // 보유가 없는데 저장된 체결이 있으면 '매매 기록' 작은 칸 (그 판단만 서버에 한 번 묻는다). 꺼져 있으면 모두 없음 — 지금 화면 그대로
+  const journalOn = useJournalOn();
   // 차트의 보이는 구간 (detailPolish 켜짐만): 접고 펼 때 배치가 바뀌어 차트가 다른 자리에서 새로 그려져도 보던 봉 수·위치를 잇는다
   const [chartView] = useState(createChartViewMemo);
   const chartMemo = polish ? { viewMemo: chartView } : {};
@@ -643,6 +648,7 @@ export default function StockDetailScreen() {
             <FundamentalsBasis basis={q.fundamentalsBasis} />
           </View>
         ) : null}
+        {!ev && journalOn ? <JournalStockPanel code={c} /> : null}
 
         {/* 잔고 */}
         {ev ? (
@@ -665,6 +671,7 @@ export default function StockDetailScreen() {
             ) : null}
             {afterCost && baseEval?.afterCost ? <Text style={styles.sub(t.muted)}>평가금액·손익은 매도 시 예상 수수료·세금 차감 후 (토스 기준)</Text> : null}
             {s.memo ? <Text style={styles.sub(t.muted)}>메모 {s.memo}</Text> : null}
+            {journalOn ? <JournalStockRow code={c} /> : null}
           </View>
         ) : null}
 
@@ -780,10 +787,12 @@ export default function StockDetailScreen() {
     <View style={styles.side}>
       {ev ? (
         <View>
-          <PaneTitle title="내 보유" note={holdNote} />
+          <PaneTitle title="내 보유" note={holdNote} {...(journalOn && !holdNote ? { action: <JournalStockLink code={c} /> } : null)} />
           <PairGrid items={holdStats} cols={sideCols} />
           {krwLast ? null : krwSide}
           {memo}
+          {/* 제목 줄에 숫자 기준 안내가 있으면 그 안내를 자르지 않게 링크는 칸 아래 한 줄로 */}
+          {journalOn && holdNote ? <JournalStockRow code={c} /> : null}
         </View>
       ) : null}
       {q && quoteStats ? (
@@ -795,6 +804,7 @@ export default function StockDetailScreen() {
         </View>
       ) : null}
       {ev && krwLast ? <View>{krwSide}</View> : null}
+      {!ev && journalOn ? <JournalStockPanel code={c} /> : null}
     </View>
   );
 
@@ -921,6 +931,7 @@ export default function StockDetailScreen() {
             key: "hold",
             title: "내 보유",
             note: shortNote,
+            ...(journalOn && !shortNote ? { action: <JournalStockLink code={c} /> } : null),
             flex: foldDetail.holdColFlex,
             body: (
               <>
@@ -928,6 +939,8 @@ export default function StockDetailScreen() {
                 {krwCol ? null : krwBlock}
                 {!krwCol && krwStats.length ? <StatList items={krwStats} /> : null}
                 {memo}
+                {/* 제목 줄에 숫자 기준 안내가 있으면 그 안내를 자르지 않게 링크는 칸 아래 한 줄로 */}
+                {journalOn && shortNote ? <JournalStockRow code={c} /> : null}
               </>
             ),
           },

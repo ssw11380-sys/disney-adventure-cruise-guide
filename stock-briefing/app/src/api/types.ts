@@ -1441,3 +1441,221 @@ export interface HoldingThemesSnapshot {
   mostHeld: { name: string; count: number }[];
   markets: Partial<Record<HtMarket, { basisDay: string | null; session: DiscoverSession; split: boolean; top: { name: string; changeRate: number }[]; bottom: { name: string; changeRate: number }[]; more: number }>>;
 }
+
+// ── 매매일지 (3-37, 플래그 tradeJournal — 서버 journalService·journalCalc·journalReturns·taxRules 와 같은 모양) ──
+
+export type JournalCurrency = "KRW" | "USD";
+/** unexplained = 확인이 필요한 매도 (그해 주문 내역으로 설명되지 않는 변화가 있던 종목 — 손익을 계산하지 않음) */
+export type RealizedStatus = "ok" | "unknown-cost" | "order-uncertain" | "unexplained";
+export type RealizedBasis = "snapshot" | "history-checked" | "history-only";
+
+/** 매도 한 몫의 실현손익 (이동평균법, 종목 통화). 모르면 gross null + reason */
+export interface JournalRealized {
+  status: RealizedStatus;
+  /** 화면에 그대로 쓰는 쉬운 문장 (서버가 만듦) */
+  reason: string | null;
+  basis: RealizedBasis | null;
+  anchorDate: string | null;
+  avgCost: number | null;
+  costAmount: number | null;
+  gross: number | null;
+  /** 퍼센트 */
+  rate: number | null;
+  costs: { fee: number | null; tax: number | null; total: number | null; source: "toss" | "estimated" | null };
+  net: number | null;
+  /** 미국: 매수 당시 환율로 쌓은 원화 평균 구매가 기준 원화 실현손익 (추정) */
+  krw: { gross: number | null; costKrw: number | null; sellFx: number | null; fxSource: "toss" | null; estimated: boolean; reason: string | null } | null;
+  /** unexplained 일 때: 무엇이 달라졌는지 (서버 문장) */
+  change?: string;
+  /** unexplained 일 때: 비율 짐작 이름표 ('1→4 분할로 보여요(추정)') — 숫자가 아님 */
+  guess?: string | null;
+}
+
+export interface JournalItem {
+  key: string;
+  /** fill = 체결 몫, change = 주문 내역으로 설명되지 않은 변화·큰 주가 변화 (그해 그 종목의 매도 손익·수익률 계산에서 뺌) */
+  kind: "fill" | "change";
+  account: number;
+  /** 계좌가 둘 이상일 때만 '계좌 2' */
+  accountLabel: string | null;
+  orderId: string | null;
+  code: string;
+  name: string;
+  market: "KR" | "US";
+  currency: JournalCurrency;
+  side: "BUY" | "SELL" | null;
+  quantity: number;
+  orderQuantity: number;
+  amount: number;
+  price: number | null;
+  at: string;
+  timeBasis: "filled" | "ordered" | "seen";
+  status: "CLOSED" | "OPEN";
+  part: { index: number; count: number } | null;
+  realized: JournalRealized | null;
+  afterBuy?: { avgCost: number; quantity: number } | null;
+  note: string | null;
+  /** kind 'change': 무엇이 달라졌는지 · 비율 짐작 이름표(숫자가 아님) · 설명되지 않는 수량 */
+  change?: { kind: "unexplained" | "possible-action"; text: string; guess: string | null; qty: number };
+}
+
+/** 확인이 필요한 매도 (그해 주문 내역으로 설명되지 않는 변화가 있던 종목 — 손익 숫자 없음) */
+export interface JournalExcludedSell {
+  key: string;
+  code: string;
+  name: string;
+  date: string;
+  quantity: number;
+  currency: JournalCurrency;
+  reason: string;
+  change: string | null;
+  guess: string | null;
+}
+
+export interface JournalRealizedSum {
+  KRW: number | null;
+  USD: number | null;
+  krwTotal: number | null;
+  krwTotalEstimated: boolean;
+}
+
+export interface JournalStockHead {
+  code: string;
+  name: string;
+  market: "KR" | "US";
+  holding: { quantity: number; avgCost: number | null; currency: JournalCurrency; asOf: string } | null;
+  orders: number;
+  buys: number;
+  sells: number;
+  realized: { amount: number | null; currency: JournalCurrency; sells: number; unknown: number };
+  firstTrade: string | null;
+  lastTrade: string | null;
+  recordSince: string | null;
+  memo: string | null;
+}
+
+export interface JournalResponse {
+  enabled: boolean;
+  from?: string;
+  to?: string;
+  code?: string | null;
+  recordSince?: string | null;
+  verified?: { krRealized: boolean; usRealizedUsd: boolean; usRealizedKrw: boolean; headline: "gross" | "net" };
+  summary?: {
+    orders: number;
+    buys: number;
+    sells: number;
+    realized: JournalRealizedSum & { estimatedIncluded: boolean };
+    costs: { toss: number; estimated: number; none: number };
+    unknownSells: number;
+    /** 확인이 필요한 매도 (예전 서버는 없음) */
+    excludedSells?: JournalExcludedSell[];
+    truncated: string[];
+  };
+  days: { date: string; realized: JournalRealizedSum; items: JournalItem[] }[];
+  stocks: { code: string; name: string; count: number }[];
+  head?: JournalStockHead;
+}
+
+export type JournalStockResponse = { enabled: false } | ({ enabled: true } & JournalStockHead);
+
+export type ReturnsPreset = "1W" | "1M" | "3M" | "YTD" | "1Y" | "custom";
+export type ReturnsMarket = "ALL" | "KR" | "US";
+
+export interface JournalReturns {
+  enabled: boolean;
+  ready: boolean;
+  recordSince?: string | null;
+  /** 고른 기간 안 평가 시점의 거래일 수 */
+  tradingDays?: number;
+  /** 기록 전체의 거래일 수 (공개 조건 — 이것이 needDays 이상이어야 숫자). 예전 서버는 없음 */
+  recordDays?: number;
+  /** 그 시장 기록의 마지막 날짜 (고른 기간이 이 뒤면 '그 뒤로 기록이 저장되지 않음'). 예전 서버는 없음 */
+  recordUntil?: string | null;
+  needDays?: number;
+  requested?: { from: string; to: string };
+  actual?: { from: string; to: string } | null;
+  clippedToRecordStart?: boolean;
+  /** 전체(원화)인데 고른 기간의 미국 기록에 평가 환율이 없어 숫자가 없음 (예전 서버는 없음) */
+  usFxMissing?: boolean;
+  market?: ReturnsMarket;
+  currency?: JournalCurrency;
+  twr?: number | null;
+  pnl?: number | null;
+  startValue?: number | null;
+  endValue?: number | null;
+  buys?: number;
+  sells?: number;
+  gaps?: string[];
+  doubtedSkipped?: string[];
+  /** 주문 내역으로 설명되지 않는 변화·큰 주가 변화가 있어 수익률·기간 손익에서 건너뛴 구간의 끝 날짜. 예전 서버는 없음 */
+  uncertainSkipped?: string[];
+  /** 고른 기간의 모든 구간을 건너뛰어 숫자가 없음 (ready false). 예전 서버는 없음 */
+  allSkipped?: boolean;
+  priceBasis?: { regularClose: number; priceFallback: number; fallbackCodes: string[] };
+  series?: { date: string; cum: number }[];
+}
+
+export interface JournalTaxFx {
+  rate: number;
+  source: string;
+  date: string;
+  provisional: boolean;
+}
+
+export interface JournalTaxItem {
+  key: string;
+  code: string;
+  name: string;
+  tradeDate: string;
+  settleDate: string;
+  settleSource: "toss" | "estimated";
+  quantity: number;
+  proceedsUsd: number;
+  costsUsd: number | null;
+  fxSell: JournalTaxFx | null;
+  proceedsKrw: number;
+  costKrw: number;
+  costsKrw: number | null;
+  gainKrw: number;
+  /** 같은 날 사고판 순서를 몰라 추정한 매도 (기본으로 합계에서 빠져 uncertainItems 에 — includeUncertain 이면 합계에 '추정 포함') */
+  estimate?: { status: "order-uncertain"; reason: string };
+}
+
+/** 합계에서 뺀, 확인이 필요한 매도 (숫자 없음) */
+export interface JournalTaxUnexplained {
+  key: string;
+  code: string;
+  name: string;
+  tradeDate: string;
+  settleDate: string;
+  quantity: number;
+  proceedsUsd: number;
+  reason: string;
+  change: string | null;
+  guess: string | null;
+}
+
+export interface JournalTax {
+  enabled: boolean;
+  year?: number;
+  years?: number[];
+  rules?: { rate: number; nationalRate: number; localRateOfNational: number; deduction: number; method: string; lawYear: number };
+  totals?: { gains: number; losses: number; net: number; base: number; nationalTax: number; localTax: number; tax: number; sells: number };
+  complete?: boolean;
+  fxPending?: number;
+  excluded?: { code: string; name: string; count: number; reason: string }[];
+  /** 합계에 들어 있는, 평균 구매가를 추정한 매도 수와 종목·까닭 (예전 서버는 없음) */
+  estimatedIncluded?: number;
+  estimatedSells?: { code: string; name: string; count: number; reason: string }[];
+  /** 같은 날 사고판 순서를 몰라 합계에서 뺀 매도 수 · 그 추정 양도차익 합 · 매도별 계산 (까닭은 excluded 에도 — 예전 서버는 없음) */
+  includeUncertain?: boolean;
+  uncertainExcluded?: number;
+  uncertainGainKrw?: number | null;
+  uncertainItems?: JournalTaxItem[];
+  /** 확인이 필요한 매도 (늘 합계에서 뺌 — 예전 서버는 없음) */
+  unexplainedSells?: JournalTaxUnexplained[];
+  items?: JournalTaxItem[];
+  kr?: { securitiesTax: { amount: number | null; sells: number; source: "toss" | null } };
+  asOf?: string;
+}

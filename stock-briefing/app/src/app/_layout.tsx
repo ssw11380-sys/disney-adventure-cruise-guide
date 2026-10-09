@@ -176,6 +176,8 @@ function Navigator() {
       <Stack.Screen name="portfolio/themes" options={{ title: "내 종목 테마" }} />
       {/* 일정·공시 (3-38, 플래그 holdingSchedule·filingAlerts): 제목은 화면이 플래그로 정한다 ('일정·공시' · '새 공시') — 로그인한 뒤에만 */}
       <Stack.Screen name="schedule" options={{ title: "일정·공시" }} />
+      {/* 매매일지 (3-37, 기능 플래그 tradeJournal — 꺼져 있으면 화면 안에 안내만) */}
+      <Stack.Screen name="journal/index" options={{ title: "매매일지" }} />
       {/* 이동평균선 기간·색 (3-39, 기능 플래그 maCustom — 꺼져 있으면 화면 안에 안내만) */}
       <Stack.Screen name="chart-lines" options={{ title: "이동평균선", presentation: "modal" }} />
       <Stack.Screen name="widget-settings" options={{ title: "위젯 설정", presentation: "modal" }} />

@@ -220,6 +220,18 @@ export const FEATURES = {
     description:
       "일정·공시 화면 (3-38): 계좌 브리핑 상세 '다가오는 일정' 카드(없으면 '오늘 일정' 카드) 맨 아래 '일정·공시 모두 보기' → /schedule 화면 — 30일 안 배당락일(다가오는 일정과 같은 출처·캐시, 열 때 받음 · 실적 발표일은 holdingEarnings 를 읽기만) + 최근 30일 미국 공시(filingAlerts 가 켜져 있을 때) + 한국 공시 안내(DART 키 뒤). GET /api/schedule. 끄면 줄 없음(카드가 지금과 같음), 경로 404, 화면은 '지금은 볼 수 없습니다' 한 줄",
   },
+  // 앱에 켜고 끄는 화면이 없어 꺼 두면 보이지 않음 → 기본 켬 (3-44 와 같은 결정, 2026-09-28). 끄기: PUT /api/admin/features {"tradeJournal": false}
+  tradeJournal: {
+    default: true,
+    description:
+      "매매일지 (3-37): 설정·잔고 계좌 칸·종목 상세에서 여는 '매매일지'(기록 — 체결 목록·이동평균법 실현손익·거래 메모, 수익률 — 스냅샷 시간가중 수익률(10거래일 뒤), 양도세 추정 탭은 따로 journalTax). 새 표 trade_notes·fx_rates. tradeRecords 가 꺼져 있으면 꺼진 것으로 봄. 끄면 입구·화면 없음, /api/journal* 빈 값·쓰기 409, 환율 받기 0건",
+  },
+  // 양도세 추정은 틀린 숫자의 해가 가장 커서(세금 신고로 이어질 수 있음) 기본 끔 — 토스 표본 대조·분사 모양 확인 뒤 켠다. 켜기: PUT /api/admin/features {"journalTax": true}
+  journalTax: {
+    default: false,
+    description:
+      "매매일지 '양도세 추정' 탭 (3-37, tradeJournal 이 켜져 있을 때만 뜻이 있음, 기본 끔): 해외주식 결제일 기준환율(서울외국환중개 매매기준율, 못 받으면 하나은행 고시)·22%·250만 원 공제로 계산한 참고용 추정, 매매기준율 배경 받기. 끄면 탭·화면·합계가 없고 /api/journal/tax 는 { enabled: false }, 매매기준율·하나은행 요청 0건 — 기록(매도별 실현손익·'확인 필요' 표시)·수익률은 그대로",
+  },
 } as const satisfies Record<string, { default: boolean; description: string }>;
 
 export type FeatureKey = keyof typeof FEATURES;
