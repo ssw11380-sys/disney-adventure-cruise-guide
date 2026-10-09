@@ -899,6 +899,18 @@ export interface RowCtx {
   /** 글 재료 (대상 종목 — 없으면 그 글을 쓰지 않음) */
   extra?: RowExtra;
 }
+/**
+ * 연간 영업이익률이 해마다 오르기만(up)·내리기만(down) 했는지 (빈 해 없이 3년 이상일 때만, 아니면 null).
+ * 팔란티어 −26.7% → … → 31.6% 는 '오르내림'이 아니라 해마다 오른 것 (1단계 검토 4차 — 경기 민감 까닭 글에만 쓴다)
+ */
+export function marginTrend(row: ReadonlyArray<number | null>): "up" | "down" | null {
+  if (row.length < 3 || row.some((v) => v === null)) return null;
+  const v = row as ReadonlyArray<number>;
+  if (v.every((x, i) => i === 0 || x > v[i - 1]!)) return "up";
+  if (v.every((x, i) => i === 0 || x < v[i - 1]!)) return "down";
+  return null;
+}
+
 /** 지표·묶음 글 재료 (가치 점수 개선 1단계 — 점수에는 쓰지 않는다) */
 export interface RowExtra {
   /** 최근 4분기 순이익·영업현금흐름 (원래 단위 — 미국 달러) */
@@ -907,8 +919,10 @@ export interface RowExtra {
   unit?: "USD" | "KRW";
   /** 경기 민감 회사의 섞지 않은 최근 4분기 PER (순이익 ≤ 0 이면 'loss') */
   plainPer?: number | "loss" | null;
-  /** 경기 민감 까닭 (업종 목록 · 이익률 오르내림 — 가장 낮은 해·높은 해 %) */
-  cyclical?: { byIndustry: boolean; lo: number | null; hi: number | null } | null;
+  /** 경기 민감 까닭 (업종 목록 · 이익률 변동 — 가장 낮은 해·높은 해 %, 해마다 오르기만·내리기만 했는지) */
+  cyclical?: { byIndustry: boolean; lo: number | null; hi: number | null; steady?: "up" | "down" | null } | null;
+  /** 머리 문장(peerLine)에 적은 비교 회사 수와 그 무리 단계 — 지표 값이 있는 회사 수가 다르면 'PER 값이 있는 152곳 중' (1단계 검토 4차) */
+  groupN?: { level: PeerLevel; n: number } | null;
   /** 영업이익 기준 PER (영업 외 이익이 세전이익의 30% 이상일 때만 — 영업 외 손실 쪽은 없음, oneOffOf) */
   opPer?: { taxPct: number; per: number } | null;
   /** 금융사 종류 (재무 건전성 안내) */
@@ -953,7 +967,10 @@ export function metricRow(m: MetricScore, ctx: RowCtx = { path: "general", annua
   let peerMedian = median && m.score !== null ? `${lname} 가운데값 ${median}` : null;
   if (clump && clump.median !== null) {
     const pm = medianText(m.key, clump.median, false);
-    if (pm) peerMedian = lossPct > 0 ? profitMedianText(m.key, pm, lname, m.peer!.n, lossPct) : `${lname} 가운데값 ${pm}`;
+    // 머리 문장의 회사 수(153개 회사)와 이 지표 값이 있는 회사 수(152)가 다르면 'PER 값이 있는 152곳 중' (1단계 검토 4차)
+    const g = x.groupN;
+    const valueName = g && g.level === m.peer!.level && g.n !== m.peer!.n ? shortMetricName(m.key, ctx.grade) : null;
+    if (pm) peerMedian = lossPct > 0 ? profitMedianText(m.key, pm, lname, m.peer!.n, lossPct, valueName) : `${lname} 가운데값 ${pm}`;
   }
   // 경기 민감 PER (섞기): 까닭 글 — [10] 이면 업종 목록·이익률 숫자로, 아니면 예전 말
   const why = t.wordingFacts ? cyclicalWhy(x.cyclical ?? { byIndustry: true, lo: null, hi: null }) : CYCLICAL_WHY_OLD;
@@ -1222,10 +1239,11 @@ function scoredBlock(
   const mcap = c.mcap ?? null;
   const ni = typeof flow.netIncome === "number" ? flow.netIncome : null;
   const blend = !!c.metrics?.A1?.blend;
-  const margins = annual
+  const marginRow = annual
     .slice(-5)
-    .map((a) => (typeof a.opIncome === "number" && typeof a.revenue === "number" && a.revenue > 0 ? Math.max(-1, Math.min(1, a.opIncome / a.revenue)) : null))
-    .filter((v): v is number => v !== null);
+    .map((a) => (typeof a.opIncome === "number" && typeof a.revenue === "number" && a.revenue > 0 ? Math.max(-1, Math.min(1, a.opIncome / a.revenue)) : null));
+  const margins = marginRow.filter((v): v is number => v !== null);
+  const steady = marginTrend(marginRow);
   const tax = c.aux?.taxRate ?? o.ref.ref.thresholds.taxRateP50;
   const finIndustry = level === "industry" ? industry : null;
   const extra: RowExtra = {
@@ -1233,7 +1251,8 @@ function scoredBlock(
     ocf: typeof flow.ocf === "number" ? flow.ocf : null,
     unit: "USD",
     plainPer: blend && mcap ? (ni !== null && ni > 0 ? mcap / ni : "loss") : null,
-    cyclical: c.cyclical ? { byIndustry: !!industry && CYCLICAL_INDUSTRIES.has(industry), lo: margins.length ? 100 * Math.min(...margins) : null, hi: margins.length ? 100 * Math.max(...margins) : null } : null,
+    cyclical: c.cyclical ? { byIndustry: !!industry && CYCLICAL_INDUSTRIES.has(industry), lo: margins.length ? 100 * Math.min(...margins) : null, hi: margins.length ? 100 * Math.max(...margins) : null, steady } : null,
+    groupN: { level, n },
     opPer: oneOffPct !== null && mcap && typeof op === "number" && op > 0 ? { taxPct: Math.round(100 * tax), per: mcap / (op * (1 - tax)) } : null,
     finKind: r.path === "financial" ? finKindOf(industry) : null,
     groupName: finIndustry ? (FIN_INDUSTRY_KO[finIndustry] ?? industryKo(finIndustry)) : null,

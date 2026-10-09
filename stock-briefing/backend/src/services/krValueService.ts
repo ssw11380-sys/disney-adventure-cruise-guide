@@ -794,7 +794,7 @@ function krScoredBlock(
   const about = valueAboutOf(r.path, "KR");
   const end = monthEndOf(inp.quarter);
   const notes = [KR_LITE_NOTE, ...(r.status === "partial" ? [`계산에 쓴 묶음 비중 ${r.coverageWeight} (100 중)`] : [])];
-  const extra: RowExtra = { unit: "KRW", finKind: r.path === "financial" ? finKindOf(o.industry) : null, groupName: level === "industry" ? o.industry : null };
+  const extra: RowExtra = { unit: "KRW", finKind: r.path === "financial" ? finKindOf(o.industry) : null, groupName: level === "industry" ? o.industry : null, groupN: { level, n } };
   // [3] 가격 안내 (20거래일 평균과 마지막 종가 — 한국은 섞기 없음)
   const eps = inp.ttm.eps;
   const perAvg = typeof eps === "number" && eps > 0 && c.avgPrice ? c.avgPrice / eps : null;

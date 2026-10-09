@@ -16,7 +16,7 @@ import { cleanDetail } from "../src/services/briefingWording.js";
 import { FEATURES } from "../src/services/featureService.js";
 import { compositeOf, type ScoreSources, type ScoresResponse, type ScoreStock } from "../src/services/indicatorScoreService.js";
 import { krReasonOf } from "../src/services/krValueService.js";
-import { bigPeersOf, closeGap, familyRow, flagRows, lossStreak, metricRow, oneOffOf, priceNoteOf, reasonOf, type Core, type RowCtx } from "../src/services/valueScoreService.js";
+import { bigPeersOf, closeGap, familyRow, flagRows, lossStreak, marginTrend, metricRow, oneOffOf, priceNoteOf, reasonOf, type Core, type RowCtx } from "../src/services/valueScoreService.js";
 import {
   BANK_HEALTH_NOTE,
   blendPosPrefix,
@@ -353,6 +353,42 @@ describe("[3] PER 줄 · 적자 회사 덩어리 · 가격 안내 · 영업 외 
     expect(blendRankZeroNote("업황에 따라 이익이 크게 오르내리는 업종이라", true)).toBe("순위에는 최근 4분기 이익과 5년 평균 이익을 반씩 섞은 값을 썼습니다(업황에 따라 이익이 크게 오르내리는 업종이라). 섞은 이익도 0 이하라 0점입니다.");
     const z = ms("A1", 0, { x: -Infinity, rule: "zeroLoss", why: "lossNi", show: null, blend: true, pos: {} });
     expect(metricRow(z, { ...ON, extra: { plainPer: "loss" } }).value).toBe("적자 (최근 4분기 · 흔히 쓰는 계산)");
+  });
+
+  it("1단계 검토 4차 팔란티어: 영업이익률이 해마다 오르기만 했으면 '오르내림' 대신 '해마다 올라 변동 폭이 커서' · 경기 정점 표시도 '변동 폭이 큰'", () => {
+    // 팔란티어 2021~2025 영업이익률 −26.7% · −8.5% · 5.4% · 10.8% · 31.6% (해마다 오름)
+    expect(marginTrend([-0.267, -0.085, 0.054, 0.108, 0.316])).toBe("up");
+    expect(marginTrend([0.3, 0.2, 0.1])).toBe("down");
+    expect(marginTrend([0.1, 0.3, 0.2, 0.4])).toBeNull(); // 오르내림
+    expect(marginTrend([0.1, null, 0.3])).toBeNull(); // 빈 해가 있으면 '해마다'라고 하지 않는다
+    expect(marginTrend([0.1, 0.2])).toBeNull(); // 2년은 '해마다'가 아니다
+    expect(marginTrend([0.1, 0.1, 0.2])).toBeNull(); // 같은 해는 오른 것이 아니다
+    expect(cyclicalWhy({ byIndustry: false, lo: -26.7, hi: 31.6, steady: "up" })).toBe("최근 5년 영업이익률이 −26.7%에서 31.6%로 해마다 올라 변동 폭이 커서");
+    expect(cyclicalWhy({ byIndustry: false, lo: 5.2, hi: 30.4, steady: "down" })).toBe("최근 5년 영업이익률이 30.4%에서 5.2%로 해마다 내려 변동 폭이 커서");
+    expect(cyclicalWhy({ byIndustry: false, lo: -26.7, hi: 31.6, steady: null })).toContain("오르내림이 커서");
+    // 업종 목록이면 해마다 올랐어도 업종 글 그대로
+    expect(cyclicalWhy({ byIndustry: true, lo: -26.7, hi: 31.6, steady: "up" })).toBe("업황에 따라 이익이 크게 오르내리는 업종이라");
+    expect(blendRankNote("278.0배", cyclicalWhy({ byIndustry: false, lo: -26.7, hi: 31.6, steady: "up" }))).toBe(
+      "순위에는 최근 4분기 이익과 5년 평균 이익을 반씩 섞은 278.0배를 썼습니다(최근 5년 영업이익률이 −26.7%에서 31.6%로 해마다 올라 변동 폭이 커서).",
+    );
+    expect(CYCLICAL_PEAK_MARGIN).toBe("이익이 최근 몇 년 중 가장 높은 수준입니다. 이익률 변동 폭이 큰 회사는 이익이 많을 때 PER이 낮게 보이는 경향이 있습니다.");
+    expect(CYCLICAL_PEAK_MARGIN).not.toContain("오르내");
+    // PER 줄 섞기 안내에 그대로 쓰인다 (valueWordingFacts)
+    const a1 = ms("A1", 59, { x: 1 / 278, show: 278, blend: true });
+    expect(metricRow(a1, { ...ON, extra: { plainPer: 400, cyclical: { byIndustry: false, lo: -26.7, hi: 31.6, steady: "up" } } }).note).toContain("해마다 올라 변동 폭이 커서");
+  });
+
+  it("1단계 검토 4차: 머리 문장 회사 수(153개 회사)와 지표 값이 있는 회사 수(152)가 다르면 'PER 값이 있는 152곳 중' · 같으면 '비교한 업종 N곳 중' · 무리 단계가 다르면 그대로", () => {
+    expect(profitMedianText("A1", "20.2배", "업종", 152, 27, "PER")).toBe("흑자 회사 가운데값 20.2배 · PER 값이 있는 152곳 중 27%는 적자");
+    expect(profitMedianText("A2", "73.4배", "업종", 64, 47, "기업가치 ÷ 영업이익")).toBe("영업이익 흑자 회사 가운데값 73.4배 · 기업가치 ÷ 영업이익 값이 있는 64곳 중 47%는 영업적자");
+    const a1 = ms("A1", 71, { x: 1 / 44.8, show: 44.8, peer: peer({ n: 152 }), loss: { share: 0.27, median: 1 / 20.2, pos: { industry: 59, market: 24 }, score: 50 } });
+    const row = (groupN: NonNullable<RowCtx["extra"]>["groupN"]) => metricRow(a1, { ...ON, extra: { groupN } }).peerMedian;
+    expect(row({ level: "industry", n: 153 })).toBe("흑자 회사 가운데값 20.2배 · PER 값이 있는 152곳 중 27%는 적자");
+    expect(row({ level: "industry", n: 152 })).toBe("흑자 회사 가운데값 20.2배 · 비교한 업종 152곳 중 27%는 적자");
+    expect(row({ level: "sector", n: 400 })).toBe("흑자 회사 가운데값 20.2배 · 비교한 업종 152곳 중 27%는 적자");
+    expect(row(null)).toBe("흑자 회사 가운데값 20.2배 · 비교한 업종 152곳 중 27%는 적자");
+    // 끄면 (valueMedianText) 예전 가운데값 그대로
+    expect(metricRow(a1, { ...ON, text: { ...VALUE_TEXT_ON, medianText: false }, extra: { groupN: { level: "industry", n: 153 } } }).peerMedian).not.toContain("값이 있는");
   });
 
   it("가격 안내: 기본 · 경기 민감(섞기로 크게 다름) · 마지막 종가가 20일 평균과 5% 넘게 다르면 그 가격의 PER·PBR, 끄면 예전 한 줄", () => {
@@ -987,6 +1023,131 @@ describe("[8] AI 가치분석 글 금지어 검사 (valueAiSafeWording, 서버�
     expect(ATTACKS3.filter((a) => cleanDetail(`## 변화\n${a}`, "", before).dropped === 0).length).toBeGreaterThan(30);
   });
 
+  // 1단계 검토 4차: 같은 말의 활용형·돌려 말하기 (3차 검사로는 54개 중 45개가 지나갔다 — scratchpad vs1/adv4.mts)
+  const ATTACKS4 = [
+    // 싸다·비싸다·나쁘다의 활용
+    "주가가 쌉니다.",
+    "작년보다 주가가 쌌습니다.",
+    "싼 주식입니다.",
+    "PER 기준으로 비싼 회사입니다.",
+    "주가가 비쌉니다.",
+    "작년에는 주가가 비쌌습니다.",
+    "주가가 싸네요.",
+    "실적이 나빠졌습니다.",
+    "재무 상태가 나빴습니다.",
+    "주가가 좋았습니다.",
+    "이익 대비 주가가 괜찮은 수준입니다.",
+    "가성비가 좋은 종목입니다.",
+    "헐값에 거래되고 있습니다.",
+    "제값을 못 받고 있습니다.",
+    // 추측·의견
+    "배당이 늘어날 수도 있습니다.",
+    "이익이 줄어들 수도 있습니다.",
+    "배당 여력이 충분합니다.",
+    "실적은 개선되겠습니다.",
+    "이익이 늘어난 것으로 봅니다.",
+    "주가가 이익을 다 반영하지 못했다고 생각합니다.",
+    "이익이 줄어들 것으로 추정됩니다.",
+    "주가가 다시 회복할 듯합니다.",
+    "지금 들어가도 될까요?",
+    // 권유·행동
+    "지금은 들어갈 때입니다.",
+    "조금씩 모아갈 때입니다.",
+    "주식을 모을 때가 왔습니다.",
+    "지금 사도 됩니다.",
+    "이 가격이면 사도 괜찮습니다.",
+    "지금 들어가도 됩니다.",
+    "기다리는 편이 낫습니다.",
+    "다른 종목보다 이 종목이 낫습니다.",
+    "추가로 매입할 시기입니다.",
+    "조정 때 사들일 종목입니다.",
+    "배당을 노린다면 사 두는 것도 방법입니다.",
+    "실적 발표까지 지켜봐야 합니다.",
+    "배당 투자자라면 검토해 볼 종목입니다.",
+    "지금 사는 게 맞습니다.",
+    "이 회사를 살 이유가 충분합니다.",
+    "모아갈 가치가 있습니다.",
+    "주가가 실적보다 덜 오른 상태라 매수 시점을 기다릴 만합니다.",
+    // 예측
+    "상승 확률이 높습니다.",
+    "배당을 늘릴 회사입니다.",
+    "이익이 커질 회사입니다.",
+    "성장할 기업입니다.",
+    "실적이 나아질 것입니다.",
+    "이익은 다시 늘 것입니다.",
+    "주가가 다시 올라갈 차례입니다.",
+    "주가는 떨어질 일만 남았습니다.",
+    "이익 성장세가 지속될 것입니다.",
+    "실적이 이어질지 확인해야 합니다.",
+    // 영어
+    "The stock is cheap.",
+    "Shares look attractive at this level.",
+    "Big upside from here.",
+    "This is a buying opportunity.",
+  ];
+  // 4차 낱말과 겹치는 사실 문장 (걸리면 안 됨): 에워싸다·차 이름·싸움·'~일까지'·공시한 자사주 계획·되레·되풀이·'것으로 보고했습니다'·지난 일의 '~야 했습니다'·환율 안내
+  const FACTS4 = [
+    "합병을 둘러싼 소송 비용은 0.3억 달러입니다.",
+    "싼타페 판매량은 2025년에 늘었습니다.",
+    "경쟁사와의 가격 싸움으로 매출이 줄었습니다.",
+    "2025년 12월 31일까지의 실적입니다.",
+    "2025년 3분기까지 누적 매출은 30조원입니다.",
+    "자사주를 매입할 계획이라고 2025년 공시했습니다.",
+    "자기주식을 사들일 계획이라고 2025년 공시했습니다.",
+    "매출은 줄었어도 되레 이익은 늘었습니다.",
+    "올해도 되풀이된 일회성 비용은 0.2억 달러입니다.",
+    "회사는 2024년 벌금 0.1억 달러를 내야 했습니다.",
+    "회사는 순이익이 늘어난 것으로 보고했습니다.",
+    "환율에 따라 원화 금액이 달라질 수도 있습니다.",
+    "주주의 몫인 순이익은 2025년 늘었습니다.",
+    "논란에 휩싸인 자회사는 2024년 팔았습니다.",
+    "원화로 환산할 때 쓴 환율은 1,380원입니다.",
+    "PER은 현재가를 EPS로 나눌 때 12.0배입니다.",
+    "배당은 세 차례 늘었습니다.",
+    "영업이익률은 2021년부터 해마다 높아졌습니다.",
+    "통화가 달라 시가총액과 직접 나누지 않았습니다.",
+    "순이익은 2025년 적자로 돌아섰습니다.",
+    "영업이익은 흑자로 돌아섰고 순이익도 늘었습니다.",
+    "주당 배당금은 2023년 361원에서 2025년 1,444원으로 늘었습니다.",
+    "시가총액은 TWD 기준이며 달러로 환산하지 않았습니다.",
+  ];
+  it("1단계 검토 4차: 활용형(쌉니다·쌌습니다·싼·비쌉니다·나빠졌습니다)·추측(수도 있)·권유(때입니다·사도 됩니다·편이 낫습니다·매입할·사들일)·예측(상승 확률·늘릴 회사) 공격 문장도 모두 빼고, 사실 문장 20개(3차)와 겹치는 사실 문장은 그대로", () => {
+    const passed = ATTACKS4.filter((a) => safeValueText(`## 숫자로 본 변화\n1. 매출은 3년 연속 늘었습니다.\n2. ${a}`).includes(a));
+    expect(passed).toEqual([]);
+    expect(ATTACKS4.length).toBeGreaterThanOrEqual(54);
+    expect(FACTS3).toHaveLength(20);
+    for (const f of [...FACTS, ...FACTS3, ...FACTS4]) expect(safeValueCheck(f), f).toEqual({ text: f, dropped: 0 });
+    // 앞의 공격 문장도 그대로 걸린다
+    expect([...ATTACKS, ...ATTACKS3].filter((a) => safeValueCheck(a).dropped === 0)).toEqual([]);
+  });
+
+  it("요청 ID로 회수하는 경로(analysisWaitRecovery)도 같은 검사: 응답·상태 확인의 latest·request.result 모두 걸린 줄을 뺀 글, 저장은 원문 · 끄면 원문 그대로", async () => {
+    const ID = "value-request-0001";
+    for (const on of [true, false]) {
+      db = await createMigratedDb(":memory:");
+      app = await buildApp({ config: loadConfig({ DATABASE_URL: ":memory:" }), db, providers: fakeProviders({ generator: new ValueGen() }), logger: false, enableScheduler: false, now: () => kst("2026-09-28T10:00:00") });
+      await app.inject({ method: "POST", url: "/api/admin/master/refresh" });
+      await app.inject({ method: "PUT", url: "/api/admin/features", payload: { valueAiSafeWording: on } });
+      const res = (await app.inject({ method: "GET", url: `/api/stocks/000660/analysis/value?requestId=${ID}` })).json() as { content: string };
+      const state = (await app.inject({ method: "GET", url: `/api/stocks/000660/analysis/value/state?requestId=${ID}` })).json() as { latest: { content: string }; request: { status: string; result: { content: string } } };
+      // 같은 요청 ID 를 다시 보내도 (작업 기록에서 돌려줌) 같은 글
+      const again = (await app.inject({ method: "GET", url: `/api/stocks/000660/analysis/value?requestId=${ID}` })).json() as { content: string };
+      if (on) {
+        expect(res.content).toMatch(/\(문장 검사에서 2줄을 뺐습니다\)$/);
+        expect(res.content).not.toContain("매수");
+      } else {
+        expect(res.content).toContain("지금이 매수 기회로 보입니다.");
+      }
+      expect(state.latest.content).toBe(res.content);
+      expect(state.request).toMatchObject({ status: "completed", result: { content: res.content } });
+      expect(again.content).toBe(res.content);
+      const row = await db.selectFrom("analyses").select("content").executeTakeFirstOrThrow();
+      expect(row.content).toContain("지금이 매수 기회로 보입니다.");
+      await app.close();
+      app = null;
+    }
+  });
+
   it("뺀 줄 수를 서버 기록에 남긴다 ('AI 가치분석 문장 검사' — 새로 만든 글은 0줄이어도, 전에 만든 글은 뺀 줄이 있을 때만)", async () => {
     db = await createMigratedDb(":memory:");
     const lines: string[] = [];
@@ -1074,6 +1235,10 @@ describe("새 글 틀 전부 금지어·미래형 검사", () => {
       twoSidedMidLine([["ROE", 50]]),
       blendRankNote("44.8배", cyclicalWhy({ byIndustry: true, lo: null, hi: null })),
       blendRankZeroNote(cyclicalWhy({ byIndustry: false, lo: -26.7, hi: 31.6 }), false),
+      blendRankNote("278.0배", cyclicalWhy({ byIndustry: false, lo: -26.7, hi: 31.6, steady: "up" })),
+      blendRankNote("12.0배", cyclicalWhy({ byIndustry: false, lo: 5.2, hi: 30.4, steady: "down" })),
+      profitMedianText("A1", "20.2배", "업종", 152, 27, "PER"),
+      profitMedianText("A2", "73.4배", "업종", 64, 47, "기업가치 ÷ 영업이익"),
       ...["A1", "A2"].flatMap((k) => [profitMedianText(k as "A1", "58.6배", "업종", 68, 43), lossClumpSentence(k as "A1", 43, 50), lossClumpSentence(k as "A1", 43, 80), lossClumpSentence(k as "A1", 43, 10)]),
       PRICE_NOTE_BASE,
       PRICE_NOTE_BLEND,

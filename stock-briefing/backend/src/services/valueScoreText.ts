@@ -521,9 +521,15 @@ export const blendRankZeroNote = (why: string, plainLoss: boolean) =>
   `순위에는 최근 4분기 이익과 5년 평균 이익을 반씩 섞은 값을 썼습니다(${why}). 섞은 이익${plainLoss ? "도" : "이"} 0 이하라 0점입니다.`;
 /** 경기 민감 까닭 — 예전 말 (valueWordingFacts 꺼짐) */
 export const CYCLICAL_WHY_OLD = "업황에 따라 이익이 크게 오르내리는 회사라";
-/** [10] 경기 민감 까닭 (valueWordingFacts): 업종 목록이면 업종, 이익률 기준이면 실제 숫자 (팔란티어가 '업황에 따라…'로 읽히던 것) */
-export function cyclicalWhy(c: { byIndustry: boolean; lo: number | null; hi: number | null }): string {
+/**
+ * [10] 경기 민감 까닭 (valueWordingFacts): 업종 목록이면 업종, 이익률 기준이면 실제 숫자 (팔란티어가 '업황에 따라…'로 읽히던 것).
+ * 1단계 검토 4차: 해마다 오르기만(또는 내리기만) 한 회사는 '오르내림'이 아니므로 처음·마지막 해 숫자와 '해마다 올라(내려) 변동 폭이 커서'
+ * (팔란티어 −26.7% → 31.6%). steady: 연간 이익률이 빈 해 없이 3년 이상, 해마다 오르면 up · 해마다 내리면 down
+ */
+export function cyclicalWhy(c: { byIndustry: boolean; lo: number | null; hi: number | null; steady?: "up" | "down" | null }): string {
   if (c.byIndustry || c.lo === null || c.hi === null) return "업황에 따라 이익이 크게 오르내리는 업종이라";
+  if (c.steady === "up") return `최근 5년 영업이익률이 ${signedPct(c.lo)}%에서 ${signedPct(c.hi)}%로 해마다 올라 변동 폭이 커서`;
+  if (c.steady === "down") return `최근 5년 영업이익률이 ${signedPct(c.hi)}%에서 ${signedPct(c.lo)}%로 해마다 내려 변동 폭이 커서`;
   return `최근 5년 영업이익률이 가장 낮은 해 ${signedPct(c.lo)}%, 가장 높은 해 ${signedPct(c.hi)}%로 오르내림이 커서`;
 }
 /** 섞기 안내 (valuePerPlain 꺼짐, valueWordingFacts 켬) */
@@ -532,9 +538,14 @@ const signedPct = (v: number) => `${v < 0 ? "−" : ""}${(Math.round(Math.abs(v)
 
 /** [3] 적자 회사 덩어리 (valueMedianText) — 적자 비율이 이보다 크면 위치 옆에 흑자 회사끼리 위치 */
 export const LOSS_NOTE_SHARE = 0.1;
-export function profitMedianText(k: MetricKey, median: string, lname: string, n: number, lossPct: number): string {
+/**
+ * valueName: 머리 문장의 회사 수(같은 업종(…, 153개 회사))와 이 지표 값이 있는 회사 수(152)가 다를 때 지표 이름 — '비교한 업종 152곳 중' 대신
+ * 'PER 값이 있는 152곳 중'으로 왜 수가 다른지 보인다 (1단계 검토 4차)
+ */
+export function profitMedianText(k: MetricKey, median: string, lname: string, n: number, lossPct: number, valueName?: string | null): string {
   const op = k === "A2";
-  return `${op ? "영업이익 " : ""}흑자 회사 가운데값 ${median} · 비교한 ${lname} ${n.toLocaleString("en-US")}곳 중 ${lossPct}%는 ${op ? "영업적자" : "적자"}`;
+  const who = valueName ? `${valueName} 값이 있는` : `비교한 ${lname}`;
+  return `${op ? "영업이익 " : ""}흑자 회사 가운데값 ${median} · ${who} ${n.toLocaleString("en-US")}곳 중 ${lossPct}%는 ${op ? "영업적자" : "적자"}`;
 }
 export const profitPosText = (base: string, p: number) => `${base} (흑자 회사끼리 ${Math.floor(p + 0.5)})`;
 /**
@@ -621,8 +632,11 @@ export function lossAccrualText(ni: string, ocf: string, ocfNegative: boolean, o
 }
 /** 순손실 회사의 이익의 현금 뒷받침 줄 뜻 (예전 '100에 가까울수록: 이익이 현금으로 잘 뒷받침되는 편' 대신 — 좋은 뜻으로 읽히지 않게) */
 export const LOSS_ACCRUAL_MEANING = "순손실 회사는 100에 가까워도 '이익이 현금으로 잘 뒷받침되는 편'이라는 뜻이 아닙니다.";
-/** [10] 경기 정점 표시 — 업종 목록이 아니라 이익률 오르내림으로 경기 민감이 된 회사(팔란티어)는 '업황에 따라'를 쓰지 않는다 */
-export const CYCLICAL_PEAK_MARGIN = "이익이 최근 몇 년 중 가장 높은 수준입니다. 이익이 크게 오르내리는 회사는 이익이 많을 때 PER이 낮게 보이는 경향이 있습니다.";
+/**
+ * [10] 경기 정점 표시 — 업종 목록이 아니라 이익률 변동으로 경기 민감이 된 회사(팔란티어)는 '업황에 따라'를 쓰지 않는다.
+ * 1단계 검토 4차: 해마다 오르기만 한 회사(팔란티어)에도 맞게 '크게 오르내리는' 대신 '변동 폭이 큰'
+ */
+export const CYCLICAL_PEAK_MARGIN = "이익이 최근 몇 년 중 가장 높은 수준입니다. 이익률 변동 폭이 큰 회사는 이익이 많을 때 PER이 낮게 보이는 경향이 있습니다.";
 export const lossYearsText = (from: string, to: string, n: number, all: boolean) =>
   `${from === to ? `${to}년` : `${from}~${to}년`}${all ? `, 자료가 있는 ${n}년 모두` : ` ${n}년 연속`} 영업손실입니다. 영업손실인 회사는 이 점수 방식으로는 낮게 나오는 것이 보통입니다.`;
 /** 한국 간이: 부채비율이 이 값(%) 이상이면 자본이 아주 작다는 표시 (아시아나항공 5,496%) */
