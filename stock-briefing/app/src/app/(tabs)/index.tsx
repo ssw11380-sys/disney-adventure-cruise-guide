@@ -297,8 +297,9 @@ export default function StocksScreen() {
 
   // 넓은 한 줄 계좌 띠에 국내·해외 수익률까지 넣는 폭인지 (좁은 한 줄 띠는 숫자 기준 점만 — 글 없음)
   const rates = bandRates(tableW, fontScale);
+  // 3-35 (플래그 holdingThemes): 토스 계좌 평가 요약이 계좌 패널을 접어 두므로 요약의 '종목 비중 보기' 옆에도 '내 종목 테마 보기' (꺼지면 지금 그대로)
   // 계정 A단계: 주인 아닌 계정은 맨 위에 '개인 종목 기능은 준비 중' 안내 (주인·플래그 꺼짐이면 없음)
-  const wrapAccount = (content: React.ReactNode) => gated(tossSnapshotOn && !member, true) ? <TossAccountSummary focused={gated(informationFocus, true)} onAllocation={gated(allocationOn && summary.held > 0, openAllocation)}>{content}</TossAccountSummary> : content;
+  const wrapAccount = (content: React.ReactNode) => gated(tossSnapshotOn && !member, true) ? <TossAccountSummary focused={gated(informationFocus, true)} onAllocation={gated(allocationOn && summary.held > 0, openAllocation)} {...(themesOn && summary.held > 0 ? { onThemes: openThemes } : null)}>{content}</TossAccountSummary> : content;
   const header = wide ? (
     <View>
       <MemberNotice />

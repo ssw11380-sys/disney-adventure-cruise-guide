@@ -12,18 +12,19 @@ import { useNow } from "@/lib/useNow";
 import { changeColor, font, fontCap, space, touch, useTheme } from "@/theme";
 
 /** 계좌 대표 금액은 토스 수신 평가만 사용한다. 시세 추정은 별도로 펼쳐 본다. */
-export function TossAccountSummary({ children, onAllocation, focused = false }: { children: React.ReactNode; onAllocation?: () => void; focused?: boolean }) {
+/** onThemes: 내 종목 테마 화면 열기 (3-35, 플래그 holdingThemes) — 없으면 지금 나무 그대로 */
+export function TossAccountSummary({ children, onAllocation, onThemes, focused = false }: { children: React.ReactNode; onAllocation?: () => void; onThemes?: () => void; focused?: boolean }) {
   const { valuation } = useLocalSearchParams<{ valuation?: string }>();
   const q = useTossAccountSnapshot();
   const { afterCost, showKrw } = useSettings();
   const now = useNow(30_000);
   const denied = q.error instanceof ApiRequestError && (q.error.status === 401 || q.error.status === 403);
   return <TossAccountSummaryView body={denied ? undefined : q.data} failed={q.isError} afterCost={afterCost} showKrw={showKrw} now={now}
-    onAllocation={denied ? undefined : onAllocation} focused={focused}
+    onAllocation={denied ? undefined : onAllocation} {...(onThemes && !denied ? { onThemes } : null)} focused={focused}
     requestedView={valuation === "live" || valuation === "account" ? valuation : undefined}>{denied ? null : children}</TossAccountSummaryView>;
 }
 
-export function TossAccountSummaryView({ body, failed, afterCost, showKrw, now, children, requestedView, onAllocation, focused = false }: {
+export function TossAccountSummaryView({ body, failed, afterCost, showKrw, now, children, requestedView, onAllocation, onThemes, focused = false }: {
   body: TossAccountSnapshotBody | undefined;
   failed: boolean;
   afterCost: boolean;
@@ -32,6 +33,8 @@ export function TossAccountSummaryView({ body, failed, afterCost, showKrw, now, 
   children: React.ReactNode;
   requestedView?: "live" | "account";
   onAllocation?: () => void;
+  /** 3-35 (플래그 holdingThemes): '종목 비중 보기' 옆 '내 종목 테마 보기'. 없으면 지금 그대로 */
+  onThemes?: () => void;
   focused?: boolean;
 }) {
   const t = useTheme();
@@ -95,6 +98,7 @@ export function TossAccountSummaryView({ body, failed, afterCost, showKrw, now, 
           <Text style={{ color: t.accent, fontSize: font.small }}>{basisOpen ? "금액·계산 기준 접기" : "금액·계산 기준 보기"}</Text>
         </Pressable> : null}
         {onAllocation ? <Pressable accessibilityRole="button" accessibilityLabel="종목 시세 기준 비중 보기" onPress={onAllocation} style={styles.action}><Text style={{ color: t.accent, fontSize: font.small }}>종목 비중 보기</Text></Pressable> : null}
+        {onThemes ? <Pressable accessibilityRole="button" accessibilityLabel="내 종목 테마 보기" onPress={onThemes} style={styles.action}><Text style={{ color: t.accent, fontSize: font.small }}>내 종목 테마 보기</Text></Pressable> : null}
       </View>
       {basisOpen && snap && amount && valuation ? <View style={[styles.details, { borderColor: t.line }]}>
         <Text style={{ color: t.sub, fontSize: font.small }}>토스 수신 원본 · {afterCost ? "수수료·세금 차감 후" : "수수료·세금 차감 전"}</Text>
@@ -152,6 +156,9 @@ export function TossAccountSummaryView({ body, failed, afterCost, showKrw, now, 
           </> : null}
           {onAllocation ? <Pressable accessibilityRole="button" accessibilityLabel="종목 시세 기준 비중 보기" onPress={onAllocation} style={styles.action}>
             <Text style={{ color: t.accent, fontSize: font.small }}>종목 비중 보기 · 시세 기준</Text>
+          </Pressable> : null}
+          {onThemes ? <Pressable accessibilityRole="button" accessibilityLabel="내 종목 테마 보기" onPress={onThemes} style={styles.action}>
+            <Text style={{ color: t.accent, fontSize: font.small }}>내 종목 테마 보기</Text>
           </Pressable> : null}
         </View>
       {children ? <View style={{ borderTopColor: t.line, borderTopWidth: StyleSheet.hairlineWidth }}>
