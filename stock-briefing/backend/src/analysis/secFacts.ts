@@ -314,6 +314,14 @@ export class FactBook {
     return ttmFrom(s, E, key === "dividends" || key === "dps");
   }
 
+  /**
+   * 흐름 항목의 최근 4분기 값이 덮는 날 수 (직전 연간 + 올해 누적 − 작년 같은 기간 누적일 때: 직전 연간 끝 − 작년 누적 끝 + 올해 누적 날 수).
+   * E 가 연간이면 null (그 연간 값 그대로), 만들 수 없으면 null
+   */
+  flowWindow(key: FlowKey, asOf: string, E: string): number | null {
+    return ttmWindow(pickSeries(this.c.flows[key], asOf, E), E);
+  }
+
   /** 최근 1년(기간 끝이 E 앞 400일 안) 사이 배당(지급액·주당 배당) 기록이 있는지 — 0 보다 큰 값만 */
   dividendSeen(asOf: string, E: string): boolean {
     const from = addDays(E, -400);
@@ -385,6 +393,15 @@ export class FactBook {
     const etYa = this.instant("equityTotal", asOf, ya, 12);
     if (etYa !== null && balYearAgo.equity === undefined) balYearAgo.equity = etYa - (this.instant("nci", asOf, ya, 12) ?? 0);
     const shares = this.sharesAt(asOf, E);
+    // 52/53주 회계연도의 배당 창 (긴급 고침 2026-09-29, KO): 최근 4분기를 '직전 연간 + 올해 누적 − 작년 같은 기간 누적'으로 만들면 분기 끝이 해마다
+    // 며칠씩 움직이는 회사는 창이 365일이 아니다(KO: 작년 1분기 끝 3/28 ↔ 올해 4/3 → 371일). 배당은 날짜에 몰려 지급되므로 창 끝 가까이 있는
+    // 지급일(KO 4월 1일)이 두 번 들어가 5번 지급으로 셌다(배당수익률 2.9% ↔ 남 2.36~2.41%). 창이 365 ± 3일이 아니고 현금 배당이 주당배당 × 주식 수와
+    // 15% 넘게 다르면 주당배당 × 주식 수를 쓴다 (주당배당은 선언한 분기에 잡혀 지급일에 흔들리지 않는다 — KO 2.06달러, SEC 원본으로 확인)
+    const win = this.flowWindow("dividends", asOf, E);
+    if (win !== null && Math.abs(win - 365) > DIV_WINDOW_TOLERANCE_DAYS && flow.dividends !== undefined && flow.dps !== undefined && shares !== null && shares > 0) {
+      const alt = flow.dps * shares;
+      if (alt > 0 && Math.abs(flow.dividends / alt - 1) > DIV_WINDOW_MISMATCH) flow.dividends = alt;
+    }
     const divKnown = flow.dividends !== undefined || (flow.dps !== undefined && shares !== null);
     const divUnknown = !divKnown && this.dividendSeen(asOf, E);
     // 배당 삭감 표시는 최근 6개 회계연도 + 그 앞 한 해(첫 쌍의 앞앞 해)를 본다
@@ -473,6 +490,28 @@ export function normalizeInputs(inp: ValueInputs): ValueInputs {
   }
   if (f.revenue === undefined && f.nii !== undefined && f.nonii !== undefined) f.revenue = f.nii + f.nonii;
   return { ...inp, bal: b, flow: f };
+}
+
+/** 배당 창이 365일에서 이만큼(일) 넘게 벗어나면 52/53주 회계연도 창으로 본다 (윤년 366·52주 364 는 안) */
+export const DIV_WINDOW_TOLERANCE_DAYS = 3;
+/** 그 창에서 현금 배당이 주당배당 × 주식 수와 이 비율보다 크게 다르면 주당배당 × 주식 수를 쓴다 */
+export const DIV_WINDOW_MISMATCH = 0.15;
+
+/** ttmFrom 이 '직전 연간 + 올해 누적 − 작년 같은 기간 누적'으로 만든 창의 날 수 (연간 값이면 null, 만들 수 없으면 null) */
+function ttmWindow(s: Map<string, Point>, E: string): number | null {
+  const at = [...s.values()].filter((p) => p.end === E && p.start);
+  if (at.find(isFY)) return null;
+  const ytd = at
+    .filter((p) => ["Q", "H", "9M"].includes(spanKind(p.start, p.end)))
+    .sort((a, b) => daysBetween(b.start!, b.end) - daysBetween(a.start!, a.end))[0];
+  if (!ytd) return null;
+  const S = ytd.start!;
+  const fyPrev = [...s.values()].find((p) => isFY(p) && Math.abs(daysBetween(p.end, addDays(S, -1))) <= 7);
+  const len = daysBetween(ytd.start!, ytd.end);
+  const prevEnd = addDays(E, -365);
+  const ytdPrev = [...s.values()].find((p) => p.start && Math.abs(daysBetween(p.end, prevEnd)) <= 12 && Math.abs(daysBetween(p.start, p.end) - len) <= 12);
+  if (!fyPrev || !ytdPrev) return null;
+  return daysBetween(ytdPrev.end, fyPrev.end) + daysBetween(ytd.start!, E) + 1;
 }
 
 /**

@@ -18,7 +18,7 @@ import { weeklyValueChange } from "../src/services/valueScoreService.js";
 import { gapText, howLinesV2, TIE_NOTE, VALUE_STATUS_TEXT } from "../src/services/valueScoreText.js";
 import { benchOf, candlesOf, tossInfo } from "./fixtures/indicatorScores/load.js";
 import { dailyOf, fakeValueSources, monthlyOf, referenceData } from "./fixtures/valueScores/load.js";
-import { fakeProviders } from "./helpers.js";
+import { fakeProviders, valueStage1 } from "./helpers.js";
 
 /**
  * 가치 지표 점수 2단계 (3-44, 플래그 indicatorScores + valueScore): GET /api/scores/:code 의 가치·종합, 재무 받기(백그라운드·장 마감 뒤),
@@ -93,7 +93,8 @@ async function start(opts: { score?: ReturnType<typeof scoreSources>; value?: Re
   const score = opts.score ?? scoreSources();
   const value = opts.value ?? fakeValueSources({ alias: { ZZGAP: "RGTI", ZZREIT: "MSFT" } });
   app = await buildApp({ config: loadConfig({ DATABASE_URL: ":memory:" }), db, providers: fakeProviders({ scoreSources: score.src, valueSources: value.src }), logger: false, enableScheduler: false, now: () => clock });
-  if (opts.flags) await app.inject({ method: "PUT", url: "/api/admin/features", payload: opts.flags });
+  // 이 파일은 2·3단계 글을 본다 — 가치 점수 개선 1단계 글 플래그는 끈 채 (끄면 지금과 같음을 함께 확인). 새 글은 valueImprove1.test.ts
+  await app.inject({ method: "PUT", url: "/api/admin/features", payload: { ...valueStage1(false), ...(opts.flags ?? {}) } });
   if (opts.reference !== null) await app.valueScores.saveReference(opts.reference ?? referenceData());
   for (const c of opts.facts ?? []) await app.valueScores.refreshFacts(c);
   value.calls.facts.length = 0;

@@ -10,7 +10,7 @@ import type { StockService } from "./stockService.js";
 import { isKrTradingDate, isUsTradingDate } from "./marketContext.js";
 import { benchmarkOf } from "./marketSummaryCalc.js";
 import { ValueScoreService, type ValueBlock, type ValueEval } from "./valueScoreService.js";
-import { gapText, howLinesV2, VALUE_DETAIL_NOTE } from "./valueScoreText.js";
+import { COMPOSITE_GAP_HIDE, COMPOSITE_GAP_NOTE_V2, compositeFormulaText, gapHideText, gapText, gapTextV2, howLinesV2, VALUE_DETAIL_NOTE } from "./valueScoreText.js";
 import {
   BAND_LINE,
   basisSentence,
@@ -183,7 +183,18 @@ export interface ScoresResponse {
   value: ValueBlock;
   trend: TrendBlock;
   /** 종합 = 화면에 보이는 두 정수의 평균 (두 점수가 모두 있고 가격 기준일이 같을 때만). |V − T| ≥ 30 이면 차이 안내 */
-  composite: { status: "ok" | "none"; score: number | null; reason: "valueMissing" | "trendMissing" | "bothMissing" | "dateMismatch" | null; text: string; gap: number | null; gapNote: boolean; gapText: string | null };
+  composite: {
+    status: "ok" | "none";
+    score: number | null;
+    /** gapWide = 두 점수 차이가 30점을 넘어 평균을 보이지 않음 (가치 점수 개선 1단계 [4] compositeGapHide) */
+    reason: "valueMissing" | "trendMissing" | "bothMissing" | "dateMismatch" | "gapWide" | null;
+    text: string;
+    gap: number | null;
+    gapNote: boolean;
+    gapText: string | null;
+    /** 식 '= (51 + 80) ÷ 2' (compositeFormula 일 때만) */
+    formula?: string;
+  };
   text: { titleNote: string; notForecast: string; how: string[]; disclaimerShort: string; detailNote: string; trendAbout: string; valueAbout: string; valueDetailNote: string };
   computedAt: string;
 }
@@ -382,15 +393,20 @@ export class IndicatorScoreService {
       ? await this.deps.value!.evaluate({
           code,
           name: stock.name,
+          groupCode: stock.groupCode ?? null,
           etf,
           product: facts as ValueEvalProduct,
           candles: trend.candles,
           monthly: () => (this.deps.sources.monthly ? this.deps.sources.monthly(code, MONTHLY_CANDLES) : Promise.resolve(null)),
           scoreDate,
           splitHold: trend.block.status === "hold",
+          // 한국 우선주 이유 글: 같은 회사 보통주 점수가 실제로 나오는지 볼 때만 부른다 (가치 점수 개선 1단계 [9])
+          candlesOf: async (c) => (await this.fetchCut(c, ctx))?.candles ?? null,
         })
       : { block: ValueScoreService.stage1Block(etf), stored: null, fetchFailure: false, waiting: false };
-    const composite = compositeOf(v.block, trend.block, priceDate);
+    // 종합 (가치 점수 개선 1단계 [4]): 식 · 차이 안내 25점부터(compositeFormula) · 30점 넘으면 숫자 대신 문장(compositeGapHide)
+    const compOpts = { formula: await this.deps.features.enabled("compositeFormula").catch(() => false), gapHide: await this.deps.features.enabled("compositeGapHide").catch(() => false) };
+    const composite = compositeOf(v.block, trend.block, priceDate, compOpts);
     const krOn = valueOn && (await this.deps.value!.krEnabled());
     const line = priceDate ? `${priceDateLine(priceDate, market)}${v.block.asOf.fiscalShort ? ` · ${v.block.asOf.fiscalShort}` : ""}` : null;
     const resp: ScoresResponse = {
@@ -401,7 +417,7 @@ export class IndicatorScoreService {
       value: v.block,
       trend: trend.block,
       composite,
-      text: { titleNote: CARD_TITLE_NOTE, notForecast: NOT_FORECAST, how: valueOn ? howLinesV2(krOn) : howLines(), disclaimerShort: DISCLAIMER_SHORT, detailNote: DETAIL_NOTE, trendAbout: TREND_ABOUT, valueAbout: v.block.about, valueDetailNote: VALUE_DETAIL_NOTE },
+      text: { titleNote: CARD_TITLE_NOTE, notForecast: NOT_FORECAST, how: valueOn ? howLinesV2(krOn, { gapHide: compOpts.gapHide }) : howLines(), disclaimerShort: DISCLAIMER_SHORT, detailNote: DETAIL_NOTE, trendAbout: TREND_ABOUT, valueAbout: v.block.about, valueDetailNote: VALUE_DETAIL_NOTE },
       computedAt: seoulIso(this.now()),
     };
     if (v.waiting || v.fetchFailure) valueWaits.set(resp, v);
@@ -751,7 +767,12 @@ export function weeklyChange(r: TrendShown, prevR: TrendShown): TrendBlock["chan
  * 가치가 ok·partial 이고 추세가 본인 봉으로 ok 이며 두 가격 기준일이 같을 때만. 없는 점수를 0점·50점으로 채우지 않는다.
  * 레버리지(기초자산 참고)는 추세 점수가 '있는' 쪽으로 보아 '가치 지표 점수가 없어'를 쓴다 (1단계와 같음)
  */
-export function compositeOf(value: Pick<ValueBlock, "status" | "score" | "asOf">, trend: Pick<TrendBlock, "status" | "score" | "reason">, priceDate: string | null): ScoresResponse["composite"] {
+export function compositeOf(
+  value: Pick<ValueBlock, "status" | "score" | "asOf">,
+  trend: Pick<TrendBlock, "status" | "score" | "reason">,
+  priceDate: string | null,
+  opts: { formula?: boolean; gapHide?: boolean } = {},
+): ScoresResponse["composite"] {
   const vOk = (value.status === "ok" || value.status === "partial") && value.score !== null;
   const tOk = trend.status === "ok" && trend.score !== null;
   const trendPresent = tOk || trend.reason?.code === "leveraged";
@@ -763,8 +784,20 @@ export function compositeOf(value: Pick<ValueBlock, "status" | "score" | "asOf">
   const V = value.score!;
   const T = trend.score!;
   const gap = Math.abs(V - T);
-  const gapNote = gap >= COMPOSITE_GAP_NOTE;
-  return { status: "ok", score: Math.floor((V + T) / 2 + 0.5), reason: null, text: "두 점수의 평균", gap, gapNote, gapText: gapNote ? gapText(gap) : null };
+  // 가치 점수 개선 1단계 [4] compositeGapHide: 두 점수 차이가 30점을 넘으면 평균 숫자 대신 까닭 (예전 앱도 '없음 · 까닭'으로 그린다)
+  if (opts.gapHide && gap > COMPOSITE_GAP_HIDE) return { status: "none", score: null, reason: "gapWide", text: `없음 · ${gapHideText(gap)}`, gap, gapNote: false, gapText: null };
+  // compositeFormula: 식을 함께 주고 차이 안내는 25점부터, 명령형('함께 보세요')을 뺀 글
+  const gapNote = gap >= (opts.formula ? COMPOSITE_GAP_NOTE_V2 : COMPOSITE_GAP_NOTE);
+  return {
+    status: "ok",
+    score: Math.floor((V + T) / 2 + 0.5),
+    reason: null,
+    text: "두 점수의 평균",
+    gap,
+    gapNote,
+    gapText: gapNote ? (opts.formula ? gapTextV2(gap) : gapText(gap)) : null,
+    ...(opts.formula ? { formula: compositeFormulaText(V, T) } : {}),
+  };
 }
 
 /** 하루 기록에 남길 입력·결과 (재현·확인용 — 봉 자체는 남기지 않고 원값·묶음·항목 점수만) */

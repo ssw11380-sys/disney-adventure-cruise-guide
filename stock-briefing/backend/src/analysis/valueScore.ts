@@ -377,11 +377,66 @@ export class PeerBook {
 
   /** 업종 회사 수 (금융·일반 경로 안, 값과 상관없이). 대상 종목 자신(selfCik)은 세지 않는다 — 비교하는 회사 수만 ('69개 회사'라 하고 68곳과 비교하던 것, 검토 지적) */
   groupSize(path: ValuePath, level: PeerLevel, name: string | null, selfCik: string | null = null): number {
+    return this.groupPeers(path, level, name, selfCik).length;
+  }
+
+  /** 업종 자리 무리의 비교 회사 줄 (금융·일반 경로 안, 대상 종목 자신은 뺌) — 글(가치 점수 개선 1단계 [5] 큰 은행 가운데값 등)에만 쓴다 */
+  groupPeers(path: ValuePath, level: PeerLevel, name: string | null, selfCik: string | null = null): PeerRow[] {
     const fin = path === "financial" ? 1 : 0;
     const secIdx = level === "sector" && name !== null ? this.ref.sectors.indexOf(name) : -1;
     const indIdx = level === "industry" && name !== null ? this.ref.industries.indexOf(name) : -1;
-    return this.ref.peers.filter((p) => p.f === fin && p.c !== selfCik && (level === "market" || (level === "sector" ? p.s === secIdx : p.i === indIdx))).length;
+    return this.ref.peers.filter((p) => p.f === fin && p.c !== selfCik && (level === "market" || (level === "sector" ? p.s === secIdx : p.i === indIdx)));
   }
+
+  /** 비교 회사 한 줄의 지표 값 (순위용 값 — 없으면 null) */
+  peerValue(p: PeerRow, key: MetricKey): number | null {
+    const i = this.order.indexOf(key);
+    return i < 0 ? null : decodeX(p.x[i]);
+  }
+}
+
+/**
+ * 적자 회사 덩어리 (가치 점수 개선 1단계 [3], 글만 — 점수는 그대로): PER·기업가치 ÷ 영업이익은 적자 회사가 모두 맨 아래(0점 규칙)에 모여,
+ * 흑자 회사의 위치가 적자 비율만큼 올라가고(43% 적자면 흑자 회사 가운데쯤이 71) 전체 가운데값이 '100배 넘음'이 된다.
+ * 흑자 회사(순위용 값 > 0 — 순현금 맨 위 규칙 포함)끼리 가운데값·위치를 따로 계산해 글로 보인다
+ */
+export interface LossClump {
+  /** 업종 자리 비교 회사(대상 종목 자신은 뺌) 가운데 적자(순위용 값 ≤ 0, 0점 규칙 포함) 비율 0~1 */
+  share: number;
+  /** 흑자 회사 가운데값 (순위용 값, 대상 종목 자신은 뺌). 흑자 회사가 없으면 null */
+  median: number | null;
+  /** 흑자 회사끼리 위치 (대상 종목이 흑자일 때만 — 자기 지난 5년 위치는 그대로) */
+  pos: Partial<Record<CompareKey, number>>;
+  /** 흑자 회사끼리 위치를 같은 비중으로 섞은 값 (대상 종목이 흑자일 때만) */
+  score: number | null;
+}
+
+/** 정렬 배열에서 값 하나(self)를 뺀 새 배열 (없으면 그대로) */
+function withoutOnce(sorted: readonly number[], self: number | null): number[] {
+  const out = [...sorted];
+  if (self === null) return out;
+  const i = out.indexOf(self);
+  if (i >= 0) out.splice(i, 1);
+  return out;
+}
+
+export function lossClump(x: number, ind: readonly number[], mkt: readonly number[], self: number | null, mix: Partial<Record<CompareKey, number>>, own: number | undefined): LossClump {
+  const peers = withoutOnce(ind, self);
+  const profitInd = peers.filter((v) => v > 0);
+  const share = peers.length ? (peers.length - profitInd.length) / peers.length : 0;
+  const pos: Partial<Record<CompareKey, number>> = {};
+  let score: number | null = null;
+  if (x > 0) {
+    const pi = percentile(x, profitInd);
+    if (pi !== null) pos.industry = pi;
+    const pm = percentile(x, withoutOnce(mkt, self).filter((v) => v > 0));
+    if (pm !== null) pos.market = pm;
+    if (own !== undefined) pos.own = own;
+    const used = (Object.keys(mix) as CompareKey[]).filter((k) => pos[k] !== undefined);
+    const w = used.reduce((a, k) => a + mix[k]!, 0);
+    score = w > 0 ? used.reduce((a, k) => a + mix[k]! * pos[k]!, 0) / w : null;
+  }
+  return { share, median: medianOf(profitInd), pos, score };
 }
 
 /** 층 표의 열쇠: '부문|업종' (이름 — 번호는 주마다 바뀐다) */
@@ -466,6 +521,8 @@ export interface MetricScore {
   peer: { level: PeerLevel; name: string | null; n: number; median: number | null; tie: number; tieX: number | null } | null;
   /** 자기 지난 5년 비교에 쓴 월말 수 */
   ownN: number;
+  /** PER·기업가치 ÷ 영업이익의 적자 회사 덩어리 (글만 — 가치 점수 개선 1단계 [3]). 점수에는 쓰지 않는다 */
+  loss?: LossClump;
 }
 export interface FamilyScore {
   key: ValueFamilyKey;
@@ -542,6 +599,8 @@ export function scoreValue(inp: ScoreInput): ValueScoreResult {
       }
       const n = ind.sorted.length - (self !== null && ind.sorted.includes(self) ? 1 : 0);
       const tie = PeerBook.tie(ind.sorted);
+      // 적자 회사 덩어리 (글만): 0점 규칙 회사는 흑자 회사끼리 위치를 계산하지 않는다 (위치 0 그대로)
+      const loss = key === "A1" || key === "A2" ? lossClump(mv.rule === "zeroLoss" ? -Infinity : mv.x, ind.sorted, mkt.sorted, self, mix, pos.own) : undefined;
       return {
         ...base,
         score,
@@ -549,6 +608,7 @@ export function scoreValue(inp: ScoreInput): ValueScoreResult {
         mix: usedMix,
         peer: { level: ind.level, name: ind.name, n, median: medianOf(ind.sorted), tie: tie?.share ?? 0, tieX: tie?.x ?? null },
         ownN: fk === "price" ? own.length : 0,
+        ...(loss ? { loss } : {}),
       };
     });
     const defined = metrics.filter((m) => m.adopted);
@@ -576,7 +636,9 @@ export function scoreValue(inp: ScoreInput): ValueScoreResult {
 
 export type ValueFlagKey =
   | "cyclicalPeak" | "cyclicalTrough" | "valueTrap" | "oneOff" | "sbcHeavy" | "smallEquity" | "negativeEquity" | "capitalImpairment"
-  | "earlyStage" | "payoutOver100" | "dividendCut" | "peerFallback" | "financial" | "carriedForward";
+  | "earlyStage" | "payoutOver100" | "dividendCut" | "peerFallback" | "financial" | "carriedForward"
+  // 한국 간이: 자본이 아주 작음 (가치 점수 개선 1단계 [10] — 글만, valueFlags 는 내지 않고 한국 카드가 붙인다)
+  | "thinEquity";
 
 export function valueFlags(r: ValueScoreResult, aux: MetricAux, ctx: { cyclical: boolean; thresholds: ValueThresholds; metrics: MetricSet }): ValueFlagKey[] {
   const out: ValueFlagKey[] = [];

@@ -1,7 +1,7 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import React, { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { useIndicatorScores } from "@/api/hooks";
+import { useFeature, useIndicatorScores } from "@/api/hooks";
 import type { IndicatorScores, TrendScoreBlock, ValueScoreBlock } from "@/api/types";
 import { Badge, Button, Card, Muted } from "@/components/ui";
 import { compositeLine, familyLabel, familySpeech, flagPreview, moreFlagsText, nameWidth, reasonOnly, SCORE_LABELS, stackRows, summarySpeech, trendHasScore, trendSpeech, valueHasScore, valueSpeech } from "@/lib/scoreView";
@@ -47,6 +47,8 @@ export function IndicatorSummaryCard({
   const t = useTheme();
   const q = useIndicatorScores(code, true);
   const [open, setOpen] = useState(false);
+  // 가치 점수 개선 1단계 [4] (플래그 compositeFormula — 앱 fallback 꺼짐): 종합 숫자를 두 점수보다 작게(20 → 16)·식을 옆에. 끄면 지금 모양 그대로
+  const formulaOn = useFeature("compositeFormula", false);
   if (q.data === null) return null; // 꺼짐·예전 서버·모르는 종목
   if (!q.data) {
     return (
@@ -66,10 +68,11 @@ export function IndicatorSummaryCard({
   const s = q.data;
   const trend = s.trend;
   const ref = trend.reference;
-  const comp = compositeLine(s);
+  const comp = compositeLine(s, formulaOn);
+  const small = formulaOn && !!comp.formula;
   return (
     <Frame flat={flat}>
-      <View accessible accessibilityLabel={summarySpeech(s)} style={styles.gapSm}>
+      <View accessible accessibilityLabel={summarySpeech(s, formulaOn)} style={styles.gapSm}>
         <Head note={s.text.titleNote} />
         <View style={twoCol ? styles.twoCol : styles.gapMd}>
           <View style={twoCol ? styles.col : null}>
@@ -84,10 +87,11 @@ export function IndicatorSummaryCard({
           <View style={styles.composite}>
             <Text style={[styles.name, { color: t.sub }]}>{SCORE_LABELS.composite}</Text>
             {comp.score !== null ? (
-              <Text style={[styles.num, { color: t.ink }]}>{comp.score}</Text>
+              <Text style={[styles.num, { color: t.ink }, small ? styles.numSmall : null]}>{comp.score}</Text>
             ) : (
               <Text style={{ color: t.sub, fontSize: font.body, fontWeight: "700" }}>{comp.label}</Text>
             )}
+            {small ? <Text style={[styles.formula, { color: t.sub }]}>{comp.formula}</Text> : null}
             {comp.reason ? <Muted style={styles.shrink}>{comp.reason}</Muted> : null}
           </View>
           {comp.gapText ? <Text style={{ color: t.sub, fontSize: font.small, lineHeight: font.small * 1.45 }}>{comp.gapText}</Text> : null}
@@ -327,6 +331,9 @@ const styles = StyleSheet.create({
   row: { flexDirection: "row", alignItems: "center", gap: space.sm },
   name: { minWidth: scores.nameW, fontSize: font.body, fontWeight: "700" },
   num: { minWidth: scores.numW, textAlign: "right", fontSize: font.title, fontWeight: "800", fontVariant: ["tabular-nums"] },
+  // 종합 숫자는 두 점수보다 한 단계 작게 (설계 '아래에 작게' — 가치 점수 개선 1단계 [4])
+  numSmall: { fontSize: font.h2 },
+  formula: { fontSize: font.small, fontVariant: ["tabular-nums"] },
   band: { minWidth: scores.bandW, fontSize: font.body },
   badges: { flexDirection: "row", flexWrap: "wrap", gap: space.s },
   refRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.s },
