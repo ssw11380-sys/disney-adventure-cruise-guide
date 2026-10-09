@@ -3,7 +3,7 @@ import { StyleSheet, Text, View } from "react-native";
 import type { Currency } from "@/api/types";
 import { Button } from "@/components/ui";
 import { sentence, speakAmount, speakProfit, speakRate } from "@/lib/a11y";
-import { bandBasisFit, bandJournalFits, type BandCellText } from "@/lib/basisFit";
+import { bandActionWidth, bandBasisFit, bandJournalFits, type BandCellText } from "@/lib/basisFit";
 import { formatPct, formatPrice, formatQuote, shownSign } from "@/lib/format";
 import type { Bucket as Totals } from "@/lib/portfolio";
 import { changeColor, font, fontCap, layout, space, useFontScale, useTheme } from "@/theme";
@@ -115,14 +115,27 @@ const bandTotalLabel = (d: AccountData) => `총 평가금액${d.total ? "" : " (
 const bandSplitLabel = (d: AccountData, l: AccountLine) => (l.label === "해외" && d.fx ? `해외 · 환율 ${d.fx.toLocaleString("ko-KR", { maximumFractionDigits: 2 })}` : l.label);
 
 /**
- * 넓은 계좌 띠에 매매일지 아이콘(3-37)이 들어가는지 — AccountBand 가 그리는 것과 같은 판단. 거짓이면 잔고 화면이 보유 표 머리에 아이콘을 둔다
- * (폴드 세로 704 × 큰 글씨 + 숫자 기준 점이면 띠에는 자리가 없다 — 그래도 잔고 탭에서 열 수 있게). fontScale 은 useFontScale 과 같은 정리된 배율
+ * 띠 오른쪽 버튼 자리 (3-35 비중·테마 두 버튼): 큰 글씨(130% 이상)의 줄바꿈 띠는 위아래로 쌓고(stack), 옆으로 둘 때는 둘째 버튼 폭만큼(extraW) 좁은 띠로 어림한다.
+ * AccountBand 와 잔고 화면(bandJournalShown)이 같은 값을 쓴다. 테마 버튼이 없으면 지금 그대로 (extraW 0 · action = 비중 버튼 유무)
  */
-export function bandJournalShown(o: { data: AccountData; oneLine: boolean; dense: boolean; pad: number; width: number; fontScale: number; action: boolean; basis: boolean }): boolean {
+function bandActions(o: { oneLine: boolean; fontScale: number; allocation: boolean; themes: boolean }): { stack: boolean; extraW: number; action: boolean } {
+  const two = o.themes && o.allocation;
+  const stack = two && !o.oneLine && o.fontScale >= STACK_ACTIONS_SCALE;
+  return { stack, extraW: two && !stack ? bandActionWidth(o.fontScale) - space.sm + space.md : 0, action: o.allocation || o.themes };
+}
+
+/**
+ * 넓은 계좌 띠에 매매일지 아이콘(3-37)이 들어가는지 — AccountBand 가 그리는 것과 같은 판단. 거짓이면 잔고 화면이 보유 표 머리에 아이콘을 둔다
+ * (폴드 세로 704 × 큰 글씨 + 숫자 기준 점이면 띠에는 자리가 없다 — 그래도 잔고 탭에서 열 수 있게). fontScale 은 useFontScale 과 같은 정리된 배율.
+ * action: '비중' 버튼 유무, themes: '테마' 버튼 유무 (3-35 — 두 버튼이 옆으로 서면 그만큼 좁은 띠로 어림)
+ */
+export function bandJournalShown(o: { data: AccountData; oneLine: boolean; dense: boolean; pad: number; width: number; fontScale: number; action: boolean; themes?: boolean; basis: boolean }): boolean {
   if (o.oneLine) return true;
+  const acts = bandActions({ oneLine: o.oneLine, fontScale: o.fontScale, allocation: o.action, themes: !!o.themes });
+  const width = o.width - acts.extraW;
   const cells = bandFitCells(o.data, o.dense);
-  const mark = o.basis ? (bandBasisFit({ width: o.width, pad: o.pad, fontScale: o.fontScale, action: o.action, cells }).dotOnly ? "dot" : "text") : null;
-  return bandJournalFits({ width: o.width, pad: o.pad, fontScale: o.fontScale, cells, action: o.action, mark });
+  const mark = o.basis ? (bandBasisFit({ width, pad: o.pad, fontScale: o.fontScale, action: acts.action, cells }).dotOnly ? "dot" : "text") : null;
+  return bandJournalFits({ width, pad: o.pad, fontScale: o.fontScale, cells, action: acts.action, mark });
 }
 
 /**
@@ -140,12 +153,16 @@ export function bandJournalShown(o: { data: AccountData; oneLine: boolean; dense
  *  끄고도 칸이 다음 줄로 넘어가는 띠는 켜도 그대로 줄바꿈 (글자를 줄이지 않는다 — 3-39 규칙).
  *  좁은 한 줄 띠(rates 거짓)는 늘 점만. width 는 띠 폭(표 폭) — 배치를 어림하는 데만 쓴다
  */
+/** 이 글자 배율부터 비중·테마 두 버튼을 위아래로 쌓는다 (줄바꿈 띠 — 704×933·200% 에서 '매입금액' 칸이 셋째 줄로 밀리지 않게) */
+export const STACK_ACTIONS_SCALE = 1.3;
+
 export function AccountBand({
   data,
   oneLine,
   rates = true,
   pad,
   onAllocation,
+  onThemes,
   journal,
   dense = false,
   basis,
@@ -156,8 +173,10 @@ export function AccountBand({
   rates?: boolean;
   pad: number;
   onAllocation?: () => void;
+  /** 내 종목 테마 화면 열기 (3-35, 플래그 holdingThemes). 없으면 지금 나무 그대로 */
+  onThemes?: () => void;
   /**
-   * 매매일지 아이콘 (3-37, 기능 플래그 tradeJournal · tradeRecords): '비중' 뒤 44×44. 한 줄 띠는 늘, 두 줄 띠·촘촘 띠는 칸 묶음이 아이콘과 한 줄에 들 때만
+   * 매매일지 아이콘 (3-37, 기능 플래그 tradeJournal · tradeRecords): '비중'(·'테마') 뒤 44×44. 한 줄 띠는 늘, 두 줄 띠·촘촘 띠는 칸 묶음이 아이콘과 한 줄에 들 때만
    * (bandJournalShown — 띠 줄 수가 켜기 전과 같게. 들지 않으면 잔고 화면이 보유 표 머리에 둔다). 없으면 지금 그대로
    */
   journal?: React.ReactNode;
@@ -196,11 +215,15 @@ export function AccountBand({
       : null;
   // 숫자 기준 점 배치 (3-32 '큰 글씨면 점만'): 점과 같은 줄의 칸 글(두 줄 띠는 둘째 줄, 촘촘은 첫 줄)로 어림한다.
   // 한 줄 띠는 칸이 다음 줄로 넘어가지 않고 글자가 줄어드는 띠라 지금처럼 rates 로만 (좁은 한 줄 띠는 점만)
-  const fit = basis && !oneLine ? bandBasisFit({ width: width ?? 0, pad, fontScale, action: !!onAllocation, cells: bandFitCells(data, dense) }) : null;
+  // 3-35 비중·테마 두 버튼: 큰 글씨(130% 이상)의 줄바꿈 띠는 위아래로 쌓는다 — 옆으로 두면 칸 자리가 버튼 하나만큼 줄어 '매입금액'이 셋째 줄로 밀린다.
+  // 옆으로 둘 때는 둘째 버튼 폭만큼 좁은 띠로 어림한다 (테마 버튼이 없으면 지금 그대로 — bandActions, 매매일지 아이콘 판단과 같은 값)
+  const acts = bandActions({ oneLine, fontScale, allocation: !!onAllocation, themes: !!onThemes });
+  const stackActions = acts.stack;
+  const fit = basis && !oneLine ? bandBasisFit({ width: (width ?? 0) - acts.extraW, pad, fontScale, action: acts.action, cells: bandFitCells(data, dense) }) : null;
   const mark = basis ? basis(oneLine ? !rates : fit!.dotOnly) : null;
   // 매매일지 아이콘 (3-37): 점과 같은 줄의 칸 글로 어림 — 두 줄 띠는 둘째 줄, 촘촘은 첫 줄 (잔고 화면의 보유 표 머리 판단과 같은 함수)
   const journalIcon =
-    journal && bandJournalShown({ data, oneLine, dense, pad, width: width ?? 0, fontScale, action: !!onAllocation, basis: !!basis }) ? (
+    journal && bandJournalShown({ data, oneLine, dense, pad, width: width ?? 0, fontScale, action: !!onAllocation, themes: !!onThemes, basis: !!basis }) ? (
       <View style={styles.journal}>
         {journal}
       </View>
@@ -209,7 +232,13 @@ export function AccountBand({
   // 끄고도 다음 줄로 넘어가는 칸(큰 글씨·좁은 폭·큰 금액)은 그대로 줄바꿈. 점이 없으면 지금 그대로
   const wrap = fit?.noWrap ? null : styles.wrap;
   const label = accountSpeech(data);
-  const button = onAllocation ? (
+  const button = onThemes ? (
+    // 3-35: 비중 오른쪽에 테마 (버튼 사이 12), 큰 글씨의 줄바꿈 띠는 위아래 (사이 12)
+    <View style={[styles.action, stackActions ? styles.actionsStack : styles.actions]}>
+      {onAllocation ? <Button title="비중" icon="pie-chart-outline" variant="secondary" compact accessibilityLabel="비중 보기" onPress={onAllocation} /> : null}
+      <Button title="테마" icon="pricetags-outline" variant="secondary" compact accessibilityLabel="내 종목 테마 보기" onPress={onThemes} />
+    </View>
+  ) : onAllocation ? (
     <View style={styles.action}>
       <Button title="비중" icon="pie-chart-outline" variant="secondary" compact accessibilityLabel="비중 보기" onPress={onAllocation} />
     </View>
@@ -318,6 +347,9 @@ const styles = StyleSheet.create({
   cell: { flexGrow: 1, flexShrink: 1, flexBasis: "auto", justifyContent: "center", gap: space.xxs, paddingVertical: space.xs, paddingRight: space.sm },
   value: { fontVariant: ["tabular-nums"] },
   action: { paddingLeft: space.sm },
+  // 3-35 비중·테마 두 버튼 (누르는 칸 44 가 겹치지 않게 사이 12)
+  actions: { flexDirection: "row", columnGap: space.md },
+  actionsStack: { flexDirection: "column", rowGap: space.md, alignItems: "stretch" },
   // 매매일지 아이콘 (3-37): '비중' 버튼과 같은 앞 간격
   journal: { paddingLeft: space.xs },
   notes: { paddingBottom: space.s, gap: space.xxs },

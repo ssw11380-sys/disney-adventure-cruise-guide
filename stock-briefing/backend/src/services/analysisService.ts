@@ -1,9 +1,12 @@
 import type { Db } from "../db/index.js";
-import { NotFoundError } from "../lib/errors.js";
+import { AppError, NotFoundError } from "../lib/errors.js";
 import { seoulDate, seoulDateOf, seoulIso } from "../lib/time.js";
-import type { TextGenerator } from "../llm/generator.js";
+import type { GenerateRequest, TextGenerator } from "../llm/generator.js";
 import { renderTemplate, type PromptName, type PromptStore } from "../llm/prompts.js";
 import type { AnalysisSnapshot, DataCollector } from "./collector.js";
+import { verifyReport, type ReportVerification } from "./reportVerification.js";
+import { ReportTiming, type ReportLog } from "./reportTiming.js";
+import { checkpointGenerator, GenerationJobs, type GenerationContext } from "./generationJobs.js";
 
 export type AnalysisKind = "company" | "value" | "technical";
 
@@ -29,7 +32,21 @@ export interface Analysis {
   model: string;
   createdAt: string;
   cached: boolean;
+  verification?: ReportVerification;
 }
+
+export interface AnalysisRequestState {
+  id: string;
+  status: "pending" | "completed" | "failed" | "unknown";
+  result: Analysis | null;
+}
+
+interface TrackedAnalysisRequest extends AnalysisRequestState {
+  promise: Promise<Analysis>;
+  settledAt: number | null;
+}
+const REQUEST_LIMIT = 256;
+const REQUEST_TTL_MS = 30 * 60_000;
 
 export interface AnalysisServiceDeps {
   db: Db;
@@ -39,70 +56,153 @@ export interface AnalysisServiceDeps {
   /** 등록 종목·종목 마스터에 없을 때 이름·시장 찾기 (StockService.preview: 외부 검색으로 대신 찾는다 — 신규 상장 등). 모르면 null */
   lookup?: (code: string) => Promise<{ code: string; name: string; market: string } | null>;
   now?: () => Date;
+  log?: ReportLog;
+  jobs?: GenerationJobs;
 }
 
 /** 종목 상세 탭(회사 소개 / 가치투자 / 기술적 분석) 생성 + 캐시 */
 export class AnalysisService {
   private readonly now: () => Date;
   private readonly inflight = new Map<string, Promise<Analysis>>();
+  private readonly requests = new Map<string, TrackedAnalysisRequest>();
+  private readonly activeGets = new Set<Promise<Analysis>>();
+  private shuttingDown = false;
+  private readonly jobs: GenerationJobs;
+  private readonly generator: TextGenerator;
 
   constructor(private readonly deps: AnalysisServiceDeps) {
     this.now = deps.now ?? (() => new Date());
+    this.jobs = deps.jobs ?? new GenerationJobs(deps.db, { recordNow: this.now });
+    this.generator = checkpointGenerator(deps.generator);
   }
 
-  async get(code: string, kind: AnalysisKind, opts: { refresh?: boolean } = {}): Promise<Analysis> {
-    if (!opts.refresh) {
-      const cached = await this.latest(code, kind);
-      if (cached && this.now().getTime() - Date.parse(cached.createdAt) < TTL_MS[kind]) return { ...cached, cached: true };
+  async get(code: string, kind: AnalysisKind, opts: { refresh?: boolean; requestKey?: string } = {}): Promise<Analysis> {
+    if (this.shuttingDown) throw new AppError(503, "SERVER_CLOSING", "서버가 재시작 중입니다. 잠시 뒤 다시 시도해 주세요.");
+    const work = this.getActive(code, kind, opts);
+    this.activeGets.add(work);
+    try {
+      return await work;
+    } finally {
+      this.activeGets.delete(work);
     }
+  }
+
+  /** 연결이 끊겨도 시작한 조회·생성·저장은 DB 정리 전에 끝낸다. */
+  async shutdown(): Promise<void> {
+    this.shuttingDown = true;
+    await Promise.allSettled(this.activeGets);
+  }
+
+  private async getActive(code: string, kind: AnalysisKind, opts: { refresh?: boolean; requestKey?: string }): Promise<Analysis> {
     const key = `${code}:${kind}`;
+    if (opts.requestKey) {
+      const previous = await this.jobs.request<Analysis>(opts.requestKey);
+      if (previous.status === "completed" && previous.result) return previous.result;
+      if (previous.status === "failed") throw new AppError(409, "GENERATION_INTERRUPTED", "이전 생성이 중단됐습니다. 다시 만들기로 새로 요청해 주세요.");
+    }
+    const active = this.inflight.has(key) || (!!opts.requestKey && await this.jobs.running(`analysis:${key}`));
+    if (!opts.refresh && !active) {
+      const cached = await this.latest(code, kind);
+      if (cached && this.now().getTime() - Date.parse(cached.createdAt) < TTL_MS[kind]) {
+        const result = { ...cached, cached: true };
+        if (opts.requestKey) await this.jobs.completeRequest(opts.requestKey, `analysis:${key}`, result);
+        return result;
+      }
+    }
     const existing = this.inflight.get(key);
-    if (existing) return existing;
-    const p = this.generate(code, kind).finally(() => this.inflight.delete(key));
+    if (existing && !opts.requestKey) return existing;
+    const p = this.jobs.run<Analysis>(`analysis:${key}`, { ...(opts.requestKey ? { requestKey: opts.requestKey } : {}), retryUncertain: opts.refresh === true }, (context) => this.generate(code, kind, context))
+      .finally(() => { if (this.inflight.get(key) === p) this.inflight.delete(key); });
     this.inflight.set(key, p);
     return p;
   }
 
-  private async generate(code: string, kind: AnalysisKind): Promise<Analysis> {
-    const stock =
-      (await this.deps.db.selectFrom("registered_stocks").select(["code", "name", "market"]).where("code", "=", code).executeTakeFirst()) ??
-      (await this.deps.db.selectFrom("listed_stocks").select(["code", "name", "market"]).where("code", "=", code).executeTakeFirst()) ??
-      // 마스터를 받은 뒤 상장한 종목도 상세 화면·뉴스 탭처럼 찾는다 (코드가 정확히 같은 종목만)
-      (await this.lookup(code));
-    if (!stock) throw new NotFoundError(`종목 ${code} 을 찾을 수 없습니다`);
-
-    const snapshot = await this.deps.collector.collectAnalysis(stock, kind);
-    const prompt = await this.deps.prompts.load(PROMPT_FOR[kind]);
-    const result = await this.deps.generator.generate({
-      system: prompt.system,
-      user: renderTemplate(prompt.userTemplate, {
-        stock_name: stock.name,
-        stock_code: stock.code,
-        date: seoulDate(this.now()),
-        missing_list: snapshot.missing.length ? snapshot.missing.join(", ") : "없음",
-        notes_list: snapshot.notes?.length ? snapshot.notes.join(" / ") : "없음",
-        market_state: snapshot.marketState?.label ?? "확인 안 됨",
-        data_json: JSON.stringify(snapshotForPrompt(snapshot, kind), null, 1),
-      }),
-      maxTokens: 4096,
-      effort: kind === "technical" ? "medium" : "high",
-      label: `${PROMPT_FOR[kind]}:${code}`,
+  /** 생성 요청을 즉시 시작한다. 같은 요청은 재생성하지 않고, 진행 중인 같은 종목 분석에도 합류한다. */
+  getTracked(code: string, kind: AnalysisKind, requestId: string, opts: { refresh?: boolean } = {}): Promise<Analysis> {
+    this.pruneRequests();
+    const key = `${code}:${kind}:${requestId}`;
+    const existing = this.requests.get(key);
+    if (existing) return existing.promise;
+    // 진행 중이거나 아직 회수할 수 있는 기록을 지우면 같은 요청이 AI를 다시 부를 수 있다.
+    if (this.requests.size >= REQUEST_LIMIT) throw new AppError(429, "ANALYSIS_TRACKING_BUSY", "분석 결과 확인 요청이 많습니다. 잠시 뒤 다시 시도해 주세요.");
+    // 다른 화면이 갱신 중이면 유효한 예전 캐시보다 그 진행 결과를 먼저 기다린다.
+    const work = this.get(code, kind, { ...opts, requestKey: key });
+    const tracked: TrackedAnalysisRequest = { id: requestId, status: "pending", result: null, settledAt: null, promise: work };
+    tracked.promise = work.then((result) => {
+      tracked.status = "completed";
+      tracked.result = result;
+      tracked.settledAt = this.now().getTime();
+      return result;
+    }, (error: unknown) => {
+      tracked.status = "failed";
+      tracked.settledAt = this.now().getTime();
+      throw error;
     });
-    const createdAt = seoulIso(this.now());
-    const inserted = await this.deps.db
-      .insertInto("analyses")
-      .values({
-        code,
-        kind,
-        content: result.text,
-        data_snapshot: JSON.stringify(snapshot),
-        missing_data: JSON.stringify(snapshot.missing),
-        model: result.model,
-        created_at: createdAt,
-      })
-      .returning("id")
-      .executeTakeFirstOrThrow();
-    return { id: inserted.id, code, kind, content: result.text, missing: snapshot.missing, model: result.model, createdAt, cached: false };
+    this.requests.set(key, tracked);
+    return tracked.promise;
+  }
+
+  private pruneRequests(): void {
+    const now = this.now().getTime();
+    for (const [key, request] of this.requests) {
+      if (request.settledAt !== null && now - request.settledAt >= REQUEST_TTL_MS) this.requests.delete(key);
+    }
+  }
+
+  private async generate(code: string, kind: AnalysisKind, context: GenerationContext): Promise<Analysis> {
+    const timing = new ReportTiming({ report: "분석", kind }, this.deps.log);
+    let success = false;
+    try {
+      const stock = await context.step("stock", async () =>
+        (await this.deps.db.selectFrom("registered_stocks").select(["code", "name", "market"]).where("code", "=", code).executeTakeFirst()) ??
+        (await this.deps.db.selectFrom("listed_stocks").select(["code", "name", "market"]).where("code", "=", code).executeTakeFirst()) ??
+        // 마스터를 받은 뒤 상장한 종목도 상세 화면·뉴스 탭처럼 찾는다 (코드가 정확히 같은 종목만)
+        (await this.lookup(code)));
+      if (!stock) throw new NotFoundError(`종목 ${code} 을 찾을 수 없습니다`);
+
+      const snapshot = await context.step("snapshot", () => this.deps.collector.collectAnalysis(stock, kind));
+      timing.next("프롬프트");
+      const prompt = await this.deps.prompts.load(PROMPT_FOR[kind]);
+      const request: GenerateRequest = await context.step("request", async () => ({
+        system: prompt.system,
+        user: renderTemplate(prompt.userTemplate, {
+          stock_name: stock.name,
+          stock_code: stock.code,
+          date: seoulDate(this.now()),
+          missing_list: snapshot.missing.length ? snapshot.missing.join(", ") : "없음",
+          notes_list: snapshot.notes?.length ? snapshot.notes.join(" / ") : "없음",
+          market_state: snapshot.marketState?.label ?? "확인 안 됨",
+          data_json: JSON.stringify(snapshotForPrompt(snapshot, kind), null, 1),
+        }),
+        maxTokens: 4096,
+        effort: kind === "technical" ? "medium" : "high",
+        label: `${PROMPT_FOR[kind]}:${code}`,
+      }));
+      timing.next("모델 생성");
+      const result = await this.generator.generate(request);
+      timing.next("저장");
+      const createdAt = await context.step("createdAt", async () => seoulIso(this.now()));
+      const analysis = await context.commit(async (db) => {
+      const inserted = await db
+        .insertInto("analyses")
+        .values({
+          code,
+          kind,
+          content: result.text,
+          data_snapshot: JSON.stringify(snapshot),
+          missing_data: JSON.stringify(snapshot.missing),
+          model: result.model,
+          created_at: createdAt,
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow();
+      return { id: inserted.id, code, kind, content: result.text, missing: snapshot.missing, model: result.model, createdAt, cached: false, verification: verifyReport(result.text, snapshot) } satisfies Analysis;
+      });
+      success = true;
+      return analysis;
+    } finally {
+      timing.finish(success);
+    }
   }
 
   private async lookup(code: string): Promise<{ code: string; name: string; market: string } | null> {
@@ -117,6 +217,7 @@ export class AnalysisService {
       .where("code", "=", code)
       .where("kind", "=", kind)
       .orderBy("created_at", "desc")
+      .orderBy("id", "desc")
       .limit(1)
       .executeTakeFirst();
     if (!r) return null;
@@ -126,7 +227,24 @@ export class AnalysisService {
     } catch {
       /* ignore */
     }
-    return { id: r.id, code: r.code, kind: r.kind as AnalysisKind, content: r.content, missing, model: r.model, createdAt: r.created_at, cached: true };
+    let snapshot: unknown = null;
+    try { snapshot = JSON.parse(r.data_snapshot); } catch { /* 예전 본문은 보존하고 자료 확인 불가로 표시한다. */ }
+    return { id: r.id, code: r.code, kind: r.kind as AnalysisKind, content: r.content, missing, model: r.model, createdAt: r.created_at, cached: true, verification: verifyReport(r.content, snapshot) };
+  }
+
+  /** 저장된 결과와 이 서버의 진행 여부만 확인한다. 자료 수집·AI 생성은 시작하지 않는다. */
+  async state(code: string, kind: AnalysisKind, requestId?: string): Promise<{ latest: Analysis | null; running: boolean; request?: AnalysisRequestState }> {
+    const latest = await this.latest(code, kind);
+    const running = this.inflight.has(`${code}:${kind}`) || await this.jobs.running(`analysis:${code}:${kind}`);
+    if (requestId === undefined) return { latest, running };
+    this.pruneRequests();
+    const tracked = this.requests.get(`${code}:${kind}:${requestId}`);
+    return {
+      latest, running,
+      request: tracked
+        ? { id: requestId, status: tracked.status, result: tracked.result }
+        : { id: requestId, ...await this.jobs.request<Analysis>(`${code}:${kind}:${requestId}`) },
+    };
   }
 }
 

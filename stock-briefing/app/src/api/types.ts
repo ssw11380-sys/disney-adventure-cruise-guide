@@ -1,4 +1,5 @@
 /** 백엔드 응답 타입 (backend/src/domain, services 와 맞춘다) */
+import type { AccountUser } from "@/lib/session";
 
 export type Market = "KOSPI" | "KOSDAQ" | "NASDAQ" | "NYSE" | "AMEX" | "US" | "UNKNOWN";
 export type Currency = "KRW" | "USD";
@@ -68,6 +69,8 @@ export interface Quote {
   asOf: string;
   source: string;
   afterMarket?: AfterMarketQuote | null;
+  /** 실제 보강한 재무 숫자의 원 수신 시각. 예전 서버는 없을 수 있다. */
+  fundamentalsBasis?: { receivedAt: string | null; refreshFailed: boolean; source: string | null; fields: string[] };
   priceBasis?: string; // "KRX+NXT 통합" | "KRX 정규장" | "정규장"
   priceKrw?: number | null; // 미국 종목 원화 환산
   /** 실시간 체결로 스냅샷과 다른 가격을 덮어쓴 현재가 (예전 서버의 초록 점 기준 — 새 서버면 realtime·session 을 쓴다, lib/liveDot) */
@@ -102,7 +105,7 @@ export interface TossOpenApiStatus {
     idleIntervalMin: number;
     running: boolean;
     lastRunAt: string | null;
-    lastTrigger: "startup" | "schedule" | "briefing" | "manual" | null;
+    lastTrigger: "startup" | "schedule" | "briefing" | "manual" | "order" | "view" | null;
     lastError: string | null;
     lastChanges: { added: number; updated: number; removed: number; holdings: number } | null;
     nextRunAt: string | null;
@@ -125,6 +128,10 @@ export interface TossImportResult {
   unchanged: string[];
   /** 전량 매도로 관심 종목으로 바뀐 종목 (구버전 서버에는 없음) */
   removed?: string[];
+  /** 사용자가 삭제하여 계좌 동기화에서 제외한 종목. holdings에는 계속 포함된다. */
+  excluded?: string[];
+  /** 일부 계좌 응답을 확인하지 못해 수량·평단 반영을 보류한 종목. */
+  deferred?: string[];
   holdings: { code: string; name: string; currency: Currency; quantity: number; avgPrice: number | null; lastPrice: number | null; market: string }[];
 }
 
@@ -207,6 +214,7 @@ export interface Briefing {
 }
 
 export interface BriefingWithData extends Briefing {
+  verification?: ReportVerification;
   data: {
     quote: Quote | null;
     technical: Record<string, unknown> | null;
@@ -295,8 +303,138 @@ export interface AccountData {
   usPreviousDay?: boolean;
   /** 쉰 미국 정규장의 뉴욕 날짜 (usPreviousDay 일 때만). 브리핑 날짜의 전날이 아니면(금요일 휴장 다음 월요일) '12/25(금) 미국 휴장'. 예전 서버에는 없음 → '지난밤' */
   usHolidayDate?: string;
+  /** 브리핑 3차 3 (플래그 accountSinceLast): 보유 종목별 수량·원화 평가. 꺼짐·예전 기록에는 없음 */
+  positions?: AccountPosition[];
+  /** 브리핑 3차 3 (플래그 accountSinceLast): 지난 같은 세션 브리핑과 비교. 켜졌는데 비교할 브리핑이 없으면 null, 꺼짐·예전 기록에는 칸이 없음 */
+  sinceLast?: AccountSinceLast | null;
+  /** 브리핑 3차 4 (플래그 accountExposure): 비중 한 줄. 켜졌는데 값이 있는 종목이 없으면 null, 꺼짐·예전 기록에는 칸이 없음 */
+  exposure?: AccountExposure | null;
+  /** 브리핑 3차 5 (플래그 holdingEvents): 다가오는 일정. 꺼짐·예전 기록에는 칸이 없음 */
+  events?: AccountEvents;
   /** 합계에 넣은 종목 시세의 기준 (3-32, 서버 numberBasis 를 켠 뒤 만든 브리핑만). 예전 기록·플래그 끔은 없음 */
   quoteBasis?: QuoteBasis;
+  /** 내 종목 테마 (3-35, 서버 holdingThemes 를 켠 뒤 만든 브리핑만 — 그때 값 그대로). 예전 기록·플래그 끔·8초 넘음은 없음 */
+  holdingThemes?: HoldingThemesSnapshot;
+}
+
+/** 브리핑 3차 5: 다가오는 일정 한 줄 (서버 accountNumbers.AccountEventItem 과 같은 모양) */
+export interface AccountEventItem {
+  code: string;
+  name: string;
+  /** exDividend = 배당락일, earnings = 실적 발표 (예정) */
+  kind: "exDividend" | "earnings";
+  /** YYYY-MM-DD. 배당락일은 그 시장 날짜(미국 종목은 미국 날짜 — usDate), 실적은 한국 날짜 */
+  date: string;
+  /** 실적 발표 한국 시각 'HH:MM' (미국 실적만) */
+  kstTime?: string;
+  /** 토스가 보인 시각 글 '오전 5시 이후' (미국 실적만) */
+  timeText?: string;
+  /** 주당 배당금 (배당락일, 발표된 값이 있을 때만) */
+  amount?: number;
+  currency?: Currency;
+  /** date 가 미국 날짜인지 */
+  usDate: boolean;
+  source: "toss" | "naver" | "toss+naver";
+}
+
+/** 브리핑 3차 5: 다가오는 일정 (서버 accountNumbers.AccountEvents 와 같은 모양) */
+export interface AccountEvents {
+  /** 기준 시각 = 계좌 브리핑 asOf */
+  asOf: string;
+  /** 브리핑 날짜부터 며칠 안 (30) */
+  days: number;
+  items: AccountEventItem[];
+  /** 실적 발표일을 넣었는지 (그때 플래그 holdingEarnings) */
+  earnings: boolean;
+  /** 배당 일정을 받지 못한 보유 종목 */
+  failed: { code: string; name: string }[];
+  /** 실적 발표일을 받지 못함 */
+  earningsFailed: boolean;
+  /** 토스·네이버 배당락일이 달라 뺀 종목 */
+  conflicts: { code: string; name: string }[];
+  /** 일정을 찾아본 보유 종목 수 (시장별) */
+  kr: number;
+  us: number;
+  /** 그 주 첫 오전 브리핑이면 이번 주 일정, 아니면 null */
+  week: AccountEventItem[] | null;
+}
+
+/** 브리핑 3차 4: 비중 한 줄의 레버리지·인버스 종목 (값이 큰 순). L = 배수의 크기(인버스도 양수), 모르면 null. weight = 비중(%) */
+export interface AccountExposureItem {
+  code: string;
+  name: string;
+  kind: "leveraged" | "inverse";
+  L: number | null;
+  weight: number;
+}
+
+/**
+ * 브리핑 3차 4: 비중 한 줄 (서버 accountNumbers.AccountExposure 와 같은 모양). 비중 = 보유 종목 원화 평가금액(비용 차감) ÷ 합계 × 100, 소수 한 자리 —
+ * 여럿의 합은 원 값을 더한 뒤 반올림. 현금 제외
+ */
+export interface AccountExposure {
+  /** 기준 시각 = 계좌 브리핑 asOf */
+  asOf: string;
+  /** 비중 분모에 넣은 종목 수 */
+  count: number;
+  top1: { code: string; name: string; weight: number };
+  /** 4종목 이상일 때만 */
+  top3: { weight: number } | null;
+  /** uncounted = 합계에서 뺀 레버리지·인버스 종목 (비중 모름, 서버가 늘 채움 — 없는 기록은 빈 목록으로 봄) */
+  levInv: { weight: number; items: AccountExposureItem[]; uncounted?: Omit<AccountExposureItem, "weight">[] };
+  /** 미국 상장(달러) 종목 합과 그 수 (합계에 넣은 것). uncounted = 합계에서 뺀 미국 종목 수 (없는 기록은 0 으로 봄) */
+  us: { weight: number; count: number; uncounted?: number };
+  /** 시세·환율이 없어 합계에서 뺀 보유 종목 수 */
+  excluded: number;
+  /** 토스 상품 정보를 받지 못해 이름 규칙으로 가린 종목 수 */
+  guessedByName: number;
+}
+
+/** 브리핑 3차 3: 계좌 브리핑이 저장한 보유 종목 한 줄 (서버 accountNumbers.AccountPosition 과 같은 모양) */
+export interface AccountPosition {
+  code: string;
+  name: string;
+  currency: Currency;
+  quantity: number;
+  /** 원화 평가금액(원). 시세가 없어 합계에서 뺀 종목은 null */
+  value: number | null;
+  cost: number | null;
+}
+
+/** 수량이 바뀐 종목 한 줄 (새 종목은 from 0, 없어진 종목은 to 0) */
+export interface AccountQtyChange {
+  code: string;
+  name: string;
+  from: number;
+  to: number;
+}
+
+/** 비중(%, 소수 한 자리) 변화 한 줄. change = to − from */
+export interface AccountWeightChange {
+  code: string;
+  name: string;
+  from: number;
+  to: number;
+  change: number;
+}
+
+/** 브리핑 3차 3: 지난 같은 세션 계좌 브리핑과 비교 (서버 accountNumbers.AccountSinceLast 와 같은 모양) */
+export interface AccountSinceLast {
+  prev: { id: number; date: string; session: BriefingSession; asOf: string };
+  value: { from: number; to: number; change: number; rate: number | null };
+  profit: { from: number; to: number; change: number };
+  /** 지난 브리핑에 종목별 값이 없으면(배포 첫날) null */
+  positions: { added: AccountQtyChange[]; removed: AccountQtyChange[]; increased: AccountQtyChange[]; decreased: AccountQtyChange[] } | null;
+  weights: AccountWeightChange[] | null;
+  excludedNow: { code: string; name: string }[];
+  excludedPrev: { code: string; name: string }[];
+  /**
+   * 금액·비중 비교 범위 (서버 accountNumbers.AccountSinceLast.scope): all = 두 합계 그대로, common = 한쪽 합계에서만 빠진 종목(oneSide)을 양쪽에서 빼고,
+   * mixed = 종목별 값이 없어 뺄 수 없음(합계에서 뺀 종목이 두 브리핑에서 다름). 칸이 없으면 all
+   */
+  scope?: "all" | "common" | "mixed";
+  /** 한쪽 브리핑 합계에서만 빠진 종목. side = 값이 없던 브리핑, why = 시세(price)·환율(fx)을 받지 못함. 칸이 없으면 없음 */
+  oneSide?: { code: string; name: string; side: "prev" | "now"; why: "price" | "fx" }[];
 }
 
 export interface AccountHeadline {
@@ -312,6 +450,11 @@ export interface AccountHeadline {
   usPreviousDay?: boolean;
   /** 쉰 미국 정규장의 뉴욕 날짜 (usPreviousDay 일 때만 옴) */
   usHolidayDate?: string;
+  /** 브리핑 3차 3 (플래그 accountSinceLast): 지난 같은 세션 브리핑과 비교 한 줄 — 날짜·세션·총 평가 변화·수량 바뀐 종목 수(모르면 null)·
+   *  금액 비교에서 뺀 종목 수 leftOut(한쪽 브리핑 합계에서만 빠진 종목, 있을 때만). 비교가 저장된 브리핑만 오고, 합계에서 뺀 종목이 달라 금액을 맞추지 못한 브리핑은 안 옴 */
+  since?: { date: string; session: BriefingSession; change: number; qtyChanged: number | null; leftOut?: number };
+  /** 브리핑 3차 5 (플래그 holdingEvents): 이번 주 보유 종목 일정 — 그 주 첫 오전 계좌 브리핑이고 일정이 있을 때만 옴 (날짜 순 전부) */
+  week?: { code: string; name: string; kind: "exDividend" | "earnings"; date: string }[];
 }
 
 export interface AccountBriefing {
@@ -527,7 +670,17 @@ export interface LastBriefingRun {
 
 export type AnalysisKind = "company" | "value" | "technical";
 
+/** 원자료 시세와 직접 대조한 명시적 주장. 본문 전체 사실성 검증을 뜻하지 않는다. */
+export interface ReportVerification {
+  scope: "quote_claims";
+  quoteAsOf: string | null;
+  quoteSource: string | null;
+  checkedClaims: number;
+  issues: { field: "price" | "changeRate"; reported: string; expected: string }[];
+}
+
 export interface Analysis {
+  verification?: ReportVerification;
   id: number;
   code: string;
   kind: AnalysisKind;
@@ -536,6 +689,21 @@ export interface Analysis {
   model: string;
   createdAt: string;
   cached: boolean;
+}
+
+/** 저장된 본문과 실행 상태만 읽는다. 새 분석을 만들지 않는다. */
+export interface AnalysisState {
+  latest: Analysis | null;
+  running: boolean;
+  /** 요청 ID를 보낸 경우에만 제공. 예전 서버에는 없다. */
+  request?: AnalysisRequestState;
+}
+
+export interface AnalysisRequestState {
+  id: string;
+  status: "pending" | "completed" | "failed" | "unknown";
+  /** 완료된 해당 요청의 결과. 다른 요청이 저장한 최신 결과와 구별한다. */
+  result: Analysis | null;
 }
 
 export interface NewsItem {
@@ -570,6 +738,11 @@ export interface Health {
   sources?: Record<string, string>;
   /** 토큰이 없거나 틀려 상세를 뺀 응답 */
   limited?: boolean;
+  /**
+   * 계정 A단계 서버: 토큰은 맞지만 주인 세션이 아니라(주인 아닌 계정·로그인 전) 공유 칸만 준 응답 — 서버 시각·출처 구성·모델 설정만.
+   * limited 가 아니다 (연결은 정상). 주인 데이터(토스 계좌·알림 기기·브리핑 상태·매매 기록)는 없다
+   */
+  viewer?: "shared";
   schedule: { timezone: string; running: boolean; jobs: { session: BriefingSession; cron: string; nextRun: string | null }[] } | null;
   devices?: number;
   authRequired?: boolean;
@@ -771,6 +944,19 @@ export interface FeatureFlags {
   updatedAt: string | null;
 }
 
+/** 계정 A단계 (플래그 accounts): 로그인·가입 응답. token 은 이 응답에 한 번만 온다 */
+export interface AuthResult {
+  token: string;
+  user: AccountUser;
+  session: { id: number; remember: boolean; expiresAt: string };
+}
+
+/** GET /api/auth/me */
+export interface AuthMe {
+  user: AccountUser;
+  session: { id: number; remember: boolean; expiresAt: string };
+}
+
 /**
  * GET /api/scores/:code — 지표 점수 (3-44, 플래그 indicatorScores). 서버 services/indicatorScoreService 의 ScoresResponse 와 같은 모양.
  * 모든 문장은 서버가 만든다(금지어 검사를 서버 한 곳에서) — 앱은 배치만 하고, 앱에 고정된 글은 줄 이름·버튼뿐이다.
@@ -925,6 +1111,52 @@ export interface IndicatorScores {
   computedAt: string;
 }
 
+/** 수급 탭 기간 (3-33) — 장이 열린 날 수 */
+export type FlowPeriod = 5 | 20 | 60;
+/** 순매수 합계 (산 주식 수 − 판 주식 수). 값이 모두 없으면 null */
+export interface FlowSum {
+  individual: number | null;
+  foreign: number | null;
+  institution: number | null;
+  otherCorp: number | null;
+  days: number;
+  missing: number;
+}
+export interface FlowDay {
+  date: string;
+  individual: number | null;
+  foreign: number | null;
+  institution: number | null;
+  otherCorp: number | null;
+  foreignRatio: number | null;
+  close: number | null;
+}
+/** 종목 상세 '수급' 탭 (3-33, 플래그 flowTab — 서버 GET /api/investor-flow/:code, 칸은 더하기만) */
+export type InvestorFlow =
+  | { code: string; supported: false; reason: string }
+  | {
+      code: string;
+      supported: true;
+      source: "toss-web" | "naver";
+      basis: "KRX+NXT" | "KRX";
+      asOf: string;
+      fetchedAt: string;
+      stale: boolean;
+      today: { date: string; updatedAt: string | null; individual: number | null; foreign: number | null; institution: number | null } | null;
+      days: FlowDay[];
+      sums: Record<"5" | "20" | "60", FlowSum>;
+      ratio: {
+        now: number;
+        date: string;
+        ago: Record<"5" | "20" | "60", { value: number; date: string; change: number } | null>;
+        series: [string, number][];
+        high: number;
+        low: number;
+      } | null;
+      limit: { limitPct: number; usedPct: number } | null;
+      check: { at: string; days: number; same: number } | null;
+    };
+
 /** 가격 알림 조건 종류 (3-29, 플래그 priceAlerts) — 서버 services/priceAlertService 와 같은 글자 */
 export type PriceAlertKind = "priceAbove" | "priceBelow" | "rateUp" | "rateDown" | "volume";
 
@@ -967,6 +1199,79 @@ export interface VolumeStatus {
   reason: string | null;
 }
 
+/** 브리핑 3차 2 (플래그 briefingStatus): 실패 브리핑 오류 글의 쉬운 종류 (서버 services/briefingStatus.failureKind 와 같은 표) */
+export type BriefingFailureKind = "busy" | "outage" | "setup" | "cutoff" | "other";
+/** 안내 이유: 오류 종류 + 서버가 도중에 다시 켜져 줄이 없는 종목 */
+export type BriefingReasonKind = BriefingFailureKind | "restart";
+
+/** 못 만든 종목 하나 */
+export interface BriefingStatusProblem {
+  code: string;
+  name: string;
+  /** 누르면 열 브리핑 (실패 브리핑, 줄이 없으면 같은 회차의 가장 최근 브리핑). 없으면 누를 수 없음 */
+  briefingId: number | null;
+  kind: BriefingReasonKind;
+  /** 이번 회차 줄이 아예 없음 */
+  missing: boolean;
+}
+
+/** 브리핑 늦음·실패 안내 (서버 GET /api/briefings/status — 플래그가 꺼져 있거나 예전 서버면 404) */
+export interface BriefingStatus {
+  /** 시작부터 표시하는 현재 실행. 없는 필드는 예전 서버·기능 꺼짐, null은 실행 없음. */
+  activeRun?: BriefingActiveRun | null;
+  session: BriefingSession | null;
+  date: string;
+  scheduledAt: string | null;
+  state: "ok" | "late" | "partial" | "allFailed" | "slow" | "missed" | "llmOff" | "none";
+  /** 완료가 예약 + 20분 뒤 */
+  late: boolean;
+  startedAt: string | null;
+  finishedAt: string | null;
+  total: number;
+  done: number;
+  problems: BriefingStatusProblem[];
+  reasonKind: BriefingReasonKind | null;
+  nextRunAt: string | null;
+  /** 자동으로 한 번 더 만드는 시각 — 지금 서버는 늘 null */
+  retryAt: string | null;
+  /** 상세의 '이 종목 다시 만들기'가 있는지 (플래그 briefingManualRun) */
+  manualRun: boolean;
+}
+
+export interface BriefingActiveRun {
+  session: BriefingSession;
+  date: string;
+  trigger: "schedule" | "manual";
+  partial: boolean;
+  startedAt: string;
+  total: number;
+  /** 성공·실패·건너뜀을 포함해 처리가 끝난 수 */
+  done: number;
+}
+
+/** 토스 계좌 API가 준 통화별 주식 평가금액. 현금·예수금은 포함하지 않는다. */
+export interface TossAccountSnapshot {
+  source: "toss-openapi";
+  scope: "all-toss-stock-holdings";
+  excludesCash: true;
+  includesExcludedHoldings: true;
+  receivedFrom: string;
+  receivedAt: string;
+  accountCount: number;
+  holdingCount: number;
+  excludedHoldingCount: number;
+  gross: { krw: number; usd: number };
+  net: { krw: number; usd: number };
+  /** 같은 동기화에서 확보한 원화 매입금액. 예전 서버·미확보 기록에는 없다. */
+  costBasis?: { krw: number; estimatedHoldingCount: number; holdingCount: number; source: "synced-holdings-cost-book" } | null;
+  displayFx: { usdKrw: number; receivedAt: string; source: "app-display-fx"; kind: "reference" } | null;
+}
+export interface TossAccountSnapshotBody {
+  on: boolean;
+  snapshot: TossAccountSnapshot | null;
+  sync: { enabled: boolean; intervalMin: number; idleIntervalMin: number; lastRunAt: string | null; nextRunAt: string | null; lastError: string | null } | null;
+}
+
 /** 잔고 '숫자 기준' 배지 (3-32, 플래그 numberBasis — 서버 GET /api/admin/toss/reconcile/badge 와 같은 모양) */
 export interface ReconcileBadgeBody {
   /** numberBasis·tossReconcile 이 켜져 있고 토스 연동이 있을 때만 true */
@@ -989,6 +1294,152 @@ export interface MarketQuoteBasis {
 export interface QuoteBasis {
   kr: MarketQuoteBasis | null;
   us: MarketQuoteBasis | null;
+}
+
+/** 새 공시 알림 (3-38, 플래그 filingAlerts — 서버 services/filingAlerts FilingItem 과 같은 모양): 보유 미국 종목의 SEC 공시 한 줄 */
+export interface FilingAlertItem {
+  /** 접수 번호 "0001193125-26-323632" (알림 '본 것' 기록의 열쇠) */
+  accession: string;
+  /** 대표 코드 (같은 회사를 여러 종목으로 가지면 등록 순 첫 종목) */
+  code: string;
+  /** 그 회사(CIK)의 보유 코드 전부 (GOOGL·GOOG) — 종목별 알림 끄기를 모두로 판단 (3-38 리뷰 3). 예전 서버는 없음 → code 하나 */
+  codes?: string[];
+  name: string;
+  /** "8-K" · "8-K/A" · "10-Q" … */
+  form: string;
+  /** 8-K 항목 번호 ["2.02","9.01"] */
+  items: string[];
+  /** 서버가 서식·항목 번호를 우리말로 옮긴 제목 '실적 발표(8-K 2.02)' */
+  title: string;
+  /** SEC 접수 시각 UTC (모르면 null — 날짜만) */
+  acceptedAt: string | null;
+  /** 접수 시각의 한국 벽시계 'YYYY-MM-DDTHH:MM' (서버가 만든다) */
+  kst: string | null;
+  /** 접수 시각의 미국 동부 벽시계 */
+  et: string | null;
+  filingDate: string;
+  /** 서버가 처음 본 때 UTC */
+  firstSeenAt: string;
+  /** SEC 원문 (https, 주 문서) */
+  url: string;
+}
+
+/** '일정·공시' 화면의 공시 줄: 펼친 내용 · 새 공시 여부 */
+export interface ScheduleFilingItem extends FilingAlertItem {
+  /** 들어 있는 항목 '2.02 실적 발표 — …' (8-K 만) */
+  detail: string[];
+  /** 한 줄 설명 (8-K 외 서식 · 6-K · 정정) */
+  note: string | null;
+  /** 서버가 처음 본 뒤 24시간 안이고 기준 잡기 줄이 아님 */
+  isNew: boolean;
+}
+
+/** '일정·공시' 화면의 최근 공시 칸 (filingAlerts 가 켜져 있을 때) */
+export interface ScheduleFilings {
+  items: ScheduleFilingItem[];
+  /** 서버가 주지 않고 넘긴 줄 수 (60줄 밖) */
+  more: number;
+  /** 확인하는 보유 미국 종목 수 */
+  watched: number;
+  notCovered: { code: string; name: string; reason: "etf" | "notFound" }[];
+  /** 마지막 확인이 실패한 종목 */
+  failed: { code: string; name: string }[];
+  /** 아직 한 번도 확인하지 않은 종목 (새로 산 종목 등) */
+  pending: { code: string; name: string }[];
+  /** 확인하는 모든 종목을 마지막으로 받은 시각 (한국 시간 ISO) */
+  lastOkAt: string | null;
+  warning: "stale" | "partial" | "shape" | "blocked" | null;
+}
+
+/** GET /api/schedule (3-38, 플래그 holdingSchedule) */
+export interface HoldingSchedule {
+  asOf: string;
+  /** 다가오는 일정 (holdingEvents 가 꺼져 있으면 null) — 계좌 브리핑의 events 와 같은 모양 */
+  events: AccountEvents | null;
+  /** 최근 공시 (미국) — filingAlerts 가 꺼져 있으면 null */
+  filings: ScheduleFilings | null;
+  /** 한국 공시: DART 키가 없으면 noDartKey, 있으면 notYet (이번 범위 밖) */
+  kr: { filings: "noDartKey" | "notYet" };
+  /** 서버가 일정을 모으다 오류 (켜져 있는데 events null) — 화면은 '일정을 받지 못했습니다' */
+  eventsFailed?: true;
+  /** 서버가 공시 목록을 읽다 오류 (켜져 있는데 filings null) — 화면은 '공시 목록을 받지 못했습니다' */
+  filingsFailed?: true;
+}
+export interface WatchItem {
+  code: string; name: string; market: string; currency: "KRW" | "USD";
+  startPrice: number; desiredPrice: number; alerts: boolean;
+  createdAt: string; updatedAt: string; quote: Quote | null;
+}
+/** 3-35 내 종목 테마 (서버 holdingThemesService 와 같은 모양) */
+export type HtMarket = "KR" | "US";
+export type HtKind = "theme" | "sector";
+export type HtTvState = "final" | "partial" | "lastDay" | "collecting" | "none";
+export interface HtStrength {
+  changeRate: number | null;
+  up: number | null;
+  flat: number | null;
+  down: number | null;
+}
+export interface HtVia {
+  code: string;
+  name: string;
+  L: number | null;
+  inverse: boolean;
+  index: string | null;
+}
+export interface HtHolding {
+  code: string;
+  name: string;
+  via: HtVia | null;
+  /** 정규장 기준 오늘 등락률 (거래정지·시세 없음 null) */
+  changeRate: number | null;
+  /** 미국 테마: 등락률 계산(시가총액 상위 30종목)에 드는지. 그 밖은 null */
+  inCalc: boolean | null;
+  /** 거래정지 (서버가 출처에서 확인한 한국 종목 — changeRate 는 null). 예전 서버는 없음 */
+  halted?: boolean;
+}
+export interface HtGroup {
+  key: string;
+  market: HtMarket;
+  kind: HtKind;
+  id: string;
+  name: string;
+  day: HtStrength;
+  week: HtStrength | null;
+  /** truncated: 구성 종목이 300개 넘는 업종이라 합을 내지 않음 (state none, 예전 서버는 없음) */
+  tradingValue: { today: number | null; avg: number | null; days: number; ratioPct: number | null; state: HtTvState; day: string | null; currency: "KRW" | "USD"; truncated?: boolean };
+  inDiscoverList: boolean;
+  holdings: HtHolding[];
+}
+export interface HtMarketInfo {
+  session: DiscoverSession;
+  marketOpen: boolean;
+  asOf: string | null;
+  tvDay: string | null;
+  preparing: boolean;
+  note: string | null;
+  weekNote: string | null;
+  /** 이 시장 보유 종목 원화 평가금액 합 (처음 고를 시장 칩) */
+  heldValue: number;
+}
+export interface HoldingThemes {
+  enabled: true;
+  asOf: string;
+  markets: Partial<Record<HtMarket, HtMarketInfo>>;
+  coverage: { held: number; mapped: number; unmapped: { code: string; name: string; market: HtMarket; reason: "index" | "none" | "failed" | "preparing"; text: string }[] };
+  mostHeld: { key: string; name: string; count: number; codes: string[] }[];
+  groups: HtGroup[];
+  byHolding: { code: string; name: string; market: HtMarket; keys: string[] }[];
+  basis: string[];
+  krIndexAt: string | null;
+  disclaimer: string;
+}
+/** 계좌 브리핑에 저장한 내 종목 테마 (3-35 — 서버 HoldingThemesSnapshot) */
+export interface HoldingThemesSnapshot {
+  asOf: string;
+  coverage: { held: number; mapped: number };
+  mostHeld: { name: string; count: number }[];
+  markets: Partial<Record<HtMarket, { basisDay: string | null; session: DiscoverSession; split: boolean; top: { name: string; changeRate: number }[]; bottom: { name: string; changeRate: number }[]; more: number }>>;
 }
 
 // ── 매매일지 (3-37, 플래그 tradeJournal — 서버 journalService·journalCalc·journalReturns·taxRules 와 같은 모양) ──

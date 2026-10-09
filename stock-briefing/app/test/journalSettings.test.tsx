@@ -58,6 +58,8 @@ vi.mock("@/components/Screen", async () => {
   return { Screen: ({ children }: { children: React.ReactNode }) => R.createElement("Screen", null, children) };
 });
 vi.mock("@/components/RouteError", () => ({ RouteErrorBoundary: "RouteErrorBoundary" }));
+// 설정 묶음 화면(settingsSections): 칸 목록(sections — 제목·설명·내용 부품)을 속성 그대로 지문에 넣는다
+vi.mock("@/components/SettingsSections", () => ({ SettingsSections: "SettingsSections" }));
 vi.mock("@/components/ui", () => ({ Badge: "Badge", Button: "Button", Card: "Card", Chip: "Chip", Muted: "Muted", Row: "Row", RowWrapContext: React.createContext(false), SectionTitle: "SectionTitle", Toggle: "Toggle" }));
 
 const { default: SettingsScreen } = await import("@/app/(tabs)/settings");
@@ -103,13 +105,16 @@ const LAYOUTS = [
   ["폰 475", 475, 751, { tradeRecords: false }],
   ["폰 475 매매 기록 줄", 475, 751, { tradeRecords: true }],
   ["넓은 933×704 두 칸", 933, 704, { foldLayout: true }],
+  // 설정 묶음 화면 (main 의 settingsSections — '계정·증권사 연동' 칸에 매매일지 카드가 들어간다)
+  ["폰 475 묶음", 475, 751, { settingsSections: true, tradeRecords: true }],
 ] as const;
 
-/** 바꾸기 전 main(2793cd1) 코드에서 뜬 지문 */
+/** 바꾸기 전 main 코드에서 뜬 지문 (main fdce7e8 위에 다시 맞출 때 그 main 의 settings.tsx 를 이 틀로 그려 다시 뜸 — 끈 트리와 같음) */
 const BASE: Record<string, string> = {
-  "폰 475": "6bf396ffaf671c89eaea9852b7e11b34974a3934",
-  "폰 475 매매 기록 줄": "e304f7bb2584cec361eb4605cba4dbcfd0016c42",
-  "넓은 933×704 두 칸": "f3abba770daa0348b40e5a88d21594e341e91043",
+  "폰 475": "d246c5ad73b4d85af04354d0bcd5a928bfef29f2",
+  "폰 475 매매 기록 줄": "b3fdc1c00da09af642e57244c43b4443dabb2522",
+  "넓은 933×704 두 칸": "c2889a0ab0aec336f59f5fc489a6f52db7d3d25e",
+  "폰 475 묶음": "607dada512716cd83008add2ef715234647afc62",
 };
 
 describe("매매일지 카드를 끄면 설정이 지금과 같다 (지문)", () => {
@@ -163,6 +168,21 @@ describe("켜면: 설정 '매매일지' 카드 (§4.1 ①)", () => {
     const r = draw(933, 704, { ...ON, foldLayout: true });
     const o = order(r);
     expect(o.indexOf("매매일지")).toBe(o.indexOf("TossOpenApiCard") + 1);
+  });
+
+  it("설정 묶음 화면(settingsSections): '계정·증권사 연동' 칸의 토스 연동 카드 바로 아래 · 칸 설명 끝 '매매일지'", () => {
+    type Section = { id: string; detail: string; content: React.ReactElement<{ children: React.ReactNode }> };
+    const account = (flags: Record<string, boolean>) =>
+      (draw(475, 751, { settingsSections: true, ...flags }).all().find((n) => n.type === "SettingsSections")!.props.sections as Section[]).find((x) => x.id === "account")!;
+    const names = (sec: Section) => React.Children.toArray(sec.content.props.children).map((c) => ((c as React.ReactElement).type as { name?: string }).name ?? String((c as React.ReactElement).type));
+    const on = account(ON);
+    expect(on.detail).toBe("계정 정보, 토스 연동과 시세 대조, 매매일지");
+    const kids = names(on);
+    expect(kids.indexOf("TradeJournalCard")).toBe(kids.indexOf("TossOpenApiCard") + 1);
+    // 끄면 칸 설명·내용이 지금 그대로
+    const off = account({ tradeRecords: true });
+    expect(off.detail).toBe("계정 정보, 토스 연동과 시세 대조");
+    expect(names(off)).not.toContain("TradeJournalCard");
   });
 
   it("서버에 닿지 않거나 토큰이 틀려(상세 없는 /health) 알림·토스 칸이 비면 매매일지 카드도 없다", () => {

@@ -1,6 +1,8 @@
 import React from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { holding, quote } from "./helpers";
+import { installSessionStorage, resetSessionForTests } from "@/lib/session";
 
 /**
  * 위젯 리뷰 5·6번과 1·2번의 연결 부분을 라이브러리의 실제 트리 빌더로 그려 본다 (고치기 전에 실패하는 재현 테스트).
@@ -25,7 +27,11 @@ vi.mock("react-native-android-widget", async () => {
     FlexWidget: flex.FlexWidget,
     TextWidget: text.TextWidget,
     ListWidget: list.ListWidget,
-    getWidgetInfo: async (name: string) => (shared.widgets[name] ?? []).map((b) => ({ widgetName: name, widgetId: 1, ...b })),
+    getWidgetInfo: async (name: string) => (shared.widgets[name] ?? []).map((b, index) => ({ widgetName: name, widgetId: index + 1, ...b })),
+    requestWidgetUpdateById: async ({ widgetName, widgetId, renderWidget }: { widgetName: string; widgetId: number; renderWidget: (i: unknown) => unknown }) => {
+      const box = shared.widgets[widgetName]?.[widgetId - 1];
+      if (box) shared.updates.push({ widgetName, rendered: await renderWidget({ widgetName, widgetId, ...box, screenInfo: {} }) });
+    },
     requestWidgetUpdate: async ({ widgetName, renderWidget }: { widgetName: string; renderWidget: (i: unknown) => unknown }) => {
       for (const box of shared.widgets[widgetName] ?? []) {
         shared.updates.push({ widgetName, rendered: await renderWidget({ widgetName, widgetId: 1, ...box, screenInfo: {} }) });
@@ -75,7 +81,7 @@ const words = (t: Tree) => nodes(t).filter((n) => n.type === "TextWidget").map((
 const dark = (r: unknown) => words(build((r as { dark: React.JSX.Element }).dark));
 
 const API = "https://server.test";
-const WIDGET_URL = `${API}/api/widget?indices=1&sessions=1&ui=2&ms=1`;
+const WIDGET_URL = `${API}/api/widget?indices=1&sessions=1&ui=2&ms=1&account=1`;
 const WIDE = { width: 420, height: 260 };
 /** 2026-09-24(목) KST 시각 */
 const T = (hm: string) => Date.parse(`2026-09-24T${hm}:00+09:00`);
@@ -120,10 +126,43 @@ const APP_CHIP = { ...KR_OPEN, nextChangeAt: "2026-09-24T11:00:00.001Z" };
 
 beforeEach(() => {
   store.clear();
+  // 앞 사례의 session_required 판정도 디스크와 함께 초기화한다 (뒤 무계정 서버 사례에 남기지 않게).
+  resetSessionForTests();
+  installSessionStorage(AsyncStorage);
   shared.widgets = {};
   shared.updates = [];
   vi.useFakeTimers();
   vi.setSystemTime(T("10:00"));
+});
+
+describe("빠른 갱신 플래그의 실제 조회 경로", () => {
+  it("휴장 백그라운드 실행도 새로 조회하고 플래그를 끄면 예전 생략을 유지한다", async () => {
+    const now = Date.parse("2026-10-10T13:00:00+09:00");
+    vi.setSystemTime(now);
+    const features = { widgetLeanLive: true };
+    const body = payload({ market: { label: "휴장", open: false, nextChangeAt: "2026-10-12T09:00:00+09:00" }, features });
+    const urls = serve(body);
+    await loadWidgetData({ stocks: true, briefings: true });
+    vi.setSystemTime(now + 15 * 60_000);
+    await runBriefingCheck();
+    expect(urls.filter(u => u === WIDGET_URL)).toHaveLength(2);
+    features.widgetLeanLive = false;
+    await loadWidgetData({ stocks: true, briefings: true });
+    const count = urls.filter(u => u === WIDGET_URL).length;
+    vi.setSystemTime(now + 30 * 60_000);
+    await runBriefingCheck();
+    expect(urls.filter(u => u === WIDGET_URL)).toHaveLength(count);
+  });
+  it("주기·크기 변경 조회는 1분 전후에 실제 서버 호출 여부가 달라진다", async () => {
+    const urls = serve(payload({ features: { widgetLeanLive: true } }));
+    await loadWidgetData({ stocks: true, briefings: true });
+    await vi.advanceTimersByTimeAsync(59_999);
+    await loadWidgetData({ stocks: true, briefings: true, reuse: true });
+    expect(urls.filter(u => u === WIDGET_URL)).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await loadWidgetData({ stocks: true, briefings: true, reuse: true });
+    expect(urls.filter(u => u === WIDGET_URL)).toHaveLength(2);
+  });
 });
 
 describe("리뷰 5: 앱에서 방금 본 숫자가 위젯에서 되돌아가지 않는다", () => {
@@ -361,6 +400,81 @@ describe("리뷰 6: 실패가 위젯에 바로 보인다", () => {
     await runBriefingCheck();
     expect(shared.updates).toHaveLength(4);
     expect(dark(shared.updates.find((u) => u.widgetName === WIDGET_NAMES.holdings)!.rendered)).toContain("지연");
+  });
+
+  it("검증 5차: 로그인이 필요한 상태(403 session_required — 로그아웃·자동 로그인 끔·다시 설치)는 실패가 아니다: 연달아 와도 '갱신 실패'로 다시 그리지 않고 기록은 건너뜀 (6차: 바뀐 순간 한 번만 조용한 안내로 그림)", async () => {
+    placeAll();
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ error: "SESSION_REQUIRED", code: "session_required" }), { status: 403, headers: { "content-type": "application/json" } }));
+    shared.updates = [];
+    const drawnAt: number[] = [];
+    for (const hm of ["10:15", "10:30", "10:45"]) {
+      vi.setSystemTime(T(hm));
+      await runBriefingCheck();
+      drawnAt.push(shared.updates.length);
+    }
+    // 무엇이 그려져 있는지 모르는 첫 번째에만 위젯 4종을 '로그인하면 보여요'로 (실패 표시 없이), 그 뒤로는 그리지 않는다
+    expect(drawnAt).toEqual([4, 4, 4]);
+    for (const u of shared.updates) expect(dark(u.rendered).join(" ")).not.toMatch(/갱신 실패/);
+    expect(dark(shared.updates.find((u) => u.widgetName === WIDGET_NAMES.holdings)!.rendered).join(" ")).toMatch(/로그인하면 보여요/);
+    shared.updates = [];
+    expect((await readWidgetRefreshLog()).map((e) => [e.s, e.r, e.e ?? null])).toEqual([
+      ["background", "skipped", null],
+      ["background", "skipped", null],
+      ["background", "skipped", null],
+    ]);
+    // 위젯 ↻ 도 실패가 아니라 건너뜀으로 적고, 그린 모습에 '갱신 실패'가 없다
+    const drawn = dark((await run({ widgetInfo: info(WIDGET_NAMES.holdings), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" })).at(-1));
+    expect(drawn.join(" ")).not.toMatch(/갱신 실패/);
+    expect(drawn.join(" ")).toMatch(/로그인하면 보여요 · 눌러서 앱 열기/);
+    expect((await readWidgetRefreshLog()).at(-1)).toMatchObject({ s: "button", r: "skipped" });
+  });
+
+  it("검증 6차: 백그라운드 작업이 세션 끝남(401 session_invalid — 다른 기기의 '모든 기기에서 로그아웃'·비밀번호 변경)을 처음 알게 되면 그려져 있던 잔고·자산 위젯을 바로 다시 그린다 (주인 수량·평가금액이 30분 남지 않게)", async () => {
+    placeAll();
+    serve();
+    await runBriefingCheck();
+    expect(dark(shared.updates.find((u) => u.widgetName === WIDGET_NAMES.holdings)!.rendered)).toContain("700,000원");
+    shared.updates = [];
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ error: "SESSION_INVALID", code: "session_invalid" }), { status: 401, headers: { "content-type": "application/json" } }));
+    vi.setSystemTime(T("10:15"));
+    await runBriefingCheck();
+    expect(shared.updates.map((u) => u.widgetName).sort()).toEqual([...ALL].sort());
+    for (const u of shared.updates) {
+      const w = dark(u.rendered).join(" ");
+      expect(w, u.widgetName).not.toMatch(/700,000|삼성전자|첫 줄|갱신 실패/);
+    }
+    expect(dark(shared.updates.find((u) => u.widgetName === WIDGET_NAMES.holdings)!.rendered).join(" ")).toMatch(/로그인하면 보여요/);
+    expect((await readWidgetRefreshLog()).at(-1)).toMatchObject({ s: "background", r: "skipped" });
+    // 이미 안내가 그려져 있으면 다음 작업은 다시 그리지 않는다
+    shared.updates = [];
+    vi.setSystemTime(T("10:30"));
+    await runBriefingCheck();
+    expect(shared.updates).toHaveLength(0);
+  });
+
+  it("검증 6차: 주인 아닌 계정의 지수·환율 위젯은 공유 경로(/api/market/indices)로 판을 받아 그린다 — 잔고 위젯은 '개인 종목 기능은 준비 중'", async () => {
+    placeAll();
+    const urls: string[] = [];
+    const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+    const row = (code: string, name: string, value: number) => ({ code, name, value, change: 1.5, changeRate: 0.5, open: true, asOf: "2026-09-24T10:14:00+09:00" });
+    vi.stubGlobal("fetch", async (url: string) => {
+      urls.push(url);
+      if (url.includes("/api/market/indices")) return json({ indices: [row("KOSPI", "코스피", 2650.12), row("NASDAQ", "나스닥", 18000.5), row("USDKRW", "원/달러", 1391.2)] });
+      if (url.includes("/api/features")) return json({ features: { widgetMarket: true }, updatedAt: null });
+      return json({ error: "PERSONAL_DATA_NOT_READY", code: "personal_data_not_ready" }, 403);
+    });
+    vi.setSystemTime(T("10:15"));
+    await runBriefingCheck();
+    expect(urls.some((u) => u.includes("/api/market/indices?stale=1"))).toBe(true);
+    const market = dark(shared.updates.find((u) => u.widgetName === WIDGET_NAMES.market)!.rendered).join(" ");
+    expect(market).toContain("2,650.12");
+    expect(market).not.toMatch(/준비 중|갱신 실패/);
+    expect(dark(shared.updates.find((u) => u.widgetName === WIDGET_NAMES.holdings)!.rendered).join(" ")).toMatch(/개인 종목 기능은 준비 중/);
+    // 판을 새로 받았으면 다음 작업도 판을 다시 그린다 (지수가 15분마다 바뀌게)
+    shared.updates = [];
+    vi.setSystemTime(T("10:30"));
+    await runBriefingCheck();
+    expect(shared.updates.some((u) => u.widgetName === WIDGET_NAMES.market)).toBe(true);
   });
 
   it("성공하면 연속 실패 수를 지운다 (실패 → 성공 → 실패는 다시 그리지 않는다)", async () => {

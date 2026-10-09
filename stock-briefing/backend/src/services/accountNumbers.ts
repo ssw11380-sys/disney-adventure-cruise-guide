@@ -4,6 +4,7 @@ import type { MarketIndex } from "../providers/market/indices.js";
 import { seoulDate } from "../lib/time.js";
 import { isKrTradingDate, isUsTradingDate, krRegularHours, marketContext, usRegularCloseMinutes } from "./marketContext.js";
 import type { Evaluation } from "./stockService.js";
+import type { HoldingThemesSnapshot } from "./holdingThemesService.js";
 
 /**
  * 계좌 한 장 브리핑(3-31)의 숫자와 문장. 숫자는 모두 여기서 코드로 계산하고, 모델은 이 숫자를 옮겨 적기만 한다.
@@ -156,8 +157,184 @@ export interface AccountData extends AccountTotals {
    * '12/25(금)'처럼 날짜로 밝힌다. 예전 기록에는 없다(없으면 '지난밤')
    */
   usHolidayDate?: string;
+  /**
+   * 보유 종목별 수량·원화 평가 (브리핑 3차 3, 플래그 accountSinceLast — 다음 브리핑이 수량·비중 변화를 알게). 꺼짐·예전 기록에는 칸이 없다
+   */
+  positions?: AccountPosition[];
+  /**
+   * 지난 같은 세션 브리핑과 비교 (브리핑 3차 3, 플래그 accountSinceLast). 만들 때 계산해 저장한다 — 나중에 옛 브리핑을 열어도 그때 기준 그대로.
+   * 켜져 있었는데 비교할 브리핑이 없으면(처음·10일 넘음) null, 꺼짐·예전 기록에는 칸이 없다
+   */
+  sinceLast?: AccountSinceLast | null;
+  /**
+   * 비중 한 줄 (브리핑 3차 4, 플래그 accountExposure): 가장 큰 종목·상위 3종목·레버리지·인버스·미국 상장 비중. 만들 때 계산해 저장한다(그때 기준 그대로).
+   * 켜져 있었는데 값이 있는 종목이 없으면 null, 꺼짐·예전 기록에는 칸이 없다
+   */
+  exposure?: AccountExposure | null;
+  /**
+   * 다가오는 일정 (브리핑 3차 5, 플래그 holdingEvents — services/holdingEvents): 보유 종목의 30일 안 배당락일(과 플래그 holdingEarnings 면 실적 발표일),
+   * 그 주 첫 오전 브리핑이면 이번 주 일정. 만들 때 받아 저장한다(그때 기준 그대로). 꺼짐·출처 없음·예전 기록에는 칸이 없다
+   */
+  events?: AccountEvents;
   /** 합계에 넣은 종목 시세의 기준 (3-32, 플래그 numberBasis 를 켰을 때 만든 브리핑만). 예전 기록·플래그 끔은 없음 */
   quoteBasis?: QuoteBasis;
+  /**
+   * 내 종목 테마 (3-35, 플래그 holdingThemes): 많이 속한 테마 · 시장별 등락률 높은·낮은 3개. 만들 때 저장한다(그때 기준 그대로).
+   * 꺼짐·서비스 없음·8초 넘음·예전 기록에는 칸이 없다
+   */
+  holdingThemes?: HoldingThemesSnapshot;
+}
+
+/** 다가오는 일정 한 줄 (브리핑 3차 5) */
+export interface AccountEventItem {
+  code: string;
+  /** 보유 종목 이름 (앱 잔고와 같은 이름) */
+  name: string;
+  /** exDividend = 배당락일, earnings = 실적 발표 (예정) */
+  kind: "exDividend" | "earnings";
+  /** YYYY-MM-DD. 배당락일은 그 시장 날짜(미국 종목은 미국 날짜 — usDate), 실적 발표는 토스가 준 한국 날짜 */
+  date: string;
+  /** 실적 발표 한국 시각 'HH:MM' (미국 실적만 — 토스가 준 값 그대로, 서머타임을 우리가 계산하지 않음) */
+  kstTime?: string;
+  /** 토스가 보인 시각 글 '오전 5시 이후' (미국 실적만) */
+  timeText?: string;
+  /** 주당 배당금 (배당락일만 — 토스 배당 요약이 준 발표 값, 네이버만으로 안 날은 없음) */
+  amount?: number;
+  currency?: "KRW" | "USD";
+  /** date 가 미국 날짜인지 (미국 종목 배당락일) */
+  usDate: boolean;
+  /** 출처: toss · naver(토스를 받지 못한 날 미국 배당락일) · toss+naver(두 출처 날짜가 같음) */
+  source: "toss" | "naver" | "toss+naver";
+}
+
+/** 다가오는 일정 (브리핑 3차 5 — AccountData.events) */
+export interface AccountEvents {
+  /** 기준 시각 = 계좌 브리핑 asOf */
+  asOf: string;
+  /** 브리핑 날짜(한국)부터 며칠 안 (30) */
+  days: number;
+  /** 날짜 순 (같은 날은 시각 → 배당락일 → 실적 → 등록 순) */
+  items: AccountEventItem[];
+  /** 실적 발표일을 넣었는지 (그때 플래그 holdingEarnings) */
+  earnings: boolean;
+  /** 배당 일정을 받지 못한 보유 종목 (토스 실패 + 캐시 없음, 미국은 네이버도 모름) */
+  failed: Array<{ code: string; name: string }>;
+  /** 실적 발표일(캘린더)을 받지 못함 (earnings 가 true 일 때만 뜻이 있음) */
+  earningsFailed: boolean;
+  /** 토스와 네이버의 배당락일이 달라 뺀 미국 종목 (틀린 날짜를 보이지 않게) */
+  conflicts: Array<{ code: string; name: string }>;
+  /** 일정을 찾아본 보유 종목 수 (시장별) — 국내 종목이 있으면 앱이 '국내 종목 배당은 보통 기준일 뒤에 정해져 …'를 붙인다 */
+  kr: number;
+  us: number;
+  /** 그 주 첫 오전 계좌 브리핑이면 브리핑 날짜 ~ 그 주 일요일의 일정 (없으면 빈 배열), 아니면 null */
+  week: AccountEventItem[] | null;
+}
+
+/** 비중 한 줄의 레버리지·인버스 종목 한 줄 (값이 큰 순). L = 배수의 크기(인버스도 양수), 모르면 null. weight = 비중(%, 소수 한 자리) */
+export interface AccountExposureItem {
+  code: string;
+  name: string;
+  kind: "leveraged" | "inverse";
+  L: number | null;
+  weight: number;
+}
+
+/** 합계에서 뺀(시세·환율을 받지 못한) 레버리지·인버스 종목 — 비중을 알 수 없어 weight 가 없다 (등록 순서) */
+export type AccountExposureUncounted = Omit<AccountExposureItem, "weight">;
+
+/**
+ * 비중 한 줄 (브리핑 3차 4 — exposureOf). 비중 = 종목 원화 평가금액(비용 차감, 앱 잔고와 같은 기준) ÷ 합계에 넣은 종목 값의 합 × 100, 소수 한 자리.
+ * 여럿을 더한 비중(상위 3종목·레버리지·인버스·미국 상장)은 원 값을 더한 뒤 반올림한다 (조각 반올림의 합이 아님). 현금·예수금은 모름(토스 보유 조회에 없음) — 분모에 없음
+ */
+export interface AccountExposure {
+  /** 기준 시각 = 계좌 브리핑의 asOf */
+  asOf: string;
+  /** 비중 분모에 넣은 종목 수 (시세·환율이 있어 합계에 넣은 보유 종목) */
+  count: number;
+  /** 가장 큰 종목 (값이 같으면 먼저 등록한 종목). 1종목이면 100 */
+  top1: { code: string; name: string; weight: number };
+  /** 상위 3종목 합 (4종목 이상일 때만, 아니면 null) */
+  top3: { weight: number } | null;
+  /**
+   * 레버리지·인버스 상품 합과 그 종목들 (합계에 넣은 것 — 없으면 weight 0 · 빈 목록).
+   * uncounted = 합계에서 뺀 레버리지·인버스 종목 (비중을 모름 — 합계에 넣은 것이 없고 이것만 있으면 앱이 '없음' 대신 '비중 알 수 없음')
+   */
+  levInv: { weight: number; items: AccountExposureItem[]; uncounted: AccountExposureUncounted[] };
+  /**
+   * 미국 상장(달러) 종목 합과 그 수 (합계에 넣은 것. 수가 0 이면 앱이 '미국 상장 없음' — 비중이 0.0 으로 반올림되는 작은 보유와 가르려고).
+   * uncounted = 합계에서 뺀 미국 종목 수 (환율·시세를 받지 못한 날 — count 가 0 이어도 이것이 있으면 앱이 '없음' 대신 '비중 알 수 없음').
+   * 국내 상장 해외 ETF 는 원화 종목이라 들지 않음
+   */
+  us: { weight: number; count: number; uncounted: number };
+  /** 시세·환율이 없어 합계에서 뺀 보유 종목 수 (비중 계산에 없음) */
+  excluded: number;
+  /** 토스 상품 정보를 받지 못해 이름 규칙으로 레버리지·인버스를 가린 종목 수 (analysis/leveraged levInvOf guessed — 합계에서 뺀 종목도 셈) */
+  guessedByName: number;
+}
+
+/** 계좌 브리핑이 저장하는 보유 종목 한 줄 (브리핑 3차 3) */
+export interface AccountPosition {
+  code: string;
+  name: string;
+  currency: "KRW" | "USD";
+  /** 등록한 보유 수량 (자동 동기화가 켜져 있으면 브리핑 직전 토스 동기화 값) */
+  quantity: number;
+  /** 원화 평가금액(원, 정수, 앱 잔고와 같은 기준 — 합계에 넣은 종목의 합이 totalValue 와 같게 나눔). 시세·환율이 없어 합계에서 뺀 종목은 null */
+  value: number | null;
+  /** 원화 매입금액(원, 정수 — 합이 totalCost 와 같게 나눔). 합계에서 뺀 종목은 null */
+  cost: number | null;
+}
+
+/** 수량이 바뀐 종목 한 줄. 새 종목은 from 0, 없어진 종목은 to 0 */
+export interface AccountQtyChange {
+  code: string;
+  name: string;
+  from: number;
+  to: number;
+}
+
+/** 비중(%, 소수 한 자리) 변화 한 줄. change = to − from (보이는 두 값의 차) */
+export interface AccountWeightChange {
+  code: string;
+  name: string;
+  from: number;
+  to: number;
+  change: number;
+}
+
+/** 한쪽 브리핑 합계에서만 빠진 종목 한 줄. side = 값이 없던(합계에서 뺀) 브리핑, why = 시세 또는 환율을 받지 못함 */
+export interface AccountOneSide {
+  code: string;
+  name: string;
+  side: "prev" | "now";
+  why: "price" | "fx";
+}
+
+/** 지난 같은 세션 계좌 브리핑과 비교 (브리핑 3차 3 — services/accountSinceLast.compareSinceLast) */
+export interface AccountSinceLast {
+  /** 비교한 지난 브리핑 (기준 시각 = 두 브리핑의 asOf) */
+  prev: { id: number; date: string; session: AccountSession; asOf: string };
+  /** 총 평가금액(원): 지난 → 이번. rate = 변화 ÷ 지난 값 (%). scope 가 common 이면 oneSide 종목을 뺀 값 */
+  value: { from: number; to: number; change: number; rate: number | null };
+  /** 평가손익(원): 지난 → 이번. scope 가 common 이면 oneSide 종목을 뺀 값 */
+  profit: { from: number; to: number; change: number };
+  /** 수량이 바뀐 종목 (지난 브리핑에 종목별 값이 없으면 null) */
+  positions: { added: AccountQtyChange[]; removed: AccountQtyChange[]; increased: AccountQtyChange[]; decreased: AccountQtyChange[] } | null;
+  /** 비중 변화가 큰 종목: 두 브리핑 모두 값이 있는 종목 중 0.5%p 이상, 큰 순 3개 (지난 브리핑에 종목별 값이 없으면 null). 분모는 value 의 from·to */
+  weights: AccountWeightChange[] | null;
+  /** 시세·환율이 없어 합계에서 뺀 종목 (이번 · 지난) */
+  excludedNow: Array<{ code: string; name: string }>;
+  excludedPrev: Array<{ code: string; name: string }>;
+  /**
+   * 금액·비중을 어떤 종목으로 비교했는지 (리뷰 고침 — 한쪽 합계에서만 빠진 종목이 가짜 변화를 만들지 않게):
+   *  - all: 두 브리핑의 합계 그대로 (한쪽 합계에서만 빠진 종목 없음)
+   *  - common: 두 브리핑 모두 보유했는데 한쪽 합계에서만 빠진 종목(oneSide)을 양쪽에서 빼고 비교 (value·profit·weights 모두)
+   *  - mixed: 지난 브리핑에 종목별 값이 없어 뺄 수 없는데 합계에서 뺀 종목이 두 브리핑에서 다름 → 금액은 합계 그대로(그 종목 값이 섞였을 수 있음).
+   *    목록 headline 에는 한 줄을 싣지 않는다
+   */
+  scope: "all" | "common" | "mixed";
+  /** 한쪽 브리핑 합계에서만 빠진 종목 (common: 두 브리핑 모두 보유 · mixed: 두 브리핑의 합계에서 뺀 종목 목록이 다른 것) */
+  oneSide: AccountOneSide[];
 }
 
 /** 오늘 한국 휴장인데 국내 보유분이 있는지 (국내 등락이 직전 거래일 것인지) */
@@ -280,9 +457,13 @@ export function computeAccount(list: readonly AccountHolding[], opts: { afterCos
   const topN = opts.topN ?? TOP_N;
   const excluded: AccountTotals["excluded"] = [];
   const rows: RawRow[] = [];
+  let usHoldings = 0;
   for (const s of list) {
     const q = s.quote;
     const ev = s.evaluation;
+    // 시세가 없어도 실제 보유는 남아 있다. positionsOf 와 같은 통화 분류로 계산에서 빠진 미국 보유분을 구분한다.
+    const holdingCurrency = q ? (q.currency ?? "KRW") : /^\d/.test(s.code) ? "KRW" : "USD";
+    if ((s.quantity ?? 0) > 0 && s.avgPrice !== null && holdingCurrency === "USD") usHoldings++;
     // 앱 summarize 와 같이 평가(수량·평단)와 시세가 모두 있는 종목만 합계에 넣는다
     if (!q || !ev) {
       if ((s.quantity ?? 0) > 0 && s.avgPrice !== null) excluded.push({ code: s.code, name: s.name, reason: "시세를 받지 못해 합계에서 뺐습니다" });
@@ -354,7 +535,7 @@ export function computeAccount(list: readonly AccountHolding[], opts: { afterCos
     others: rest.length ? { count: rest.length, amount: sum(rest.map((r) => amount.get(r)!)) } : null,
     markets: { kr: bucket(kr, krDay), us: bucket(us, usDay) },
     excluded,
-    fx: fxImpact(us, usDay, opts.usdKrw ?? null),
+    fx: fxImpact(us, usDay, opts.usdKrw ?? null, us.length < usHoldings),
   };
 }
 
@@ -364,9 +545,10 @@ export function computeAccount(list: readonly AccountHolding[], opts: { afterCos
  *            = 달러 등락 × 적용 환율(가격 효과 = 당일 손익의 미국 몫) + 전일 달러 평가 × 원/달러 변동(환율 효과)
  * 원/달러 변동은 지수 띠와 같은 출처(하나은행 매매기준율 전일 대비)라 적용 환율(토스 표시 환율)과 출처가 다르다 — 변동 폭만 쓴다
  */
-function fxImpact(us: RawRow[], usDay: number, usdKrw: MarketIndex | null): AccountFx {
+function fxImpact(us: RawRow[], usDay: number, usdKrw: MarketIndex | null, missingUs: boolean): AccountFx {
   const idx = usdKrw ? { value: usdKrw.value, change: usdKrw.change, changeRate: usdKrw.changeRate, stale: usdKrw.stale === true } : null;
   const none = { usdHoldingsKrwChange: null, priceEffect: null, fxEffect: null };
+  if (missingUs) return { status: "unavailable", reason: "미국 보유 종목의 시세 또는 환율이 빠져 전체 환율 효과를 계산하지 못했습니다", usdKrw: idx, appliedRate: us[0]?.fx ?? null, ...none };
   if (!us.length) return { status: "none", reason: "미국 종목이 없어 환율 효과가 없습니다", usdKrw: idx, appliedRate: null, ...none };
   const appliedRate = us[0]!.fx;
   if (!usdKrw || !Number.isFinite(usdKrw.change)) {
@@ -377,6 +559,94 @@ function fxImpact(us: RawRow[], usDay: number, usdKrw: MarketIndex | null): Acco
   // 원화 변화는 나눈 뒤의 두 값의 합으로 정의한다 — 따로 반올림하면 '변화 = 가격 효과 + 환율 효과' 가 1원 어긋날 수 있다.
   // 반올림 전 원래 값(Σ 지금 달러 평가 × 적용 환율 − 전일 달러 평가 × (적용 환율 − 변동))과는 2원 안에서 같다 (테스트)
   return { status: "computed", reason: null, usdKrw: idx, appliedRate, usdHoldingsKrwChange: usDay + fxEffect, priceEffect: usDay, fxEffect };
+}
+
+/**
+ * 보유 종목별 수량·원화 평가 (브리핑 3차 3, 플래그 accountSinceLast): 수량 > 0·평단 있는 종목 모두, 등록 순서 그대로.
+ * 값은 computeAccount 와 같은 규칙(시세·평가가 있고, 미국은 환율이 있어야 합계에 넣음 · afterCost 면 비용 차감)으로 원화 환산해,
+ * 합계에 넣은 종목끼리 원 단위로 나눈다 → 값의 합 = totalValue, 매입의 합 = totalCost (정확히). 합계에서 뺀 종목은 value·cost null
+ */
+export function positionsOf(list: readonly AccountHolding[], opts: { afterCost?: boolean } = {}): AccountPosition[] {
+  const afterCost = opts.afterCost ?? true;
+  const rows: Array<{ p: AccountPosition; value: number; cost: number } | { p: AccountPosition; value: null; cost: null }> = [];
+  for (const s of list) {
+    const quantity = s.quantity ?? 0;
+    if (!(quantity > 0) || s.avgPrice === null) continue;
+    const q = s.quote;
+    const ev = s.evaluation;
+    // 시세가 있으면 computeAccount 와 같은 통화 규칙(통화 칸이 없으면 KRW) — 포함 여부·환율 곱이 합계와 어긋나지 않게.
+    // 시세가 없으면(값 null) 보이는 통화만 코드로 짐작한다
+    const currency = q ? (q.currency ?? "KRW") : /^\d/.test(s.code) ? "KRW" : "USD";
+    const p: AccountPosition = { code: s.code, name: s.name, currency, quantity, value: null, cost: null };
+    const fx = q ? (currency === "USD" ? fxOf(q) : 1) : null;
+    const native = ev ? (afterCost && ev.afterCost ? ev.afterCost.marketValue : ev.marketValue) : NaN;
+    if (!q || !ev || !fx || !Number.isFinite(q.price) || !Number.isFinite(native)) {
+      rows.push({ p, value: null, cost: null });
+      continue;
+    }
+    rows.push({ p, value: native * fx, cost: currency === "USD" ? (ev.costBasisKrw ?? ev.costBasis * fx) : ev.costBasis });
+  }
+  const counted = rows.filter((r): r is { p: AccountPosition; value: number; cost: number } => r.value !== null);
+  // computeAccount 와 같은 반올림: 평가·매입을 따로 반올림한 합계로 나눈다
+  const values = apportion(counted.map((r) => r.value));
+  const costs = apportion(counted.map((r) => r.cost));
+  counted.forEach((r, i) => {
+    r.p.value = values[i]!;
+    r.p.cost = costs[i]!;
+  });
+  return rows.map((r) => r.p);
+}
+
+/**
+ * 비중(%, 소수 한 자리)을 정확히 반올림 (값·합계는 원 단위 정수 — positionsOf). 값 × 1000 ÷ 합계는 절반 경계에서 정확히 '.5' 가 되어 올림된다.
+ * (값 ÷ 합계) × 100 × 10 은 21.35 를 213.4999… 로 만들어 21.3 으로 내림하던 것 (브리핑 3차 4 검토 지적). 비중 한 줄·지난 브리핑과 비교가 같이 쓴다
+ */
+export function weightPct(value: number, total: number): number {
+  return Math.round((value * 1000) / total) / 10;
+}
+
+/**
+ * 비중 한 줄 (브리핑 3차 4, 플래그 accountExposure — 순수). positions = positionsOf 결과(값 null = 합계에서 뺀 종목), kinds = 종목별 레버리지·인버스
+ * (analysis/leveraged levInvOf — 없는 종목은 보통 상품, 합계에서 뺀 종목도 넣을 수 있음). 합계에 넣은 종목이 없거나 합이 0 이면 null.
+ * 판단하지 않고 숫자만: 가장 큰 종목·상위 3종목(4종목 이상)·레버리지·인버스(값 큰 순)·미국 상장.
+ * 합계에서 뺀 미국·레버리지·인버스 종목은 비중에는 없지만 따로 센다(us.uncounted·levInv.uncounted) — 환율을 받지 못한 날 '미국 상장 없음'처럼 사실과 다른 '없음'이 나오지 않게
+ */
+export function exposureOf(
+  positions: readonly AccountPosition[],
+  kinds: ReadonlyMap<string, { kind: "leveraged" | "inverse" | null; L: number | null; guessed: boolean }>,
+  asOf: string,
+): AccountExposure | null {
+  const counted = positions.map((p, i) => ({ p, i })).filter((x): x is { p: AccountPosition & { value: number }; i: number } => x.p.value !== null);
+  const left = positions.filter((p) => p.value === null);
+  const total = sum(counted.map((x) => x.p.value));
+  if (!counted.length || !(total > 0)) return null;
+  const weight = (v: number) => weightPct(v, total);
+  const levKind = (code: string) => {
+    const k = kinds.get(code);
+    return k && (k.kind === "leveraged" || k.kind === "inverse") ? { kind: k.kind, L: k.L } : null;
+  };
+  // 값이 큰 순, 같으면 먼저 등록한 종목
+  const ranked = [...counted].sort((a, b) => b.p.value - a.p.value || a.i - b.i);
+  const top = ranked[0]!.p;
+  const usd = counted.filter((x) => x.p.currency === "USD");
+  const lev = ranked.filter((x) => levKind(x.p.code) !== null);
+  return {
+    asOf,
+    count: counted.length,
+    top1: { code: top.code, name: top.name, weight: weight(top.value) },
+    top3: counted.length > 3 ? { weight: weight(sum(ranked.slice(0, 3).map((x) => x.p.value))) } : null,
+    levInv: {
+      weight: weight(sum(lev.map((x) => x.p.value))),
+      items: lev.map((x) => ({ code: x.p.code, name: x.p.name, ...levKind(x.p.code)!, weight: weight(x.p.value) })),
+      uncounted: left.flatMap((p) => {
+        const k = levKind(p.code);
+        return k ? [{ code: p.code, name: p.name, ...k }] : [];
+      }),
+    },
+    us: { weight: weight(sum(usd.map((x) => x.p.value))), count: usd.length, uncounted: left.filter((p) => p.currency === "USD").length },
+    excluded: left.length,
+    guessedByName: positions.filter((p) => kinds.get(p.code)?.guessed === true).length,
+  };
 }
 
 /** 지수·환율 영향에 쓰는 지수 (없으면 missing) */

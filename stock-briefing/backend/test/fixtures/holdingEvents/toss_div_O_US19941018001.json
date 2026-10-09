@@ -1,0 +1,48 @@
+{
+ "result": [
+  {
+   "exDate": "2026-06-30",
+   "paymentDate": "2026-07-15",
+   "currency": "USD",
+   "ratio": 0,
+   "cash": 0.271,
+   "cashKrw": 366,
+   "cashJpy": 42,
+   "yieldRatio": 0.004298857868,
+   "ttmYieldRatio": 0.0538
+  },
+  {
+   "exDate": "2026-07-31",
+   "paymentDate": "2026-08-14",
+   "currency": "USD",
+   "ratio": 0,
+   "cash": 0.271,
+   "cashKrw": 366,
+   "cashJpy": 42,
+   "yieldRatio": 0.004206115164,
+   "ttmYieldRatio": 0.0532
+  },
+  {
+   "exDate": "2026-08-31",
+   "paymentDate": "2026-09-15",
+   "currency": "USD",
+   "ratio": 0,
+   "cash": 0.271,
+   "cashKrw": 366,
+   "cashJpy": 42,
+   "yieldRatio": 0.004372378187,
+   "ttmYieldRatio": 0.053
+  },
+  {
+   "exDate": "2026-09-30",
+   "paymentDate": "2026-10-15",
+   "currency": "USD",
+   "ratio": 0,
+   "cash": 0.2715,
+   "cashKrw": 367,
+   "cashJpy": 42,
+   "yieldRatio": 0.004888368743,
+   "ttmYieldRatio": 0.0534
+  }
+ ]
+}

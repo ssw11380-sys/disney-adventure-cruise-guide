@@ -1,0 +1,164 @@
+{
+ "result": {
+  "events": [
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "팔란티어 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US20200930014"
+     }
+    },
+    "date": "2026-11-03",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NYS00726J-E0",
+     "companyName": "팔란티어",
+     "announceDateTime": "2026-11-03T06:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_BEFORE_DAY_MARKET",
+     "announceMarketStatusText": "오전 6시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "AMD 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US20150102001"
+     }
+    },
+    "date": "2026-11-04",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NAS000BK7-E0",
+     "companyName": "AMD",
+     "announceDateTime": "2026-11-04T06:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_BEFORE_DAY_MARKET",
+     "announceMarketStatusText": "오전 6시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "시스코 시스템즈 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US19900216001"
+     }
+    },
+    "date": "2026-11-12",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NAS000DS6-E0",
+     "companyName": "시스코 시스템즈",
+     "announceDateTime": "2026-11-12T06:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_BEFORE_DAY_MARKET",
+     "announceMarketStatusText": "오전 6시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "스페이스X 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/NAS2606012004"
+     }
+    },
+    "date": "2026-11-18",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NAS0071BP-E0",
+     "companyName": "스페이스X",
+     "announceDateTime": "2026-11-18T06:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_BEFORE_DAY_MARKET",
+     "announceMarketStatusText": "오전 6시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "엔비디아 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US19990122001"
+     }
+    },
+    "date": "2026-11-19",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NAS00208X-E0",
+     "companyName": "엔비디아",
+     "announceDateTime": "2026-11-19T06:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_BEFORE_DAY_MARKET",
+     "announceMarketStatusText": "오전 6시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "월마트 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US19701001001"
+     }
+    },
+    "date": "2026-11-19",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NYS000YMS-E0",
+     "companyName": "월마트",
+     "announceDateTime": "2026-11-19T21:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_PRE_MARKET",
+     "announceMarketStatusText": "오후 10시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "20261126_추수감사절_HOLIDAY_US",
+     "group": "HOLIDAY"
+    },
+    "view": {
+     "title": "해외 휴장일",
+     "landingOption": null
+    },
+    "date": "2026-11-26",
+    "excludeFromAll": false,
+    "stockEarnings": null
+   }
+  ],
+  "includeMajorStock": false
+ }
+}

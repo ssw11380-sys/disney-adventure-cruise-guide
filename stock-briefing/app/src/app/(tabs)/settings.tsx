@@ -1,8 +1,8 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
-import Constants from "expo-constants";
+import { version as appVersion } from "@/releaseVersion.json";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
-import { Alert, Pressable, StyleSheet, Text, TextInput, View, type LayoutChangeEvent, type ScrollView } from "react-native";
+import { Alert, Pressable, StyleSheet, Text, View, type LayoutChangeEvent, type ScrollView } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFeature, useHealth, useNotificationSettings } from "@/api/hooks";
 import { useLiveStream } from "@/lib/liveStream";
@@ -10,6 +10,8 @@ import { saverLabel } from "@/lib/pollSaver";
 import { gated } from "@/lib/features";
 import { tradeRecordsLabel } from "@/lib/tradeRecords";
 import { condStats } from "@/api/condCache";
+import { AccountCard } from "@/components/AccountCard";
+import { ApiUrlForm } from "@/components/ApiUrlForm";
 import { AppUpdateCard } from "@/components/AppUpdateCard";
 import { usePull } from "@/components/Freshness";
 import { flushErrors, reportError } from "@/lib/errorReport";
@@ -31,11 +33,14 @@ import { useFoldLayout } from "@/lib/useFoldLayout";
 import { useSticky } from "@/lib/useSticky";
 import { useBoxWidth } from "@/lib/useBoxWidth";
 import { useUx } from "@/lib/uxFlags";
+import { useAccountView } from "@/lib/account";
 import { usePriceAlerts } from "@/lib/priceAlertContext";
 import { isWide } from "@/lib/windowClass";
-import { font, radius, space, touch, useTheme } from "@/theme";
+import { font, space, touch, useTheme } from "@/theme";
 import { settingsReveal } from "@/tokens";
-import { WIDGET_REFRESH_HELP } from "@/widgets/pushPolicy";
+import { WIDGET_LIVE_HELP, WIDGET_REFRESH_HELP } from "@/widgets/pushPolicy";
+import { SettingsSections } from "@/components/SettingsSections";
+import { MovementSettingsCard } from "@/components/MovementSettingsCard";
 
 /**
  * 설정: 표시(원화 환산·정렬) → 알림 → 토스증권 연동 → 앱 업데이트 → 서버 상태 → 고급(서버 주소·토큰 / 화면 정보, 각각 접힘) → 정보
@@ -46,6 +51,8 @@ import { WIDGET_REFRESH_HELP } from "@/widgets/pushPolicy";
  */
 export default function SettingsScreen() {
   const t = useTheme();
+  const grouped = useFeature("settingsSections", false);
+  const movementOn = useFeature("watchlistSteps", false);
   const { apiUrl, apiToken, setCredentials, showKrw, setShowKrw, sort, setSort, themeMode, setThemeMode, afterCost, setAfterCost, widgetRowCurrency, setWidgetRowCurrency, haptics, setHaptics, density, setDensity, chartHighLow, setChartHighLow } = useSettings();
   // 3-24 플래그: oneHand('누를 때 진동' 스위치), firstRun('처음 사용 안내 다시 보기'), emptyGuide(서버 연결 칸 열기·빈 칸 안내)
   const ux = useUx();
@@ -53,27 +60,35 @@ export default function SettingsScreen() {
   const alerts = usePriceAlerts();
   // 다듬은 잔고 위젯(widgetPolish)에서만 쓰는 설정이라 플래그가 켜져 있을 때만 보인다
   const widgetPolishOn = useFeature("widgetPolish", false);
+  const widgetClarityOn = useFeature("widgetClarity", false);
+  const widgetLeanLiveOn = useFeature("widgetLeanLive", false);
+  const tossAccountOn = useFeature("tossAccountSnapshot", false);
   // 위젯 자동 갱신 기록 요약·배터리 설정 열기 (위젯 리뷰 2). 기록은 늘 적고 보여 주는 것만 플래그 뒤에
   const widgetLogOn = useFeature("widgetRefreshLog", false);
   // 잔고 촘촘 모드 (3-39): 켜져 있을 때만 '잔고 표시' 기본/촘촘 칩 (꺼져 있으면 저장된 값과 상관없이 잔고는 기본)
   const densityOn = useFeature("densityMode", false);
   // 이동평균선 기간·색 (3-39): 켜져 있을 때만 '차트 이동평균선' 줄 + [설정] → 새 화면 '이동평균선'
   const maOn = useFeature("maCustom", false);
+  // 계정 A단계 (플래그 accounts): 맨 위 '계정' 칸. 주인 아닌 계정은 알림·가격 알림·토스 칸과 주인만 쓰는 줄(잔고·위젯·매매 기록·스트림·첫 실행 안내)을
+  // 숨기고 알림 설정도 묻지 않는다 (개인 종목 기능은 다음 단계 — 서버도 막는다, 검증 4차)
+  const { member } = useAccountView();
+  const owner = !member;
   // 차트 최고·최저가 표시 (3-46): 켜져 있을 때만 '차트 최고·최저가 표시' 스위치 (꺼져 있으면 저장된 값과 상관없이 차트는 지금 그대로)
   const hlOn = useFeature("chartHighLow", false);
   const health = useHealth();
   // 알림·토스 카드는 토큰이 맞는 서버에서만 보인다 (토큰이 없으면 서버가 401 을 주므로 묻지 않는다)
   const full = !!health.data && !health.data.limited;
-  const notifySettings = useNotificationSettings(full);
+  const notifySettings = useNotificationSettings(full && owner);
   const stream = useLiveStream();
   // 끊겼을 때 데이터 절약 (3-25): 서버 줄에 폴링 방식과 최근 응답 비율
   const saverOn = useFeature("pollSaver", false);
   // 매매 기록 (3-36): 서버가 쌓는 일별 계좌 스냅샷 상태 한 줄 (읽기만). 꺼져 있거나 예전 서버면 줄 없음
   const tradeRecordsOn = useFeature("tradeRecords", false);
-  const recordsLabel = tradeRecordsLabel(gated(tradeRecordsOn, health.data?.tradeRecords));
+  const recordsLabel = owner ? tradeRecordsLabel(gated(tradeRecordsOn, health.data?.tradeRecords)) : null;
   // 매매일지 (3-37, 플래그 tradeJournal · tradeRecords): 토스증권 연동 카드 바로 아래 카드 (꺼져 있으면 없음 — 지금 화면 그대로)
   const journalOn = useJournalOn();
   const [advanced, setAdvanced] = useState(false);
+  const [groupRequest, setGroupRequest] = useState<string | null>(null);
   // 3-24 (emptyGuide — 플래그를 못 받은 채 서버에 닿지 않을 때도, lib/uxFlags connectionGuide): 오류 화면·끊김 띠의 '설정 열기'로 오면(주소 검색어 open=server) '서버 연결' 칸을 펼치고 그 칸까지 스크롤한다.
   // 누를 때마다 새 요청이라(at) 사용자가 칸을 접은 뒤 다른 화면에서 또 눌러도 다시 펼친다. 플래그가 꺼져 있으면 검색어를 보지 않는다
   const params = useLocalSearchParams<{ open?: string; at?: string }>();
@@ -96,6 +111,7 @@ export default function SettingsScreen() {
     connectPos.current.until = 0;
   };
   const revealConnect = () => {
+    if (grouped) setGroupRequest(String(Date.now()));
     const p = connectPos.current;
     // 이미 펼쳐져 있고 자리를 알면 바로 스크롤. 아니면 펼친 뒤 칸이 자리를 알려 올 때(처음 그릴 때·펼쳐 높이가 바뀔 때) 스크롤 —
     // 펼치기 전 자리로 한 번 스크롤해도 펼친 모습을 알려 올 때까지 기다린다 (펼치기 전에는 목록이 짧아 끝까지 못 내려갈 수 있다)
@@ -131,7 +147,7 @@ export default function SettingsScreen() {
     if (settling()) scrollToConnect();
   };
   // 당겨서 새로고침: 서버 상태와, 알림 카드가 보이면 알림 설정('다음 실행' 시각)도 함께 (BH-16)
-  const { pulling, onPull } = usePull(() => Promise.all([health.refetch(), full ? notifySettings.refetch() : undefined]));
+  const { pulling, onPull } = usePull(() => Promise.all([health.refetch(), full && owner ? notifySettings.refetch() : undefined]));
   // 서버 연결 입력 중인 주소·토큰: 한 칸 ↔ 두 칸, 폰 접기 ↔ 펴기로 카드가 새로 그려져도 지워지지 않게 화면이 들고 있는다.
   // 저장된 값이 바뀌면(저장·다른 곳에서 변경) 새 값으로 다시 시작하고, 사용자가 '서버 연결'을 접으면 저장하지 않은 입력을 버린다
   // (지금과 같다 — 다시 펴면 저장된 주소·토큰)
@@ -181,17 +197,19 @@ export default function SettingsScreen() {
       <View style={styles.line}>
         <View style={{ flex: 1, paddingRight: space.md }}>
           <Text style={styles.label(t.ink)}>해외주식 원화 표시</Text>
-          <Muted style={{ fontSize: font.tiny }}>토스증권 적용 환율 기준</Muted>
+          <Muted style={{ fontSize: font.tiny }}>{tossAccountOn ? "앱 표시 환율로 환산한 참고 금액입니다." : "토스증권 적용 환율 기준"}</Muted>
         </View>
         <Toggle value={showKrw} onValueChange={(v) => void setShowKrw(v)} accessibilityLabel="해외주식 원화 표시" />
       </View>
-      <View style={styles.line}>
-        <View style={{ flex: 1, paddingRight: space.md }}>
-          <Text style={styles.label(t.ink)}>수수료·세금 차감 평가</Text>
-          <Muted style={{ fontSize: font.tiny }}>토스 앱과 같은 평가금액·손익 (토스 연동 종목)</Muted>
+      {owner ? (
+        <View style={styles.line}>
+          <View style={{ flex: 1, paddingRight: space.md }}>
+            <Text style={styles.label(t.ink)}>수수료·세금 차감 평가</Text>
+            <Muted style={{ fontSize: font.tiny }}>{tossAccountOn ? "토스 계좌는 차감 후 제공값, 실시간 평가는 비용 정보가 있는 종목의 예상 비용을 반영합니다." : "토스 앱과 같은 평가금액·손익 (토스 연동 종목)"}</Muted>
+          </View>
+          <Toggle value={afterCost} onValueChange={(v) => void setAfterCost(v)} accessibilityLabel="수수료·세금 차감 평가" />
         </View>
-        <Toggle value={afterCost} onValueChange={(v) => void setAfterCost(v)} accessibilityLabel="수수료·세금 차감 평가" />
-      </View>
+      ) : null}
       {ux.oneHand || alerts.on ? (
         // 3-24 햅틱 끄기 (플래그 oneHand): 끄면 차트 십자선 진동까지 모두 멈춘다. 가격 알림(3-29) 진동도 이 스위치를 따른다
         <View style={styles.line}>
@@ -202,15 +220,17 @@ export default function SettingsScreen() {
           <Toggle value={haptics} onValueChange={(v) => void setHaptics(v)} accessibilityLabel="누를 때 진동" />
         </View>
       ) : null}
-      <View style={{ gap: space.s, paddingTop: space.s }}>
-        <Text style={styles.label(t.ink)}>잔고 정렬</Text>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.s }}>
-          {SORT_OPTIONS.map((o) => (
-            <Chip key={o.value} label={o.label} accessibilityLabel={`잔고 정렬 ${o.label}`} active={sort === o.value} onPress={() => void setSort(o.value)} />
-          ))}
+      {owner ? (
+        <View style={{ gap: space.s, paddingTop: space.s }}>
+          <Text style={styles.label(t.ink)}>잔고 정렬</Text>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.s }}>
+            {SORT_OPTIONS.map((o) => (
+              <Chip key={o.value} label={o.label} accessibilityLabel={`잔고 정렬 ${o.label}`} active={sort === o.value} onPress={() => void setSort(o.value)} />
+            ))}
+          </View>
         </View>
-      </View>
-      {densityOn ? (
+      ) : null}
+      {densityOn && owner ? (
         // 3-39 잔고 표시 기본 · 촘촘 (플래그 densityMode). 목록(DENSITY_OPTIONS)은 켜져 있을 때만 읽는다
         <View style={{ gap: space.s, paddingTop: space.sm }}>
           <View style={{ gap: space.xxs }}>
@@ -244,12 +264,15 @@ export default function SettingsScreen() {
           <Toggle value={chartHighLow !== false} onValueChange={(v) => void setChartHighLow(v)} accessibilityLabel="차트 최고·최저가 표시" />
         </View>
       ) : null}
-      <View style={{ gap: space.xxs, paddingTop: space.sm }}>
-        <Text style={styles.label(t.ink)}>홈 화면 위젯 갱신</Text>
-        <Muted style={{ fontSize: font.tiny }}>{WIDGET_REFRESH_HELP}</Muted>
-        {widgetLogOn ? <WidgetRefreshStatus /> : null}
-      </View>
-      {widgetPolishOn ? (
+      {owner ? (
+        <View style={{ gap: space.xxs, paddingTop: space.sm }}>
+          <Text style={styles.label(t.ink)}>홈 화면 위젯 갱신</Text>
+          <Muted style={{ fontSize: font.tiny }}>{gated(widgetLeanLiveOn, WIDGET_LIVE_HELP) ?? WIDGET_REFRESH_HELP}</Muted>
+          {widgetLogOn ? <WidgetRefreshStatus /> : null}
+          {gated(widgetClarityOn, true) ? <Button title="위젯별 표시 설정" variant="secondary" onPress={() => router.push("/widget-settings")} /> : null}
+        </View>
+      ) : null}
+      {widgetPolishOn && owner ? (
         <View style={{ gap: space.s, paddingTop: space.sm }}>
           <View style={{ gap: space.xxs }}>
             <Text style={styles.label(t.ink)}>위젯 종목 금액</Text>
@@ -268,7 +291,7 @@ export default function SettingsScreen() {
   const server = (
     <Card>
       <SectionTitle
-        right={health.data?.limited ? <Badge tone="bad">토큰 필요</Badge> : health.data ? <Badge tone="good">정상</Badge> : health.isError ? <Badge tone="bad">연결 끊김</Badge> : null}
+        right={health.isError ? <Badge tone="bad">연결 끊김</Badge> : health.data?.limited ? <Badge tone="bad">토큰 필요</Badge> : health.data ? <Badge tone="good">정상</Badge> : null}
       >
         서버
       </SectionTitle>
@@ -283,7 +306,7 @@ export default function SettingsScreen() {
           <Row label="서버 시각" value={formatDateKo(health.data.time, true)} />
           <Row label="시세" value={health.data.sources?.quotes ?? "-"} />
           <Row label="실시간" value={health.data.sources?.realtime ?? "-"} />
-          <Row label="앱 스트리밍" value={stream.connected ? `연결 · ${stream.ticks}건` : saverOn ? "폴링 3~4초 · 절약" : "폴링 3초"} />
+          {owner ? <Row label="앱 스트리밍" value={stream.connected ? `연결 · ${stream.ticks}건` : saverOn ? "폴링 3~4초 · 절약" : "폴링 3초"} /> : null}
           {saverOn ? <Row label="시세 받기" value={saverLabel(condStats())} /> : null}
           <Row label="뉴스" value={health.data.sources?.news ?? "-"} />
           <Row label="재무/공시" value={health.data.sources?.financials ?? "-"} />
@@ -356,20 +379,20 @@ export default function SettingsScreen() {
   const info = (
     <Card>
       <SectionTitle>정보</SectionTitle>
-      <Row label="앱 버전" value={Constants.expoConfig?.version ?? "-"} />
+      <Row label="앱 버전" value={appVersion} />
       <Row label="시세" value="토스증권 · 네이버 증권" />
       <Row label="공시" value="DART · SEC EDGAR" />
-      {ux.firstRun ? (
-        // 3-24 첫 실행 안내 다시 보기 (플래그 firstRun)
+      {ux.firstRun && owner ? (
+        // 3-24 첫 실행 안내 다시 보기 (플래그 firstRun). 주인 아닌 계정에는 없다 (위젯·알림·토스 이야기라 — 첫 실행 안내도 띄우지 않는다)
         <Button title="처음 사용 안내 다시 보기" icon="help-circle-outline" variant="secondary" compact style={{ marginTop: space.xs }} onPress={() => router.push("/welcome")} />
       ) : null}
       <Muted style={{ fontSize: font.tiny, marginTop: space.xs }}>투자 판단의 책임은 본인에게 있으며, 본 서비스는 투자 권유가 아닙니다.</Muted>
     </Card>
   );
-  const notify = full ? <NotificationSettingsCard /> : null;
+  const notify = full && !member ? <NotificationSettingsCard /> : null;
   // 가격 알림 칸 (3-29): 서버에 연결됐고 켜져 있을 때만, 알림 칸 바로 아래
-  const priceAlertCard = full && alerts.on ? <PriceAlertSettingsCard /> : null;
-  const toss = full ? <TossOpenApiCard /> : null;
+  const priceAlertCard = full && alerts.on && !member ? <PriceAlertSettingsCard /> : null;
+  const toss = full && !member ? <TossOpenApiCard /> : null;
   const journalCard = full && journalOn ? <TradeJournalCard records={health.data?.tradeRecords} /> : null;
   // 3-24 빈 칸 안내 (플래그 emptyGuide): 서버에 연결되지 않았거나 토큰이 맞지 않아 알림·토스 칸이 비었을 때 까닭과 버튼 하나
   const serverGap =
@@ -382,6 +405,21 @@ export default function SettingsScreen() {
     ) : null;
   // '서버 연결' 칸 자리를 잰다 ('설정 열기'로 왔을 때 그 칸까지 스크롤 — 플래그가 꺼져 있으면 감싸지 않는다)
   const connectBox = measure ? <View onLayout={onConnectLayout}>{connect}</View> : connect;
+
+  if (grouped) {
+    const groupedScreen = <SettingsSections openServerRequest={groupRequest ?? openReq} refreshing={pulling} onRefresh={onPull} sections={[
+      { id: "display", title: "화면·숫자 표시", detail: "테마, 원화 환산, 잔고 정렬, 차트, 위젯", content: display },
+      { id: "notifications", title: "알림", detail: "5% 구간 알림, 브리핑 시간, 기기 수신", content: <>{full && owner && movementOn ? <MovementSettingsCard /> : null}{notify}{priceAlertCard}{serverGap}</> },
+      // 매매일지 (3-37): 켜져 있을 때만 토스 연동 카드 바로 아래 카드와 설명 끝 '매매일지' (꺼지면 지금 그대로)
+      journalCard
+        ? { id: "account", title: "계정·증권사 연동", detail: "계정 정보, 토스 연동과 시세 대조, 매매일지", content: <><AccountCard />{toss}{journalCard}{serverGap}</> }
+        : { id: "account", title: "계정·증권사 연동", detail: "계정 정보, 토스 연동과 시세 대조", content: <><AccountCard />{toss}{serverGap}</> },
+      { id: "update", title: "앱 업데이트", detail: `현재 ${appVersion} · 새 버전 확인 및 적용`, content: <AppUpdateCard /> },
+      { id: "server", title: "연결·진단", detail: health.isError || health.data?.limited ? "연결 확인 필요 · 서버 주소와 토큰" : "서버 상태, 연결 설정, 화면 정보", content: <>{server}{connectBox}<ScreenInfoCard /></> },
+      { id: "info", title: "앱 정보·도움말", detail: "버전, 자료 출처, 처음 사용 안내", content: info },
+    ]} />;
+    return wide ? <View style={{ flex: 1, backgroundColor: t.bg, paddingTop: insets.top, paddingLeft: fold.rail ? 0 : insets.left, paddingRight: insets.right }}>{groupedScreen}</View> : groupedScreen;
+  }
 
   if (wide)
     return (
@@ -397,8 +435,10 @@ export default function SettingsScreen() {
         {/* 오른쪽 기둥 자리 재기('설정 열기'로 왔을 때 스크롤): 나중에 붙인 onLayout 은 자리가 바뀌기 전까지 알려 오지 않아 플래그를 받는 순간 한 번 새로 그린다 */}
         <View key={measure ? "cols-cg" : undefined} style={two ? styles.columns : styles.stacked} onLayout={onLayout}>
           <View style={two ? [styles.column, { maxWidth: colMax }] : styles.stackedPart}>
+            <AccountCard />
             {display}
             {notify}
+            {full && owner && movementOn ? <MovementSettingsCard /> : null}
             {priceAlertCard}
             {serverGap}
             {two ? info : null}
@@ -419,8 +459,10 @@ export default function SettingsScreen() {
     );
   return (
     <Screen refreshing={pulling} onRefresh={onPull} {...(measure ? { scrollRef, onScrollBeginDrag: stopSettling } : null)}>
+      <AccountCard />
       {display}
       {notify}
+      {full && owner && movementOn ? <MovementSettingsCard /> : null}
       {priceAlertCard}
       {toss}
       {journalCard}
@@ -447,66 +489,8 @@ function serverErrorText(error: unknown, guide: boolean): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** 서버 주소·토큰 입력 (입력 중인 값은 설정 화면이 들고 있다 — 카드가 새로 그려져도 남게) */
-function ApiUrlForm({
-  apiUrl,
-  apiToken,
-  draft,
-  tokenDraft,
-  onDraft,
-  authRequired,
-  onSave,
-  onCheck,
-  checking,
-}: {
-  apiUrl: string;
-  apiToken: string;
-  draft: string;
-  tokenDraft: string;
-  onDraft: (url: string, token: string) => void;
-  authRequired: boolean;
-  onSave: (url: string, token: string) => Promise<void>;
-  onCheck: () => void;
-  checking: boolean;
-}) {
-  const t = useTheme();
-  const setDraft = (url: string) => onDraft(url, tokenDraft);
-  const setTokenDraft = (token: string) => onDraft(draft, token);
-  const dirty = draft.trim().replace(/\/+$/, "") !== apiUrl || tokenDraft.trim() !== apiToken;
-  return (
-    <View style={{ gap: space.sm }}>
-      <Muted>서버 주소</Muted>
-      <TextInput
-        value={draft}
-        onChangeText={setDraft}
-        autoCapitalize="none"
-        autoCorrect={false}
-        keyboardType="url"
-        accessibilityLabel="서버 주소"
-        placeholder="https://서버 주소"
-        placeholderTextColor={t.muted}
-        style={[styles.input, { color: t.ink, borderColor: t.line, backgroundColor: t.surfaceAlt }]}
-      />
-      <Muted>API 토큰</Muted>
-      <TextInput
-        value={tokenDraft}
-        onChangeText={setTokenDraft}
-        autoCapitalize="none"
-        autoCorrect={false}
-        secureTextEntry
-        accessibilityLabel="API 토큰"
-        placeholder={authRequired ? "서버에 설정한 API 토큰" : "서버에 토큰을 설정한 경우만"}
-        placeholderTextColor={t.muted}
-        style={[styles.input, { color: t.ink, borderColor: authRequired && !tokenDraft ? t.danger : t.line, backgroundColor: t.surfaceAlt }]}
-      />
-      <Button title={dirty ? "저장하고 연결 확인" : "연결 확인"} variant="secondary" onPress={() => (dirty ? void onSave(draft, tokenDraft) : onCheck())} loading={checking} />
-    </View>
-  );
-}
-
 const styles = {
   ...StyleSheet.create({
-    input: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, padding: space.md, fontSize: font.body },
     // 큰 글씨에서 오른쪽 칩·스위치가 넘치면 다음 줄로
     line: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", rowGap: space.s, paddingVertical: space.s },
     // 넓은 창 두 칸 (3-42): 칸 폭이 곧 버튼 최대 폭. 칸이 최대 폭에 걸리면 남는 폭은 두 칸 사이로만 (양 끝에 붙는다).

@@ -124,6 +124,12 @@ export function ThemeBoard({ market, wideW }: { market: DiscoverMarket; wideW?: 
   const head = (
     <View>
       {data ? <StatusLine market={market} open={data.marketOpen} session={data.session} live={data.live} asOf={data.asOf} note={data.note} /> : null}
+      {q.isError && data ? (
+        <View style={{ paddingHorizontal: space.lg, paddingVertical: space.sm, gap: space.sm }}>
+          <Text accessibilityRole="alert" style={{ color: t.warn, fontSize: font.small }}>{kindWord} 자료를 갱신하지 못했습니다. 이전 {kindWord} 자료를 표시합니다.</Text>
+          <Button title="다시 확인" accessibilityLabel={`${kindWord} 다시 확인`} variant="secondary" compact loading={q.isFetching} onPress={() => void q.refetch()} />
+        </View>
+      ) : null}
       {/* 테마/업종 · 기간 · 보기 */}
       <View style={[styles.controls, { backgroundColor: t.surface, borderBottomColor: t.line }]}>
         <View style={styles.group}>

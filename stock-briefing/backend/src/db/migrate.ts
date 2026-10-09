@@ -348,9 +348,109 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>, dialect: D
     },
   },
   {
-    // main 의 가장 큰 번호(11) + 1. 다른 작업(로그인 A·지표 점수 3단계)이 먼저 병합되면 병합 때 다시 매긴다 — 'if not exists' 라 번호가 바뀌어도 안전.
-    // 새 표만 추가하고 기존 표는 건드리지 않는다 (예전 서버로 되돌려도 모르고 지나갈 뿐)
     version: 12,
+    up: async (db) => {
+      // 종목을 지정하지 않은 최신 목록도 전체 보고서를 정렬하지 않고 조회한다. 기존 내용과 이력은 보존한다.
+      await sql`create index if not exists idx_briefings_date_created on briefings (briefing_date desc, created_at desc)`.execute(db);
+    },
+  },
+  {
+    version: 13,
+    up: async (db) => {
+      // 기존 보고서·계좌 자료는 그대로 두고 작업 소유권·완료 단계·원 재무값을 별도 보존한다.
+      await db.schema.createTable("generation_jobs").ifNotExists()
+        .addColumn("job_key", "text", (c) => c.primaryKey())
+        .addColumn("run_id", "text", (c) => c.notNull())
+        .addColumn("owner", "text", (c) => c.notNull())
+        .addColumn("signature", "text", (c) => c.notNull())
+        .addColumn("status", "text", (c) => c.notNull())
+        .addColumn("started_at", "text", (c) => c.notNull())
+        .addColumn("updated_at", "text", (c) => c.notNull())
+        .addColumn("lease_until", "text", (c) => c.notNull())
+        .addColumn("checkpoint", "text", (c) => c.notNull())
+        .addColumn("result", "text")
+        .addColumn("error", "text").execute();
+      await sql`create index if not exists idx_generation_jobs_status_lease on generation_jobs (status, lease_until)`.execute(db);
+      await sql`create index if not exists idx_generation_jobs_status_updated on generation_jobs (status, updated_at)`.execute(db);
+      await db.schema.createTable("generation_requests").ifNotExists()
+        .addColumn("request_key", "text", (c) => c.primaryKey())
+        .addColumn("job_key", "text", (c) => c.notNull())
+        .addColumn("run_id", "text", (c) => c.notNull())
+        .addColumn("status", "text", (c) => c.notNull())
+        .addColumn("result", "text")
+        .addColumn("updated_at", "text", (c) => c.notNull()).execute();
+      await sql`create index if not exists idx_generation_requests_run on generation_requests (job_key, run_id)`.execute(db);
+      await sql`create index if not exists idx_generation_requests_updated on generation_requests (updated_at)`.execute(db);
+      await db.schema.createTable("fundamentals_cache").ifNotExists()
+        .addColumn("code", "text", (c) => c.primaryKey())
+        .addColumn("payload", "text", (c) => c.notNull())
+        .addColumn("fetched_at", "text", (c) => c.notNull()).execute();
+    },
+  },
+  {
+    version: 14,
+    up: async (db) => {
+      // 관심 가격은 보유 수량·평단과 독립해 보존한다.
+      await db.schema.createTable("watch_items").ifNotExists()
+        .addColumn("code", "text", c => c.primaryKey())
+        .addColumn("name", "text", c => c.notNull())
+        .addColumn("market", "text", c => c.notNull())
+        .addColumn("start_price", "double precision", c => c.notNull())
+        .addColumn("desired_price", "double precision", c => c.notNull())
+        .addColumn("alerts", "integer", c => c.notNull())
+        .addColumn("revision", "text", c => c.notNull())
+        .addColumn("created_at", "text", c => c.notNull())
+        .addColumn("updated_at", "text", c => c.notNull()).execute();
+      await db.schema.createTable("movement_marks").ifNotExists()
+        .addColumn("mark_key", "text", c => c.primaryKey())
+        .addColumn("up", "integer", c => c.notNull().defaultTo(0))
+        .addColumn("down", "integer", c => c.notNull().defaultTo(0))
+        .addColumn("created_at", "text", c => c.notNull()).execute();
+      await db.schema.createTable("movement_events").ifNotExists()
+        .addColumn("event_key", "text", c => c.primaryKey()).addColumn("code", "text", c => c.notNull())
+        .addColumn("scope", "text", c => c.notNull()).addColumn("payload", "text", c => c.notNull())
+        .addColumn("created_at", "text", c => c.notNull()).execute();
+      await sql`create index if not exists idx_movement_events_created on movement_events (created_at)`.execute(db);
+    },
+  },
+  {
+    version: 15, // main 의 가장 큰 번호(14) + 1 (병합 때 다시 맞춤). 새 표만 추가 — 예전 서버로 되돌려도 모르고 지나갈 뿐
+    up: async (db, dialect) => {
+      // SEC 공시 확인 (3-38, 플래그 filingAlerts): CIK 마다 기준 잡기·마지막 성공 — 공용(공개 자료, 누구의 것도 아님)
+      await db.schema
+        .createTable("sec_filing_watch")
+        .ifNotExists()
+        .addColumn("cik", "text", (c) => c.primaryKey())
+        .addColumn("first_ok_at", "text") // null = 아직 기준을 잡지 않음
+        .addColumn("last_try_at", "text")
+        .addColumn("last_ok_at", "text")
+        .addColumn("last_error", "text")
+        .execute();
+      // 받은 공시 (알림 서식만, 90일 보관) — 공용
+      await db.schema
+        .createTable("sec_filings")
+        .ifNotExists()
+        .addColumn("id", "integer", idColumn(dialect))
+        .addColumn("cik", "text", (c) => c.notNull())
+        .addColumn("accession", "text", (c) => c.notNull())
+        .addColumn("form", "text", (c) => c.notNull())
+        .addColumn("items", "text", (c) => c.notNull()) // "2.02,9.01" · ""
+        .addColumn("accepted_at", "text") // ISO UTC · null
+        .addColumn("filing_date", "text", (c) => c.notNull())
+        .addColumn("report_date", "text")
+        .addColumn("primary_doc", "text", (c) => c.notNull())
+        .addColumn("description", "text", (c) => c.notNull())
+        .addColumn("baseline", "integer", (c) => c.notNull()) // 1 = 알리지 않음(기준 잡기·24시간 넘음)
+        .addColumn("first_seen_at", "text", (c) => c.notNull())
+        .execute();
+      await sql`create unique index if not exists uq_sec_filings_cik_acc on sec_filings (cik, accession)`.execute(db);
+      await sql`create index if not exists ix_sec_filings_seen on sec_filings (first_seen_at)`.execute(db);
+    },
+  },
+  {
+    // main 의 가장 큰 번호(15) + 1 (처음 12 로 만들었다가 main 에 12~15 가 먼저 들어가 병합 때 다시 매김) — 'if not exists' 라 번호가 바뀌어도 안전.
+    // 새 표만 추가하고 기존 표는 건드리지 않는다 (예전 서버로 되돌려도 모르고 지나갈 뿐)
+    version: 16,
     up: async (db, dialect) => {
       // 매매일지 (3-37, 플래그 tradeJournal): 거래 메모(주문 하나 = 메모 하나 — 체결 표와 따로 둬 토스 동기화가 덮어쓰지 않게)와
       // 환율 기록(세법 기준환율·토스 과거 환율 — 지난 값은 바뀌지 않아 받은 대로 둔다). 환율은 8바이트 실수 (Postgres real 은 4바이트 — BH-48)

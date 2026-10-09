@@ -7,6 +7,7 @@ import type { BriefingService } from "../services/briefingService.js";
 import type { FeatureService } from "../services/featureService.js";
 import type { StockService } from "../services/stockService.js";
 import type { MarketSummary } from "../services/marketSummaryService.js";
+import type { TossAccountSnapshotBody } from "./admin.js";
 import { buildWidgetPayload, widgetBrief, widgetSummary, type BriefSchedule, type WidgetFeatures } from "../services/widgetPayload.js";
 
 /**
@@ -33,6 +34,8 @@ import { buildWidgetPayload, widgetBrief, widgetSummary, type BriefSchedule, typ
  *    예전 앱은 304 를 그대로 받는다. 새 앱의 ETag 는 새 요약이 저장될 때(하루 두 번) 바뀐다
  *  - numberBasis(3-32): 같은 ms=1 앱이 물을 때만 플래그를 읽고, 켜져 있을 때만 features.numberBasis 와 종목 시세 기준(b)을 넣는다.
  *    끄면 칸을 넣지 않아 응답·ETag 가 바이트까지 예전과 같다. 예전 앱(표시 없음)의 응답도 그대로 (새 표시를 더하지 않는 까닭은 WIDGET_PATH 를 글자 그대로 보는 테스트)
+ *  - filingIds(3-38, 플래그 filingAlerts): 같은 ms=1 앱이 물을 때만 플래그를 읽고, 켜져 있고 알림 대상 새 공시가 있을 때만 접수 번호(최신 10개)를 넣는다.
+ *    없거나 끄면 칸이 없어 응답·ETag 가 바이트까지 예전과 같다 (DB 조회 1회 — 색인)
  */
 export const widgetRoutes: FastifyPluginAsync<{
   stocks: StockService;
@@ -45,6 +48,10 @@ export const widgetRoutes: FastifyPluginAsync<{
   schedule?: () => Promise<BriefSchedule>;
   /** 시장 전체 요약 (브리핑 위젯 첫 줄, MarketSummaryService). 없으면(테스트 기본 출처) 첫 줄 없음 */
   summaries?: { list(limit?: number): Promise<MarketSummary[]> };
+  /** 새 계좌 기준 위젯(account=1)에만 저장된 토스 평가를 전달한다. 외부 자료 조회 없음. */
+  tossAccount?: () => Promise<TossAccountSnapshotBody>;
+  /** 새 공시 알림 (3-38, FilingWatchService.newIds). 없으면(출처를 두지 않은 테스트 기본) 칸 없음 */
+  filings?: { newIds(limit?: number): Promise<string[]> } | null;
 }> = async (app, deps) => {
   const flags = async (): Promise<WidgetFeatures | undefined> => {
     if (!deps.features) return undefined;
@@ -60,12 +67,18 @@ export const widgetRoutes: FastifyPluginAsync<{
   };
   app.get("/", async (req, reply) => {
     const features = flags();
-    const q = req.query as { indices?: unknown; board?: unknown; sessions?: unknown; ui?: unknown; ms?: unknown } | undefined;
+    const q = req.query as { indices?: unknown; board?: unknown; sessions?: unknown; ui?: unknown; ms?: unknown; account?: unknown } | undefined;
     const wantsIndices = q?.indices === "1";
     const wantsBoard = q?.board === "1";
     const wantsSessions = q?.sessions === "1";
     const newUi = q?.ui === "2";
     const wantsSummary = q?.ms === "1";
+    const wantsAccount = q?.account === "1";
+    // 기존 시세 요청과 병렬로 저장본만 읽는다. 실패 때 앱 자체 평가를 토스 금액으로 대신하지 않는다.
+    const tossAccount = wantsAccount
+      ? (deps.tossAccount?.() ?? Promise.resolve<TossAccountSnapshotBody>({ on: false, snapshot: null, sync: null }))
+          .catch((): TossAccountSnapshotBody => ({ on: true, snapshot: null, sync: null }))
+      : null;
     const schedule = newUi && deps.schedule ? deps.schedule().catch(() => null) : null;
     const indices = features.then((f) =>
       deps.indices && ((wantsIndices && f?.widgetIndexLine) || (wantsBoard && f?.widgetMarket)) ? deps.indices.list({ stale: true }).catch(() => null) : null,
@@ -87,7 +100,18 @@ export const widgetRoutes: FastifyPluginAsync<{
       : null;
     // 숫자 기준 (3-32): 시장 요약과 같은 방식 — 지금 앱(&ms=1)이 물을 때만 플래그를 본다
     const basisOn = wantsSummary && deps.features ? deps.features.enabled("numberBasis").catch(() => false) : null;
-    const [list, latest, status, f, idx, accountIds, sched, msOn, ms, basis] = await Promise.all([
+    // 새 서버가 먼저 배포되어도 예전 요청·플래그 꺼짐 응답의 본문과 ETag 는 같다. 추가 외부 자료 조회 없음.
+    const clarityOn = wantsSummary && deps.features ? deps.features.enabled("widgetClarity").catch(() => false) : null;
+    const leanOn = wantsSummary && deps.features ? deps.features.enabled("widgetLeanLive").catch(() => false) : null;
+    // 새 공시 알림 (3-38): 같은 방식 — 지금 앱(&ms=1)이 물을 때만 플래그를 보고, 켜져 있고 새 알림이 있을 때만 접수 번호 칸. 못 읽으면 칸만 빠진다
+    const filingIds =
+      wantsSummary && deps.features && deps.filings
+        ? deps.features
+            .enabled("filingAlerts")
+            .then((on) => (on ? deps.filings!.newIds(10) : null))
+            .catch(() => null)
+        : null;
+    const [list, latest, status, f, idx, accountIds, sched, msOn, ms, basis, clarity, account, lean, filings] = await Promise.all([
       deps.stocks.listWithQuotes(),
       deps.briefings.latestPerStock(),
       deps.calendar.status().catch(() => null),
@@ -98,12 +122,20 @@ export const widgetRoutes: FastifyPluginAsync<{
       summaryOn,
       summary,
       basisOn,
+      clarityOn,
+      tossAccount,
+      leanOn,
+      filingIds,
     ]);
     // marketSummary 는 새 앱(&ms=1)에만 — 예전 앱의 features 칸은 그대로. numberBasis 는 켜져 있을 때만 칸을 더한다
     const withSummary = f && msOn !== null ? { ...f, marketSummary: msOn } : f;
+    const withBasis = withSummary && basis === true ? { ...withSummary, numberBasis: true } : withSummary;
+    const withClarity = withBasis && clarity === true ? { ...withBasis, widgetClarity: true } : withBasis;
+    const withLean = withClarity && lean === true ? { ...withClarity, widgetLeanLive: true } : withClarity;
+    const withAccount = account ? { widgetPnlToggle: false, widgetIndexLine: false, ...withLean, tossAccountSnapshot: account.on } : withLean;
     const body = JSON.stringify(
       buildWidgetPayload(list, latest, status, {
-        features: withSummary && basis === true ? { ...withSummary, numberBasis: true } : withSummary,
+        features: withAccount,
         indices: wantsIndices ? idx : null,
         board: wantsBoard ? idx : null,
         accountIds,
@@ -113,6 +145,8 @@ export const widgetRoutes: FastifyPluginAsync<{
         extended: wantsSessions && f?.widgetExtended === true,
         summary: ms,
         basis: basis === true,
+        tossAccount: account,
+        filingIds: filings,
       }),
     );
     const etag = `"${createHash("sha1").update(body).digest("base64url").slice(0, 16)}"`;

@@ -17,7 +17,8 @@ import { font, space, touch, useTheme } from "@/theme";
  *  - JournalStockPanel: 지금 안 갖고 있지만 기록이 있는 종목 — '매매 기록 · 보유 없음 · 저장된 체결 3건 ›' (서버에 한 번 묻는다)
  */
 
-const openJournal = (code?: string) => router.push(journalHref(code ? { code } : {}) as never);
+/** 매매일지 화면 열기 (code: 그 종목으로 거른 기록). 잔고 탭의 토스 계좌 요약 '매매일지 보기'도 쓴다 */
+export const openJournal = (code?: string) => router.push(journalHref(code ? { code } : {}) as never);
 
 export function JournalButton() {
   return <Button title={JOURNAL.title} icon="book-outline" variant="secondary" compact accessibilityLabel={JOURNAL.open} onPress={() => openJournal()} />;

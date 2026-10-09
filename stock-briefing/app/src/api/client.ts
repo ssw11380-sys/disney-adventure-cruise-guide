@@ -1,4 +1,4 @@
-import type { AppErrorSummary, Evaluation,
+import type { AppErrorSummary, Evaluation, WatchItem,
   AccountBriefing,
   AccountBriefingWithData,
   DiscoverMarket,
@@ -10,6 +10,7 @@ import type { AppErrorSummary, Evaluation,
   ThemePeriod,
   Analysis,
   AnalysisKind,
+  AnalysisState,
   Briefing,
   BriefingSession,
   BriefingWithData,
@@ -32,10 +33,17 @@ import type { AppErrorSummary, Evaluation,
   TossOpenApiStatus,
   FeatureFlags,
   IndicatorScores,
+  InvestorFlow,
   PriceAlertKind,
   PriceAlertRule,
   VolumeStatus,
+  AuthResult,
+  AuthMe,
+  BriefingStatus,
   ReconcileBadgeBody,
+  TossAccountSnapshotBody,
+  FilingAlertItem,
+  HoldingSchedule,
   JournalResponse,
   JournalStockResponse,
   JournalReturns,
@@ -43,7 +51,8 @@ import type { AppErrorSummary, Evaluation,
   ReturnsMarket,
   ReturnsPreset,
 } from "./types";
-import { authMessage, NOT_JSON } from "@/lib/connectionError";
+import { authMessage, NOT_JSON, SESSION_INVALID, SESSION_REQUIRED } from "@/lib/connectionError";
+import { assertSessionIdentity, handleSessionInvalid, markAccountsSeen, sessionFor, sessionIdentityVersion, sessionTokenFor, SessionReadError, type AccountUser } from "@/lib/session";
 
 import { condDrop, condGet, condHeaders, condKey, condNote, condPut, isDelta, rebuild } from "./condCache";
 
@@ -56,31 +65,57 @@ export class ApiRequestError extends Error {
     public readonly path?: string,
     /** 물은 서버 주소 (설정의 '서버 주소' 값) — 연결 오류 안내가 '지금 서버 주소'를 한 줄 보여 주는 데 쓴다 (lib/connectionError addressLine) */
     public readonly base?: string,
+    /** 서버가 준 오류 본문 (계정: 칸별 오류 fields·retryAfterSec 을 화면이 읽는다) */
+    public readonly body?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "ApiRequestError";
   }
 }
 
-/** 요청 한 번: 응답과 본문 글자. 연결·시간 초과는 ApiRequestError(0) */
-async function exchange(baseUrl: string, token: string, path: string, init: RequestInit, timeoutMs: number): Promise<{ res: Response; text: string }> {
+/**
+ * 요청 한 번: 응답과 본문 글자, 보낸 세션 토큰. 연결·시간 초과는 ApiRequestError(0).
+ * 계정 A단계: 이 서버 주소의 로그인 세션이 있으면 X-Session-Token 을 붙인다 (로그인·가입 요청은 withSession=false)
+ */
+async function exchange(baseUrl: string, token: string, path: string, init: RequestInit, timeoutMs: number, withSession = true): Promise<{ res: Response; text: string; session: string | null }> {
+  const identity = sessionIdentityVersion();
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  let readingSession = withSession;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // 로그인 정보 읽기부터 본문 끝까지 같은 예산을 쓴다. 기한 뒤 늦은 읽기·본문도 성공으로 넘기지 않는다.
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new ApiRequestError(0, readingSession ? "SESSION_STORAGE" : "TIMEOUT", readingSession ? "저장된 로그인 정보를 읽는 시간이 초과됐습니다. 다시 시도해 주세요." : "서버 응답이 없습니다 (시간 초과)", path, baseUrl);
+      ctrl.abort();
+      reject(error);
+    }, timeoutMs);
+  });
   try {
-    const res = await fetch(`${baseUrl}${path}`, {
-      ...init,
-      headers: {
-        accept: "application/json",
-        ...(init.body ? { "content-type": "application/json" } : {}),
-        ...(token ? { authorization: `Bearer ${token}` } : {}),
-        ...(init.headers ?? {}),
-      },
-      signal: ctrl.signal,
-    });
-    // 헤더만 오고 본문이 멈추는 경우도 제한 시간에 끊는다: 타이머는 본문을 다 읽은 뒤에 푼다 (NET-01)
-    const text = res.status === 204 || res.status === 304 ? "" : await res.text();
-    return { res, text };
+    return await Promise.race([(async () => {
+      const session = withSession ? await sessionTokenFor(baseUrl, ctrl.signal) : null;
+      if (ctrl.signal.aborted) throw new SessionReadError();
+      if (withSession && session !== (sessionFor(baseUrl)?.token ?? null)) throw new SessionReadError("SESSION_CHANGED", "로그인 정보가 바뀌었습니다. 다시 시도해 주세요.");
+      readingSession = false;
+      const res = await fetch(`${baseUrl}${path}`, {
+        ...init,
+        headers: {
+          accept: "application/json",
+          ...(init.body ? { "content-type": "application/json" } : {}),
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
+          ...(session ? { "x-session-token": session } : {}),
+          ...(init.headers ?? {}),
+        },
+        signal: ctrl.signal,
+      });
+      // 헤더만 오고 본문이 멈추는 경우도 제한 시간에 끊는다: 본문을 다 읽은 뒤 타이머를 푼다 (NET-01)
+      const text = res.status === 204 || res.status === 304 ? "" : await res.text();
+      // 캐시를 비운 뒤 도착한 옛 성공도 버린다. 조회 취소와 별개로 mutation·조건부 본문이 다시 저장되는 것을 막는다.
+      if (withSession) assertSessionIdentity(identity);
+      return { res, text, session };
+    })(), expired]);
   } catch (e) {
+    if (e instanceof ApiRequestError) throw e;
+    if (e instanceof SessionReadError) throw new ApiRequestError(0, e.code, e.message, path, baseUrl);
     const aborted = ctrl.signal.aborted || (e as Error).name === "AbortError";
     throw new ApiRequestError(0, aborted ? "TIMEOUT" : "NETWORK", aborted ? "서버 응답이 없습니다 (시간 초과)" : `서버에 연결할 수 없습니다: ${baseUrl}`, path, baseUrl);
   } finally {
@@ -88,9 +123,9 @@ async function exchange(baseUrl: string, token: string, path: string, init: Requ
   }
 }
 
-async function request<T>(baseUrl: string, token: string, path: string, init: RequestInit = {}, timeoutMs = 60_000): Promise<T> {
-  const { res, text } = await exchange(baseUrl, token, path, init, timeoutMs);
-  return result<T>(res, text, path, baseUrl);
+async function request<T>(baseUrl: string, token: string, path: string, init: RequestInit = {}, timeoutMs = 60_000, withSession = true): Promise<T> {
+  const { res, text, session } = await exchange(baseUrl, token, path, init, timeoutMs, withSession);
+  return result<T>(res, text, path, baseUrl, session);
 }
 
 /**
@@ -100,7 +135,7 @@ async function request<T>(baseUrl: string, token: string, path: string, init: Re
 async function requestCond<T>(baseUrl: string, token: string, path: string, timeoutMs: number): Promise<T> {
   const key = condKey(baseUrl, path);
   const held = condGet(key);
-  const { res, text } = await exchange(baseUrl, token, path, { headers: condHeaders(held) }, timeoutMs);
+  const { res, text, session } = await exchange(baseUrl, token, path, { headers: condHeaders(held) }, timeoutMs);
   if (res.status === 304 && held) {
     condNote("same");
     return JSON.parse(held.text) as T;
@@ -118,7 +153,7 @@ async function requestCond<T>(baseUrl: string, token: string, path: string, time
       if (etag && json !== null) condPut(key, etag, text);
       else condDrop(key);
       condNote("full");
-      return result<T>(res, text, path, baseUrl);
+      return result<T>(res, text, path, baseUrl, session);
     }
     const out = rebuild(held, json);
     if (out !== null) {
@@ -135,9 +170,9 @@ async function requestCond<T>(baseUrl: string, token: string, path: string, time
     const etag = again.res.headers.get("etag");
     if (again.res.ok && etag && again.text && !isDelta(safeParse(again.text))) condPut(key, etag, again.text);
     condNote("full");
-    return result<T>(again.res, again.text, path, baseUrl);
+    return result<T>(again.res, again.text, path, baseUrl, again.session);
   }
-  return result<T>(res, text, path, baseUrl);
+  return result<T>(res, text, path, baseUrl, session);
 }
 
 function safeParse(text: string): unknown {
@@ -148,8 +183,12 @@ function safeParse(text: string): unknown {
   }
 }
 
-/** 응답 → 값 (204 면 없음, 실패면 ApiRequestError — 오류에는 요청 경로·서버 주소를 붙인다: 3-24 연결 오류 안내가 '지금 서버 주소'를 보여 준다) */
-function result<T>(res: Response, text: string, path: string, baseUrl: string): T {
+/**
+ * 응답 → 값 (204 면 없음, 실패면 ApiRequestError — 오류에는 요청 경로·서버 주소를 붙인다: 3-24 연결 오류 안내가 '지금 서버 주소'를 보여 준다).
+ * 계정 A단계: 401 + code "session_invalid" 만 로그아웃 신호(보낸 토큰이 지금 토큰일 때만 lib/session 이 지운다).
+ * 403 session_required 는 이 서버가 계정 모드라는 뜻 (로그인 화면이 나오게 표시만, 지우는 것 없음)
+ */
+function result<T>(res: Response, text: string, path: string, baseUrl: string, sentSession: string | null = null): T {
   if (res.status === 204) return undefined as T;
   let json: unknown = null;
   let parsed = true;
@@ -160,8 +199,17 @@ function result<T>(res: Response, text: string, path: string, baseUrl: string): 
     parsed = false;
   }
   if (!res.ok) {
-    const err = (json ?? {}) as { error?: string; message?: string };
-    throw new ApiRequestError(res.status, err.error ?? `HTTP_${res.status}`, res.status === 401 ? authMessage() : (err.message ?? `서버 오류 (${res.status})`), path, baseUrl);
+    const body = json && typeof json === "object" ? (json as Record<string, unknown>) : undefined;
+    const err = (body ?? {}) as { error?: string; message?: string; code?: unknown };
+    if (res.status === 401 && err.code === "session_invalid") {
+      handleSessionInvalid(baseUrl, sentSession);
+      throw new ApiRequestError(401, SESSION_INVALID, err.message ?? "다시 로그인해 주세요", path, baseUrl, body);
+    }
+    if (res.status === 403 && err.code === "session_required") {
+      markAccountsSeen(baseUrl, true);
+      throw new ApiRequestError(403, SESSION_REQUIRED, err.message ?? "로그인이 필요해요", path, baseUrl, body);
+    }
+    throw new ApiRequestError(res.status, err.error ?? `HTTP_${res.status}`, res.status === 401 ? authMessage() : (err.message ?? `서버 오류 (${res.status})`), path, baseUrl, body);
   }
   // 성공 응답인데 JSON 이 아니면(웹 페이지 등) 이 앱의 서버가 아니다 — 예전에는 빈 값(null)으로 넘겨 빈 잔고처럼 보였다 (버그 수정)
   if (!parsed) throw new ApiRequestError(res.status, NOT_JSON, "서버 응답을 읽을 수 없습니다. 이 주소가 앱의 서버가 아닐 수 있습니다.", path, baseUrl);
@@ -189,9 +237,30 @@ export function createApi(baseUrl: string, token = "", opts: ApiOptions = {}) {
   const poll = <T>(path: string, timeoutMs = 60_000) => (opts.saver?.() ? requestCond<T>(baseUrl, token, path, timeoutMs) : get<T>(path, timeoutMs));
   const send = <T>(method: string, path: string, body?: unknown, timeoutMs?: number) =>
     request<T>(baseUrl, token, path, { method, body: body === undefined ? undefined : JSON.stringify(body) }, timeoutMs);
+  /** 로그인·가입: 세션을 붙이지 않는다 (API 토큰은 그대로) */
+  const sendNoSession = <T>(method: string, path: string, body: unknown, timeoutMs?: number) =>
+    request<T>(baseUrl, token, path, { method, body: JSON.stringify(body) }, timeoutMs, false);
 
   return {
     baseUrl,
+    watchlist: () => get<{ items: WatchItem[] }>("/api/watchlist", 20_000),
+    saveWatch: (code: string, body: { startPrice: number; desiredPrice: number; alerts: boolean }) => send<{ ok: boolean }>("PUT", `/api/watchlist/${encodeURIComponent(code)}`, body),
+    removeWatch: (code: string) => send<void>("DELETE", `/api/watchlist/${encodeURIComponent(code)}`),
+    movementEvents: () => get<{ events: import("@/lib/movementNotifications").MovementEvent[] }>("/api/watchlist/events", 12_000),
+    movementSettings: () => get<{ holdings: boolean }>("/api/watchlist/settings"),
+    setMovementSettings: (holdings: boolean) => send<{ holdings: boolean }>("PUT", "/api/watchlist/settings", { holdings }),
+    // ── 계정 (A단계, 플래그 accounts). 예전 서버·플래그 꺼짐은 404 → 부르는 쪽이 로그인 없이 지금처럼 (fail-open)
+    login: (body: { loginId: string; password: string; remember: boolean; deviceName?: string | null }) => sendNoSession<AuthResult>("POST", "/api/auth/login", body, 20_000),
+    signup: (body: { loginId: string; password: string; passwordConfirm: string; email: string; remember: boolean; deviceName?: string | null }) =>
+      sendNoSession<AuthResult>("POST", "/api/auth/signup", body, 20_000),
+    me: () => get<AuthMe>("/api/auth/me", 10_000),
+    logout: () => send<void>("POST", "/api/auth/logout", undefined, 10_000),
+    /** 서버에 알리지 못했던 로그아웃을 그 세션 토큰으로 다시 알린다 (지금 세션은 붙이지 않는다 — lib/logout flushPendingLogouts) */
+    logoutSession: (sessionToken: string) => request<void>(baseUrl, token, "/api/auth/logout", { method: "POST", headers: { "x-session-token": sessionToken } }, 10_000, false),
+    logoutAll: () => send<void>("POST", "/api/auth/logout-all", undefined, 10_000),
+    changePassword: (body: { current: string; next: string; nextConfirm: string }) => send<{ ok: true; revokedOthers: number; user: AccountUser }>("POST", "/api/auth/password", body, 20_000),
+    /** 이메일 등록·변경: 지금 비밀번호를 함께 보낸다 (서버가 다시 확인 — 세션만으로는 바꾸지 못하게) */
+    changeEmail: (email: string, current: string) => send<{ user: AccountUser }>("PUT", "/api/auth/email", { email, current }, 10_000),
     health: () => poll<Health>("/health", 8_000),
     /** 앱 오류 보고 (lib/errorReport). 토큰·금액은 보내기 전에 지운다 */
     reportErrors: (errors: unknown[]) => send<{ saved: number; dropped: number }>("POST", "/api/app-errors", { errors }, 10_000),
@@ -212,11 +281,16 @@ export function createApi(baseUrl: string, token = "", opts: ApiOptions = {}) {
     removeStock: (code: string) => send<void>("DELETE", stockPath(code)),
     getQuote: (code: string, fresh = false) => get<Quote>(`${stockPath(code)}/quote${fresh ? "?fresh=1" : ""}`),
     getCandles: (code: string, period: CandlePeriod, count: number) => get<CandleSeries>(`${stockPath(code)}/candles?period=${period}&count=${count}`),
-    getAnalysis: (code: string, kind: AnalysisKind, refresh = false) =>
-      get<Analysis>(`${stockPath(code)}/analysis/${kind}${refresh ? "?refresh=1" : ""}`, 180_000),
+    getAnalysis: (code: string, kind: AnalysisKind, refresh = false, requestId?: string) => {
+      const query = [refresh ? "refresh=1" : "", requestId ? `requestId=${encodeURIComponent(requestId)}` : ""].filter(Boolean).join("&");
+      return get<Analysis>(`${stockPath(code)}/analysis/${kind}${query ? `?${query}` : ""}`, 180_000);
+    },
+    analysisState: (code: string, kind: AnalysisKind, requestId?: string) => get<AnalysisState>(`${stockPath(code)}/analysis/${kind}/state${requestId ? `?requestId=${encodeURIComponent(requestId)}` : ""}`, 10_000),
     getStockNews: (code: string) => get<StockNews>(`${stockPath(code)}/news`),
     /** 지표 점수 (3-44, 플래그 indicatorScores). 플래그가 꺼져 있거나 예전 서버·모르는 종목이면 404 → 부르는 쪽이 "없음"으로 본다 */
     indicatorScores: (code: string) => get<IndicatorScores>(`/api/scores/${encodeURIComponent(code)}`, 20_000),
+    /** 수급 탭 (3-33, 플래그 flowTab). 꺼져 있거나 예전 서버면 404 → 부르는 쪽이 "없음"으로 본다 */
+    investorFlow: (code: string) => get<InvestorFlow>(`/api/investor-flow/${encodeURIComponent(code)}`, 20_000),
 
     latestBriefings: () => get<LatestBriefing[]>("/api/briefings/latest"),
     listBriefings: (filter: { code?: string; date?: string; session?: BriefingSession; limit?: number } = {}) => {
@@ -231,6 +305,8 @@ export function createApi(baseUrl: string, token = "", opts: ApiOptions = {}) {
     getBriefing: (id: number) => get<BriefingWithData>(`/api/briefings/${id}`),
     runBriefings: (session: BriefingSession, codes?: string[], force = false) =>
       send<RunResult>("POST", "/api/briefings/run", { session, codes, force }, 600_000),
+    /** 브리핑 늦음·실패 안내 (브리핑 3차 2, 플래그 briefingStatus). 꺼져 있거나 예전 서버면 404 → 부르는 쪽이 "모름"으로 본다 (예전 안내) */
+    briefingStatus: () => get<BriefingStatus>("/api/briefings/status", 10_000),
     /** 계좌 한 장 브리핑 (3-31). 예전 서버는 404 → 부르는 쪽이 "없음"으로 본다 */
     accountBriefings: (limit = 5) => get<AccountBriefing[]>(`/api/account-briefings?limit=${limit}`, 15_000),
     getAccountBriefing: (id: number) => get<AccountBriefingWithData>(`/api/account-briefings/${id}`, 15_000),
@@ -279,6 +355,13 @@ export function createApi(baseUrl: string, token = "", opts: ApiOptions = {}) {
     priceAlertVolume: (codes: string[]) => get<{ items: VolumeStatus[] }>(`/api/price-alerts/volume?codes=${codes.map(encodeURIComponent).join(",")}`, 45_000),
     /** 잔고 '숫자 기준' 배지 (3-32, 플래그 numberBasis). 예전 서버는 404 → 부르는 쪽(reconcileBadgeQuery)이 꺼짐으로 본다 */
     reconcileBadge: () => get<ReconcileBadgeBody>("/api/admin/toss/reconcile/badge", 8_000),
+    tossAccountSnapshot: () => get<TossAccountSnapshotBody>("/api/admin/toss/account-snapshot", 8_000),
+    /** 내 종목 테마 (3-35, 플래그 holdingThemes). 꺼진 서버·예전 서버는 404 → 부르는 쪽(useHoldingThemes)이 null 로 본다 */
+    holdingThemes: () => get<import("./types").HoldingThemes>("/api/holdings/themes", 20_000),
+    /** '일정·공시' 화면 (3-38, 플래그 holdingSchedule). 꺼져 있거나 예전 서버면 404 */
+    holdingSchedule: () => get<HoldingSchedule>("/api/schedule", 20_000),
+    /** 새 공시 알림 목록 (3-38, 플래그 filingAlerts — 앱이 앞에 있을 때 확인). 꺼져 있으면 404 */
+    filingAlerts: () => get<{ asOf: string; items: FilingAlertItem[] }>("/api/filings/alerts?days=3", 12_000),
     /**
      * 매매일지 (3-37, 플래그 tradeJournal). 새 경로라 예전 서버는 404 → 부르는 쪽(훅)이 꺼짐으로 본다.
      * 서버가 플래그를 끄면 { enabled: false } 빈 값, 메모 쓰기는 409

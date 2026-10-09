@@ -67,6 +67,8 @@ vi.mock("@/api/hooks", () => ({
   useStockMutations: () => ({ register: { mutate: vi.fn() }, remove: { mutate: vi.fn() }, refreshAnalysis: { mutate: vi.fn(), isPending: false, isError: false, error: null } }),
   useFeature: (key: string, fallback = false) => h.flags[key] ?? fallback,
   useApi: () => ({ listStocks: async () => [] }),
+  // 3-33 수급 탭 (main): 윗줄+아랫줄 배치는 아래 전체 폭 칸에 늘 그린다 — 받는 중으로
+  useInvestorFlow: () => ({ ...idle, isLoading: true }),
   useJournalStock: (code: string, enabled: boolean) => {
     if (enabled) h.journalCalls.push(code);
     return { ...idle, data: enabled ? h.journalStock : undefined };
@@ -151,6 +153,28 @@ const BASE: Record<string, string> = {
   "wide samsung": "e2773836e60ca63fb7eaa2585ae5803dde05a03b",
   "wide kakao": "4b8495984d8b8933e02422d30ba6ca6e13d36cfd",
 };
+
+/** main fdce7e8 의 종목 상세를 이 틀로 그려 뜬 지문 — 3-33 '수급' 탭(flowTab)이 켜진 상세 */
+const BASE_FLOW: Record<string, string> = {
+  "phone475 samsung": "d6ba5beba24edf15aaa01bc91f011aeb8bc7a185",
+  "split samsung": "a28ad42c5e2a209fb9b28042f77bfc991afd7e3f",
+  "rows samsung": "f7ab6453396a68d1d22dcdc71fa530964a18bf1a",
+  "wide samsung": "61ea8968267b860fa4bc4937d84690021bdd0aea",
+};
+
+describe("매매일지 입구를 끄면 '수급' 탭(main 3-33)이 켜진 종목 상세도 지금과 같다 (지문)", () => {
+  for (const size of Object.keys(SIZES) as SizeKey[]) {
+    it(`${size} samsung · flowTab`, () => {
+      const off = print(open(samsung(), size, { flowTab: true }));
+      const key = `${size} samsung`;
+      // eslint-disable-next-line no-console
+      if (!BASE_FLOW[key]) console.log(`BASE_FLOW ${JSON.stringify(key)}: ${JSON.stringify(off)},`);
+      expect(off).toBe(BASE_FLOW[key]);
+      expect(print(open(samsung(), size, { flowTab: true, tradeJournal: true }))).toBe(off);
+      expect(print(open(samsung(), size, { flowTab: true, tradeRecords: true }))).toBe(off);
+    });
+  }
+});
 
 describe("매매일지 입구를 끄면 종목 상세가 지금과 같다 (지문)", () => {
   for (const size of Object.keys(SIZES) as SizeKey[]) {

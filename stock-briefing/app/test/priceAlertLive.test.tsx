@@ -977,3 +977,27 @@ describe("꺼짐 (priceAlerts false 또는 받은 값 없음)", () => {
     expect(announceText([])).toBe("");
   });
 });
+
+describe("계정 A단계 (검증 4차): 로그인 화면이 떠 있는 동안·주인 아닌 계정은 가격 알림을 묻지 않는다", () => {
+  it("계정 모드인데 이 서버 세션이 없으면 조건 목록·잔고·거래량을 묻지 않고(1분 다시 묻기도 없음), 주인으로 로그인하면 묻는다. 주인 아닌 계정도 묻지 않는다", async () => {
+    const session = await import("@/lib/session");
+    session.resetSessionForTests();
+    try {
+      const srv = fakeApi();
+      session.markAccountsSeen(API, true);
+      const r = render(tree(qc, false));
+      await settle(r, 5 * 60_000);
+      expect(srv.calls.priceAlerts).toBe(0);
+      expect(srv.calls.listStocks).toBe(0);
+      expect(srv.volumeCodes).toEqual([]);
+      await session.saveSession({ apiUrl: API, token: "gzs1_m", remember: true, user: { id: 7, loginId: "newbie", email: null, isOwner: false, usingInitialPassword: false } });
+      await settle(r, 60_000);
+      expect(srv.calls.priceAlerts).toBe(0);
+      await session.saveSession({ apiUrl: API, token: "gzs1_o", remember: true, user: { id: 1, loginId: "서성원", email: null, isOwner: true, usingInitialPassword: false } });
+      await settle(r);
+      expect(srv.calls.priceAlerts).toBe(1);
+    } finally {
+      session.resetSessionForTests();
+    }
+  });
+});

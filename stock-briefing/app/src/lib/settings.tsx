@@ -113,6 +113,8 @@ interface Settings {
  * 설정 화면의 서버 상태가 틀리게 보이지 않게, 그런 요청은 이 값을 기다렸다가 쓴다 (hooks 의 useApi)
  */
 const latest = { apiUrl: defaultApiUrl(), apiToken: process.env.EXPO_PUBLIC_API_TOKEN ?? "" };
+/** 후속 변경 요청 직전에 현재 서버·인증을 같은 동기 구간에서 대조한다. 저장소 조회는 하지 않는다. */
+export function currentCredentials(): { apiUrl: string; apiToken: string } { return { ...latest }; }
 let markLoaded: () => void = () => {};
 const loaded = new Promise<void>((resolve) => {
   markLoaded = resolve;

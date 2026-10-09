@@ -1,12 +1,13 @@
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { createApi } from "@/api/client";
-import React, { createContext, useContext, useEffect, useRef, useState } from "react";
-import { AppState } from "react-native";
-import type { CandleSeries, Evaluation, FeatureFlags, Quote, RegisteredStock, RegisteredWithQuote } from "@/api/types";
+import React, { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { AppState, Platform } from "react-native";
+import type { CandleSeries, Evaluation, FeatureFlags, Quote, RegisteredStock, RegisteredWithQuote, WatchItem } from "@/api/types";
 import { applyTickToCandles, isIntraday } from "./chartPrefs";
 import { featureOn } from "./features";
 import { SAVER } from "./pollSaver";
 import { applyTick, applyTicksToList, evaluate, latestPerCode, newTradingDay, streamUrl, type StreamMessage, type StreamTick } from "./liveTick";
+import { personalBlocked, sessionFor, sessionIdentityVersion, sessionVersion, subscribeSession } from "./session";
 import { useSettings } from "./settings";
 
 /**
@@ -87,6 +88,19 @@ export function forgetTicks(): void {
   lastTicks.clear();
 }
 
+/** 늦게 도착한 관심목록 조회가 연결 중 받은 최신 가격을 되돌리지 않게 한다. */
+export function withWatchTicks(apiUrl: string, body: { items: WatchItem[] }): { items: WatchItem[] } {
+  let changed = false;
+  const items = body.items.map(item => {
+    const tick = lastTicks.get(lastTickKey(apiUrl, item.code));
+    const quote = tick ? applyTick(item.quote, tick) : item.quote;
+    if (quote === item.quote) return item;
+    changed = true;
+    return { ...item, quote };
+  });
+  return changed ? { ...body, items } : body;
+}
+
 /**
  * 서버에서 받은 봉에 연결 중 받은 마지막 체결을 다시 얹는다. 서버의 마지막 봉과 같은 구간일 때만 고·저·종을 고치고, 뒤 구간·지난 구간이면 그대로.
  * 서버에 없는 뒤 구간 봉은 붙이지 않는다 — 서버 봉을 다시 받는 것이 앱이 만든 봉을 지우는 길이라서. 붙이면 휴장일 목록(KR_HOLIDAYS)에 없는 임시 휴장일
@@ -121,6 +135,22 @@ export function applyTicksToCache(qc: QueryClient, apiUrl: string, ticks: Map<st
     if (next === list) return undefined;
     touched = true;
     return next;
+  });
+  qc.setQueriesData<{ items: WatchItem[] }>({ queryKey: [apiUrl, "watchlist"], predicate: q => q.queryKey[3] === sessionIdentityVersion() && fresh(q.queryKey as unknown[]) }, body => {
+    if (!body?.items) return undefined;
+    let changed = false;
+    const items = body.items.map(item => {
+      const tick = ticks.get(item.code);
+      if (!tick) return item;
+      if (newTradingDay(item.quote, tick)) held.add(item.code);
+      const quote = applyTick(item.quote, tick);
+      if (quote === item.quote) return item;
+      changed = true;
+      return { ...item, quote };
+    });
+    if (!changed) return undefined;
+    touched = true;
+    return { ...body, items };
   });
   for (const tick of ticks.values()) {
     qc.setQueriesData<StockDetail>({ queryKey: [apiUrl, "stock", tick.code], exact: true }, (d) => {
@@ -161,9 +191,15 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
   const qc = useQueryClient();
   const [state, setState] = useState<LiveStreamState>({ connected: false, connectedAt: null, lastTickAt: null, ticks: 0 });
   const ticksRef = useRef(0);
+  // 계정 A단계 (플래그 accounts): 로그인 세션을 머리글로 보낸다(웹은 ?session=). 주인 아닌 계정은 스트림을 열지 않고(서버도 403 — 등록 종목·잔고 변경은 주인 것),
+  // 계정 모드인데 로그인 전이면 로그인할 때까지 붙지 않는다. 계정을 쓰지 않는 서버는 지금과 같다
+  useSyncExternalStore(subscribeSession, sessionVersion, sessionVersion);
+  const session = sessionFor(apiUrl);
+  const streamToken = session?.token ?? null;
+  const blocked = personalBlocked(apiUrl);
 
   useEffect(() => {
-    if (!apiUrl || !ready) return; // 저장된 토큰을 읽은 뒤에 붙는다
+    if (!apiUrl || !ready || blocked) return; // 저장된 토큰을 읽은 뒤에 붙는다
     let socket: WebSocket | null = null;
     let closed = false;
     let backoff = 1000;
@@ -189,6 +225,7 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
       if (now - listRefetchedAt < NEW_DAY_REFETCH_MS) return;
       listRefetchedAt = now;
       void qc.invalidateQueries({ queryKey: [apiUrl, "stocks"], exact: true }, { cancelRefetch: false });
+      void qc.invalidateQueries({ queryKey: [apiUrl, "watchlist"] }, { cancelRefetch: false });
     };
     // snapshot: 접속 직후 스냅샷이면 차트에 새 봉을 열지 않고, 스냅샷에 없는 종목의 마지막 체결은 잊는다 (applyTicksToCache · rememberTicks)
     const applyNow = (snapshot = false) => {
@@ -257,7 +294,8 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
       try {
         // React Native 의 WebSocket 은 세 번째 인자로 헤더를 받는다 (표준 DOM 타입에는 없어서 캐스팅)
         const Ctor = WebSocket as unknown as new (url: string, protocols?: string[], options?: { headers?: Record<string, string> }) => WebSocket;
-        ws = new Ctor(streamUrl(apiUrl, apiToken), undefined, apiToken ? { headers: { authorization: `Bearer ${apiToken}` } } : undefined);
+        const headers: Record<string, string> = { ...(apiToken ? { authorization: `Bearer ${apiToken}` } : {}), ...(streamToken ? { "x-session-token": streamToken } : {}) };
+        ws = new Ctor(streamUrl(apiUrl, apiToken, Platform.OS === "web" ? streamToken : null), undefined, Object.keys(headers).length ? { headers } : undefined);
       } catch {
         scheduleReconnect();
         return;
@@ -298,9 +336,19 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
           // 잔고 탭이 가려져 구독이 끊겨 있어도 바로 받는다 (위젯이 옛 잔고를 그리지 않게) — 구독이 없으면 refetch 가 건너뛰므로 직접 받는다
           void qc.fetchQuery({ queryKey: [apiUrl, "stocks"], queryFn: createApi(apiUrl, apiToken).listStocks, staleTime: 0 }).catch(() => undefined);
           void qc.invalidateQueries({ queryKey: [apiUrl, "stock"] });
+          if (featureOn(qc.getQueryData<FeatureFlags>([apiUrl, "features"]), "tossAccountSnapshot", false)) {
+            void qc.invalidateQueries({ queryKey: [apiUrl, "tossAccountSnapshot"] });
+          }
+        } else if (msg.type === "account") {
+          if (featureOn(qc.getQueryData<FeatureFlags>([apiUrl, "features"]), "tossAccountSnapshot", false)) {
+            void qc.invalidateQueries({ queryKey: [apiUrl, "tossAccountSnapshot"] });
+          }
         } else if (msg.type === "reconcile") {
           // 토스 대조 기록이 새로 생겼다 (3-32): 배지를 보고 있는 화면이 있으면 바로 다시 받고, 없으면 다음에 볼 때 받는다. 잔고·상세는 다시 받지 않는다
           void qc.invalidateQueries({ queryKey: [apiUrl, "reconcileBadge"] });
+          if (featureOn(qc.getQueryData<FeatureFlags>([apiUrl, "features"]), "tossAccountSnapshot", false)) {
+            void qc.invalidateQueries({ queryKey: [apiUrl, "tossAccountSnapshot"] });
+          }
         }
       };
       ws.onerror = () => {
@@ -347,7 +395,7 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
       if (stateTimer) clearTimeout(stateTimer);
       disconnect();
     };
-  }, [apiUrl, apiToken, ready, qc]);
+  }, [apiUrl, apiToken, ready, qc, blocked, streamToken]);
 
   return <LiveStreamContext.Provider value={state}>{children}</LiveStreamContext.Provider>;
 }

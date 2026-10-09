@@ -3,23 +3,31 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, useWindowDimensions, View, type LayoutChangeEvent } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAccountBriefings, useBriefing, useFeature, useHealth, useLatestBriefings, useMarketStatus, useMarketSummaries, useRegisteredStocks, useStockMutations } from "@/api/hooks";
-import type { AccountBriefing, BriefingSession, LatestBriefing, MarketSummary } from "@/api/types";
+import type { AccountBriefing, BriefingSession, BriefingStatusProblem, LatestBriefing, MarketSummary } from "@/api/types";
 import { AccountBriefingBody } from "@/components/AccountBriefingBody";
 import { AccountBriefingCard, AccountBriefingRow } from "@/components/AccountBriefingCard";
 import { MarketSummaryBody } from "@/components/MarketSummaryBody";
+import { MemberNotice } from "@/components/MemberNotice";
+import { MEMBER_EMPTY_BRIEFINGS, useAccountView } from "@/lib/account";
 import { MarketSummaryCard, MarketSummaryRow } from "@/components/MarketSummaryCard";
 import { BriefingBody } from "@/components/BriefingBody";
 import { BriefingCard } from "@/components/BriefingCard";
 import { BriefingRow, BriefingTile, ListNotice, MoreButton, Pills } from "@/components/BriefingList";
+// 브리핑 3차 2 (briefingStatus): 늦음·실패 안내 자리
+import { BriefingStatusSlot } from "@/components/BriefingStatusBanner";
+import { failedRunText } from "@/lib/briefingStatus";
 import { StaleBanner, usePull } from "@/components/Freshness";
 import { CardsSkeleton } from "@/components/Skeleton";
 import { Screen } from "@/components/Screen";
 import { TwoPane } from "@/components/TwoPane";
 import { Button, Card, ChangeText, Empty, ErrorView, Muted, SectionTitle, Segmented } from "@/components/ui";
 import { orderForTab, runChoice, runConfirm, sessionNow } from "@/lib/briefingRun";
+import { ReportListNotice } from "@/components/ReportListNotice";
 import { accountCardItem } from "@/lib/accountBriefing";
 import { marketCardItem } from "@/lib/marketSummary";
 import { firstPick, gridColumns, isUnread, latestSession, noteListSession, noteTabHeadHidden, pickAuto, pickBriefing, pickByUser, selectedRowId, tabHeadOptions, usePick, type BriefingPick, type PickState } from "@/lib/briefingPick";
+// 브리핑 3차 1 (notifBack): 2단에서 알림으로 고른 것 지키기
+import { holdNotified } from "@/lib/briefingPick";
 import { markBriefingRead, useReadBriefings } from "@/lib/briefingRead";
 import { formatDateKo, formatPct } from "@/lib/format";
 import { viewState } from "@/lib/freshness";
@@ -80,15 +88,27 @@ export default function BriefingsScreen() {
   const compactTop = useFeature("briefingCompactTop", false);
   // 브리핑 2차 3 (플래그 moversMerge, 앱 fallback 꺼짐): '변동 큰 종목' 카드 → 목록 1~3위 순위 + 계좌 카드·줄의 기여 상위 묶음. 꺼지면 지금 그대로
   const moversMerge = useFeature("moversMerge", false);
+  // 브리핑 3차 2 (플래그 briefingStatus, 앱 fallback 꺼짐): 늦음·실패 안내(예전 '최근 실행에서 N개 종목이 실패' + 오류 원문 대신), 실패 브리핑 글을 쉬운 말로.
+  // 상태는 안내 자리(BriefingStatusSlot)가 켜졌을 때만 받는다. 꺼지면 지금 그대로
+  const statusOn = useFeature("briefingStatus", false);
+  // 브리핑 3차 3 (플래그 accountSinceLast, 앱 fallback 꺼짐): 계좌 카드·줄(2단 계좌 줄 빼고)의 '9/25(금) 오전보다 총 평가 …' 한 줄. 여기서 한 번 읽어 넘긴다. 꺼지면 지금 그대로
+  const sinceOn = useFeature("accountSinceLast", false);
+  // 브리핑 3차 5 (플래그 holdingEvents, 앱 fallback 꺼짐): 계좌 카드·줄(2단 계좌 줄 빼고)의 '이번 주 일정 · …' 한 줄. 여기서 한 번 읽어 넘긴다. 꺼지면 지금 그대로
+  const weekOn = useFeature("holdingEvents", false);
   // 3-32 (플래그 numberBasis, 앱 fallback 꺼짐): 계좌 카드·줄에 숫자의 시각 'HH:MM 기준'. 여기서 한 번 읽어 카드·줄에 넘긴다. 꺼지면 속성 자체를 넘기지 않음
   const timeMark: { timeMark?: true } = useFeature("numberBasis", false) ? { timeMark: true } : {};
-  // 당겨서 새로고침: 브리핑과 등락률(계좌 브리핑·시장 요약이 켜져 있으면 그것도)을 함께
-  const { pulling, onPull } = usePull(() => Promise.all([refetch(), stocks.refetch(), ...(accountOn ? [accounts.refetch()] : []), ...(summaryOn ? [summaries.refetch()] : [])]));
+  const statusRefetch = useRef<(() => Promise<unknown>) | null>(null);
+  // 당겨서 새로고침: 브리핑과 등락률(계좌 브리핑·시장 요약·늦음/실패 안내가 켜져 있으면 그것도)을 함께
+  const { pulling, onPull } = usePull(() =>
+    Promise.all([refetch(), stocks.refetch(), ...(accountOn ? [accounts.refetch()] : []), ...(summaryOn ? [summaries.refetch()] : []), ...(statusOn && statusRefetch.current ? [statusRefetch.current()] : [])]),
+  );
   const [order, setOrder] = useState<Order>("movers");
   // 3-24 (플래그 emptyGuide): 빈 목록의 안내 + 버튼 하나, 연결 오류의 '설정 열기'. 꺼져 있으면 지금 그대로
   const ux = useUx();
   // 플래그가 꺼져 있으면 속성 자체를 넘기지 않는다 (지금 화면과 한 글자도 같게 — 스냅숏)
   const guideProps = useSettingsGuide();
+  // 계정 A단계 (플래그 accounts): 주인 아닌 계정 (꺼져 있으면 늘 false — 지금 화면 그대로)
+  const { member } = useAccountView();
   const rates = useMemo(() => new Map((stocks.data ?? []).map((s) => [s.code, s.quote?.changeRate ?? null] as const)), [stocks.data]);
   // 3-42 넓은 창: 플래그가 꺼져 있으면 on=false → 아래는 모두 지금 그대로
   const fold = useFoldLayout();
@@ -100,7 +120,13 @@ export default function BriefingsScreen() {
     if (wide) noteTabHeadHidden();
   }, [wide]);
   const headOptions = tabHeadOptions(fold.on, wide);
-  const head = headOptions ? <Tabs.Screen options={headOptions} /> : null;
+  // 계정 A단계: 주인 아닌 계정은 맨 위에 '개인 종목 기능은 준비 중' 안내 (주인·플래그 꺼짐이면 없음 — 지금과 같음)
+  const head = (
+    <>
+      {headOptions ? <Tabs.Screen options={headOptions} /> : null}
+      <MemberNotice />
+    </>
+  );
   // 접은 화면 '이어 보기' 스크롤 (넓은 창에서 보던 브리핑 줄로 한 번). 다시 펴면 다음에 접을 때 또 맞춘다
   const scrollRef = useRef<ScrollView | null>(null);
   const scrolledTo = useRef<number | null>(null);
@@ -160,7 +186,8 @@ export default function BriefingsScreen() {
           const skipped = r.results.filter((x) => x.status === "skipped");
           const parts = [`${r.results.length}개 중 ${r.results.length - failed.length - skipped.length}개 생성`];
           if (skipped.length) parts.push(`${skipped.length}개 휴장일로 건너뜀`);
-          if (failed.length) parts.push(`${failed.length}개 실패\n${failed.map((f) => `${f.name}: ${f.error}`).join("\n")}`);
+          // 브리핑 3차 2 (briefingStatus): 오류 원문 대신 쉬운 말
+          if (failed.length) parts.push(`${failed.length}개 실패\n${failed.map((f) => (statusOn ? failedRunText(f.error, f.name) : `${f.name}: ${f.error}`)).join("\n")}`);
           Alert.alert("브리핑 생성 완료", parts.join(", "));
         },
         onError: (e) => Alert.alert("실행 실패", e instanceof Error ? e.message : String(e)),
@@ -184,17 +211,36 @@ export default function BriefingsScreen() {
   const llmOff = health.data?.llmConfigured === false;
   const krHoliday = market.data && !market.data.KR.isTradingDay;
 
-  const banner =
+  // 3-24 (emptyGuide): 브리핑이 하나도 없으면 빈 화면 안의 버튼 하나가 수동 생성을 맡는다 → 아래 '수동 생성' 카드는 숨긴다 (같은 일 버튼이 셋이 되지 않게)
+  const guideNoBriefing = ux.emptyGuide && items.length > 0 && withBriefing.length === 0;
+  const oldBanner =
     llmOff || (last && last.failed > 0) ? (
       <Card style={{ borderLeftWidth: 3, borderLeftColor: t.danger }}>
         <Text style={{ color: t.danger, fontSize: font.body, fontWeight: "700" }}>{llmOff ? "브리핑 모델이 설정되지 않았습니다" : `최근 실행에서 ${last!.failed}개 종목이 실패했습니다`}</Text>
-        <Muted>{llmOff ? "브리핑을 만드는 모델 키가 서버에 설정되지 않아 새 브리핑을 만들 수 없습니다. 관리자에게 알려 주세요." : last!.lastError ?? ""}</Muted>
+        {/* 브리핑 3차 2 (briefingStatus): 켜진 채 상태를 못 받아 이 안내로 돌아와도 오류 원문 대신 쉬운 말 (꺼지면 원문 그대로) */}
+        <Muted>{llmOff ? "브리핑을 만드는 모델 키가 서버에 설정되지 않아 새 브리핑을 만들 수 없습니다. 관리자에게 알려 주세요." : statusOn && last!.lastError ? failedRunText(last!.lastError) : last!.lastError ?? ""}</Muted>
         {last ? <Muted>{formatDateKo(last.finishedAt, true)} · {last.session === "morning" ? "오전" : "오후"} · 성공 {last.ok} / 실패 {last.failed} / 건너뜀 {last.skipped}</Muted> : null}
       </Card>
     ) : null;
+  // 브리핑 3차 2 (briefingStatus): 켜져 있으면 안내 자리가 서버 상태로 새 안내를 그린다 (못 받으면 예전 안내). 못 만든 종목 이름을 누르면
+  // 폰·카드 격자는 그 브리핑 상세, 2단은 오른쪽 칸에서 고르기. 꺼지면 예전 안내 그대로
+  const twoPaneNow = wide && fold.twoPane;
+  const openProblem = (p: BriefingStatusProblem) => {
+    if (p.briefingId === null) return;
+    if (twoPaneNow) chooseBriefing({ kind: "stock", id: p.briefingId, code: p.code });
+    else router.push(`/briefings/${p.briefingId}`);
+  };
+  // 브리핑이 하나도 없으면(emptyGuide) 안내는 '수동 생성' 대신 빈 화면의 '지금 만들기'를 가리킨다.
+  // 계정 A단계: 주인 아닌 계정은 늦음·실패 안내를 그리지 않고 상태도 묻지 않는다 (주인 브리핑 실행 상태 — 서버도 403. 맨 위 차분한 안내만)
+  const runBanner = member ? null : statusOn ? <BriefingStatusSlot fallback={oldBanner} onOpen={openProblem} role={twoPaneNow ? "button" : "link"} refetchRef={statusRefetch} nowButton={guideNoBriefing} /> : oldBanner;
+  const banner = (accountOn && accounts.isError) || (summaryOn && summaries.isError) ? <>
+    {accountOn ? <ReportListNotice label="계좌 브리핑" query={accounts} /> : null}
+    {summaryOn ? <ReportListNotice label="시장 요약" query={summaries} /> : null}
+    {runBanner}
+  </> : runBanner;
+  // 실패 브리핑 카드·줄 글을 쉬운 말로 (꺼지면 속성을 넘기지 않아 지금과 같다)
+  const plainFail = statusOn ? { plainFail: true } : {};
   const ratesFailText = moversOn && order === "movers" && stocks.isError ? "등락률을 불러오지 못해 등록순으로 보여 줍니다 · 당겨서 다시 시도" : null;
-  // 3-24 (emptyGuide): 브리핑이 하나도 없으면 빈 화면 안의 버튼 하나가 수동 생성을 맡는다 → 아래 '수동 생성' 카드는 숨긴다 (같은 일 버튼이 셋이 되지 않게)
-  const guideNoBriefing = ux.emptyGuide && items.length > 0 && withBriefing.length === 0;
   const manual =
     items.length > 0 && !guideNoBriefing ? (
       <Card>
@@ -210,8 +256,12 @@ export default function BriefingsScreen() {
       <Muted style={{ paddingHorizontal: space.lg }}>브리핑 없음: {items.filter((i) => !i.latest).map((i) => i.name).join(", ")}</Muted>
     ) : null;
 
-  // 3-24 빈 목록 (플래그 emptyGuide): 무엇을 하면 되는지 한 문장 + 버튼 하나. 꺼져 있으면 아래 예전 안내 그대로
-  const guideEmpty = ux.emptyGuide
+  // 3-24 빈 목록 (플래그 emptyGuide): 무엇을 하면 되는지 한 문장 + 버튼 하나. 꺼져 있으면 아래 예전 안내 그대로.
+  // 계정 A단계: 주인 아닌 계정은 종목을 아직 추가할 수 없으므로(서버가 막는다) '종목을 추가하면…'·[종목 검색] 대신 차분한 안내만 (버튼 없음)
+  const memberEmpty = member ? <Empty title={MEMBER_EMPTY_BRIEFINGS.title} hint={MEMBER_EMPTY_BRIEFINGS.hint} /> : null;
+  const guideEmpty = memberEmpty
+    ? { none: memberEmpty, noBriefing: memberEmpty }
+    : ux.emptyGuide
     ? {
         none: <Empty title="등록된 종목이 없습니다" hint="종목을 추가하면 평일 장 시작 전·마감 뒤에 종목마다 브리핑이 만들어집니다." action={<Button title="종목 검색" icon="search" onPress={() => router.push("/stocks/add")} />} />,
         noBriefing: (
@@ -267,6 +317,9 @@ export default function BriefingsScreen() {
         pulling={pulling}
         onPull={onPull}
         picked={picked}
+        plainFail={statusOn}
+        since={sinceOn}
+        week={weekOn}
       />
     );
   }
@@ -301,6 +354,8 @@ export default function BriefingsScreen() {
             trim={trim}
             holidayLines
             contributors={merge}
+            since={sinceOn}
+            week={weekOn}
             {...timeMark}
           />
         ) : null}
@@ -323,7 +378,7 @@ export default function BriefingsScreen() {
       {head}
       {compactBlock}
       {!compactTop && summary ? <MarketSummaryCard summary={summary} selected={hl?.kind === "market" && hl.id === summary.id} trim={trim} /> : null}
-      {!compactTop && account ? <AccountBriefingCard briefing={account} selected={hl?.kind === "account" && hl.id === account.id} trim={trim} contributors={merge} {...timeMark} /> : null}
+      {!compactTop && account ? <AccountBriefingCard briefing={account} selected={hl?.kind === "account" && hl.id === account.id} trim={trim} contributors={merge} since={sinceOn} week={weekOn} {...timeMark} /> : null}
       {banner}
       {/* 탭 휴장 줄. trim(브리핑 2차 4)이면 '국내 종목 브리핑 없음'(틀린 말 — 목록에 직전 거래일 국내 브리핑이 있음) 대신 등락 기준을 밝히고(넓은 창 문구와 같게),
           보이는 시장 요약이 한국 휴장을 이미 말하면 숨긴다. 한국 휴장일 아침('밤사이 미국' 요약)·요약 꺼짐·없음·실패면 남긴다.
@@ -384,7 +439,7 @@ export default function BriefingsScreen() {
       ) : (
         withBriefing.map((i) => {
           const selected = hlId !== null && i.latest!.id === hlId;
-          const card = <BriefingCard key={i.code} briefing={i.latest!} mode={mode} rate={movers ? (rates.get(i.code) ?? null) : undefined} selected={selected} aiTag={aiTag} {...rankOf(i)} />;
+          const card = <BriefingCard key={i.code} briefing={i.latest!} mode={mode} rate={movers ? (rates.get(i.code) ?? null) : undefined} selected={selected} aiTag={aiTag} {...rankOf(i)} {...plainFail} />;
           return selected ? (
             <View key={i.code} onLayout={onHighlightLayout}>
               {card}
@@ -444,6 +499,12 @@ interface WideProps {
   pulling: boolean;
   onPull: () => void;
   picked: PickState;
+  /** 브리핑 3차 2 (briefingStatus): 실패 브리핑 줄·카드 글을 쉬운 말로 */
+  plainFail?: boolean;
+  /** 브리핑 3차 3 (accountSinceLast): 카드 격자 계좌 줄의 '… 오전보다 총 평가 …' 한 줄 (2단 계좌 줄에는 넣지 않음 — 첫 화면 줄 수를 지키려고) */
+  since?: boolean;
+  /** 브리핑 3차 5 (holdingEvents): 카드 격자 계좌 줄의 '이번 주 일정 · …' 한 줄 (2단 계좌 줄에는 넣지 않음 — 상세에 있음) */
+  week?: boolean;
   /** 3-32 (플래그 numberBasis): 계좌 줄 'HH:MM 기준' — 켜져 있을 때만 { timeMark: true }, 꺼지면 빈 객체 (지금 그대로) */
   timeMark: { timeMark?: true };
 }
@@ -542,7 +603,9 @@ function WideBriefings(p: WideProps) {
     if (!p.twoPane || !settled) return;
     const fresh = noteListSession(latestKey);
     const gone = sel !== null && (sel.kind === "stock" ? !briefs.some((b) => b.id === sel.id) : sel.kind === "market" ? sel.id !== marketId : sel.id !== accountId);
-    if (sel && !(fresh && gone) && !accountGone && !marketGone) {
+    // 브리핑 3차 1 (notifBack): 알림으로 고른 것은 새 세션 목록이 계좌·시장 요약 목록보다 먼저 와도 한 번은 지킨다 (꺼져 있으면 늘 false)
+    const held = holdNotified(sel, gone, fresh);
+    if (sel && (held || !(fresh && gone)) && !accountGone && !marketGone) {
       if (!p.picked.highlight) pickBriefing(sel, { highlight: true });
       return;
     }
@@ -636,6 +699,7 @@ function WideBriefings(p: WideProps) {
                 unread={unreadOf(i)}
                 selected={rowId !== null && i.latest!.id === rowId}
                 onPress={() => choose(i.latest!.id, i.code)}
+                {...(p.plainFail ? { plainFail: true } : {})}
               />
             ))}
           <View style={styles.listFoot}>
@@ -693,6 +757,8 @@ function WideBriefings(p: WideProps) {
       onPress={() => router.push(`/briefings/account/${p.account!.id}`)}
       trim={p.trim}
       holidayLines={p.compactTop}
+      {...(p.since ? { since: true } : {})}
+      {...(p.week ? { week: true } : {})}
       {...p.timeMark}
     />
   ) : null;
@@ -731,6 +797,7 @@ function WideBriefings(p: WideProps) {
                 mode={p.mode}
                 width={cardW}
                 onPress={() => router.push(`/briefings/${i.latest!.id}`)}
+                {...(p.plainFail ? { plainFail: true } : {})}
               />
             ))}
           </View>

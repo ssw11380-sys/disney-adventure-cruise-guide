@@ -96,6 +96,9 @@ const US_HOLIDAYS = new Set([
   "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31", "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
 ]);
 
+/** 미국 조기 폐장일: 서버 marketContext.US_EARLY_CLOSES와 같은 날짜. 정규장 13:00, 애프터마켓 17:00 ET 종료. */
+const US_EARLY_CLOSES = new Set(["2026-11-27", "2026-12-24", "2027-11-26"]);
+
 /**
  * 한국거래소 평일 휴장일과 이름 (서울 날짜). 서버 marketContext.KR_HOLIDAYS 와 같은 목록 — 해마다 KRX 공지를 확인해 둘 다 추가한다
  * (app/test 가 두 목록이 같은지, 내년 끝까지 있는지 본다). 2027 은 계산한 값이라 12월 KRX 공지로 다시 확인한다
@@ -195,13 +198,14 @@ export function sameTradingDay(asOf: string, tickIso: string, code: string): boo
 /**
  * 그 시각이 그 시장의 거래 시간인지 (요일·시각·휴장일 목록으로). 시각을 못 읽으면 true.
  *  - 한국: 평일 08:00~20:00 (서울, KRX+NXT), 한국 평일 휴장일(KR_HOLIDAYS) 빼고
- *  - 미국: 세션 날짜가 거래일인 동안 — 뉴욕 전날 20:00(주간거래) ~ 당일 20:00(애프터 끝). 일요일 20:00 ~ 금요일 20:00, 휴장일 빼고
+ *  - 미국: 세션 날짜가 거래일인 동안 — 뉴욕 전날 20:00(주간거래) ~ 당일 20:00(애프터 끝, 조기 폐장일은 17:00). 일요일 20:00 ~ 금요일 20:00, 휴장일 빼고
  */
 export function inTradingHours(iso: string, code: string): boolean {
   const clock = marketClock(iso, code);
   if (!clock) return true;
   const hour = Number(clock.local.slice(11, 13));
   if (isKrCode(code) && (hour < KR_SESSION_FROM_H || hour >= KR_SESSION_TO_H)) return false;
+  if (!isKrCode(code) && hour >= 17 && hour < US_OVERNIGHT_FROM_H && US_EARLY_CLOSES.has(clock.local.slice(0, 10))) return false;
   return isSessionDay(sessionDate(clock.local, code), code);
 }
 

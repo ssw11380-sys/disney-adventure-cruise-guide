@@ -1,0 +1,138 @@
+{
+ "stockEndType": "stock",
+ "reutersCode": "O",
+ "stockName": "리얼티 인컴",
+ "stockNameEng": "Realty Income Corporation",
+ "symbolCode": "O",
+ "nationType": "USA",
+ "closePrice": "55.54",
+ "closePriceRaw": "55.54",
+ "countOfListedStock": 946218033,
+ "stockItemTotalInfos": [
+  {
+   "code": "basePrice",
+   "key": "전일",
+   "value": "55.54"
+  },
+  {
+   "code": "openPrice",
+   "key": "시가",
+   "value": "55.45",
+   "compareToPreviousPrice": {
+    "code": "5",
+    "text": "하락",
+    "name": "FALLING"
+   }
+  },
+  {
+   "code": "highPrice",
+   "key": "고가",
+   "value": "55.66",
+   "compareToPreviousPrice": {
+    "code": "2",
+    "text": "상승",
+    "name": "RISING"
+   }
+  },
+  {
+   "code": "lowPrice",
+   "key": "저가",
+   "value": "55.08",
+   "compareToPreviousPrice": {
+    "code": "5",
+    "text": "하락",
+    "name": "FALLING"
+   }
+  },
+  {
+   "code": "accumulatedTradingVolume",
+   "key": "거래량",
+   "value": "11,970,598"
+  },
+  {
+   "code": "accumulatedTradingValue",
+   "key": "대금",
+   "value": "6.63억 USD",
+   "valueDesc": "9,016억원"
+  },
+  {
+   "code": "marketValue",
+   "key": "시총",
+   "value": "526억 USD",
+   "valueDesc": "71조 4,825억원"
+  },
+  {
+   "code": "industryGroupKor",
+   "key": "업종",
+   "value": "상업용 REITs"
+  },
+  {
+   "code": "highPriceOf52Weeks",
+   "key": "52주 최고",
+   "keyDesc": "2026.02.27.",
+   "value": "67.94"
+  },
+  {
+   "code": "lowPriceOf52Weeks",
+   "key": "52주 최저",
+   "keyDesc": "2026.09.24.",
+   "value": "55.07"
+  },
+  {
+   "code": "per",
+   "key": "PER",
+   "keyDesc": "2026.06.",
+   "value": "34.47배"
+  },
+  {
+   "code": "eps",
+   "key": "EPS",
+   "keyDesc": "2026.06.",
+   "value": "1.61"
+  },
+  {
+   "code": "pbr",
+   "key": "PBR",
+   "keyDesc": "2026.06.",
+   "value": "1.33배"
+  },
+  {
+   "code": "bps",
+   "key": "BPS",
+   "keyDesc": "2026.06.",
+   "value": "41.80"
+  },
+  {
+   "code": "dividend",
+   "key": "주당배당금",
+   "keyDesc": "2026.10.",
+   "value": "3.25"
+  },
+  {
+   "code": "dividendYieldRatio",
+   "key": "배당수익률",
+   "keyDesc": "2026.10.",
+   "value": "5.84%"
+  },
+  {
+   "code": "dividendAt",
+   "key": "배당일",
+   "value": "2026.10.15."
+  },
+  {
+   "code": "exDividendAt",
+   "key": "배당락일",
+   "value": "2026.09.30."
+  },
+  {
+   "code": "faceValueDivisionRate",
+   "key": "액면변경",
+   "value": "N/A"
+  },
+  {
+   "code": "faceValue",
+   "key": "액면가",
+   "value": "1.00 USD"
+  }
+ ]
+}

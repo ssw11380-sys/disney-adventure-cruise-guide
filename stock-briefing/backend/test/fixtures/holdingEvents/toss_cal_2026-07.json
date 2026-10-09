@@ -1,0 +1,827 @@
+{
+ "result": {
+  "events": [
+   {
+    "id": {
+     "uniqueName": "20260701_ISM제조업구매관리자지수발표_ECONOMIC",
+     "group": "ECONOMIC"
+    },
+    "view": {
+     "title": "ISM 제조업 구매관리자지수 발표",
+     "landingOption": {
+      "type": "BOTTOM_SHEET"
+     }
+    },
+    "date": "2026-07-01",
+    "excludeFromAll": false,
+    "stockEarnings": null
+   },
+   {
+    "id": {
+     "uniqueName": "20260703_독립기념일 (대체)_HOLIDAY_US",
+     "group": "HOLIDAY"
+    },
+    "view": {
+     "title": "해외 휴장일",
+     "landingOption": null
+    },
+    "date": "2026-07-03",
+    "excludeFromAll": false,
+    "stockEarnings": null
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "KRX_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "LG에너지솔루션 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/A373220"
+     }
+    },
+    "date": "2026-07-07",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "373220",
+     "companyName": "LG에너지솔루션",
+     "announceDateTime": "2026-07-07T00:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "kr",
+     "announceMarketStatus": "KR_STOCK_AFTER_ANNOUNCEMENT",
+     "announceMarketStatusText": "발표 후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "뱅크오브아메리카 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US19730102001"
+     }
+    },
+    "date": "2026-07-14",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NYS000R3K-E0",
+     "companyName": "뱅크오브아메리카",
+     "announceDateTime": "2026-07-14T19:45:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_PRE_MARKET",
+     "announceMarketStatusText": "오후 9시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "제이피모건 체이스 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US19690401002"
+     }
+    },
+    "date": "2026-07-14",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NYS0035K2-E0",
+     "companyName": "제이피모건 체이스",
+     "announceDateTime": "2026-07-14T19:45:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_PRE_MARKET",
+     "announceMarketStatusText": "오후 9시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "존슨 앤 존슨 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US19440925001"
+     }
+    },
+    "date": "2026-07-15",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NYS000NB6-E0",
+     "companyName": "존슨 앤 존슨",
+     "announceDateTime": "2026-07-15T19:20:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_PRE_MARKET",
+     "announceMarketStatusText": "오후 9시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "KRX_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "KB금융 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/A105560"
+     }
+    },
+    "date": "2026-07-23",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "105560",
+     "companyName": "KB금융",
+     "announceDateTime": "2026-07-23T00:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "kr",
+     "announceMarketStatus": "KR_STOCK_AFTER_ANNOUNCEMENT",
+     "announceMarketStatusText": "발표 후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "KRX_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "삼성바이오로직스 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/A207940"
+     }
+    },
+    "date": "2026-07-23",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "207940",
+     "companyName": "삼성바이오로직스",
+     "announceDateTime": "2026-07-23T00:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "kr",
+     "announceMarketStatus": "KR_STOCK_AFTER_ANNOUNCEMENT",
+     "announceMarketStatusText": "발표 후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "KRX_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "신한지주 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/A055550"
+     }
+    },
+    "date": "2026-07-23",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "055550",
+     "companyName": "신한지주",
+     "announceDateTime": "2026-07-23T00:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "kr",
+     "announceMarketStatus": "KR_STOCK_AFTER_ANNOUNCEMENT",
+     "announceMarketStatusText": "발표 후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "알파벳 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US20040819001"
+     }
+    },
+    "date": "2026-07-23",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NAS0FPWZZ-E0",
+     "companyName": "알파벳",
+     "announceDateTime": "2026-07-23T05:03:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_BEFORE_DAY_MARKET",
+     "announceMarketStatusText": "오전 5시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "테슬라 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US20100629001"
+     }
+    },
+    "date": "2026-07-23",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NAS006XY7-E0",
+     "companyName": "테슬라",
+     "announceDateTime": "2026-07-23T05:07:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_BEFORE_DAY_MARKET",
+     "announceMarketStatusText": "오전 5시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "KRX_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "현대차 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/A005380"
+     }
+    },
+    "date": "2026-07-23",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "005380",
+     "companyName": "현대차",
+     "announceDateTime": "2026-07-23T00:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "kr",
+     "announceMarketStatus": "KR_STOCK_AFTER_ANNOUNCEMENT",
+     "announceMarketStatusText": "발표 후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "KRX_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "기아 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/A000270"
+     }
+    },
+    "date": "2026-07-24",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "000270",
+     "companyName": "기아",
+     "announceDateTime": "2026-07-24T00:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "kr",
+     "announceMarketStatus": "KR_STOCK_AFTER_ANNOUNCEMENT",
+     "announceMarketStatusText": "발표 후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "인텔 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US19711013001"
+     }
+    },
+    "date": "2026-07-24",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NAS000N01-E0",
+     "companyName": "인텔",
+     "announceDateTime": "2026-07-24T05:01:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_BEFORE_DAY_MARKET",
+     "announceMarketStatusText": "오전 5시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "KRX_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "하나금융지주 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/A086790"
+     }
+    },
+    "date": "2026-07-24",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "086790",
+     "companyName": "하나금융지주",
+     "announceDateTime": "2026-07-24T00:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "kr",
+     "announceMarketStatus": "KR_STOCK_AFTER_ANNOUNCEMENT",
+     "announceMarketStatusText": "발표 후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "KRX_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "두산에너빌리티 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/A034020"
+     }
+    },
+    "date": "2026-07-27",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "034020",
+     "companyName": "두산에너빌리티",
+     "announceDateTime": "2026-07-27T00:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "kr",
+     "announceMarketStatus": "KR_STOCK_AFTER_ANNOUNCEMENT",
+     "announceMarketStatusText": "발표 후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "KRX_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "셀트리온 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/A068270"
+     }
+    },
+    "date": "2026-07-27",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "068270",
+     "companyName": "셀트리온",
+     "announceDateTime": "2026-07-27T00:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "kr",
+     "announceMarketStatus": "KR_STOCK_AFTER_ANNOUNCEMENT",
+     "announceMarketStatusText": "발표 후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "KRX_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "HD현대중공업 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/A329180"
+     }
+    },
+    "date": "2026-07-29",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "329180",
+     "companyName": "HD현대중공업",
+     "announceDateTime": "2026-07-29T00:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "kr",
+     "announceMarketStatus": "KR_STOCK_AFTER_ANNOUNCEMENT",
+     "announceMarketStatusText": "발표 후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "KRX_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "SK하이닉스 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/A000660"
+     }
+    },
+    "date": "2026-07-29",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "000660",
+     "companyName": "SK하이닉스",
+     "announceDateTime": "2026-07-29T00:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "kr",
+     "announceMarketStatus": "KR_STOCK_AFTER_ANNOUNCEMENT",
+     "announceMarketStatusText": "발표 후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "비자 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US20080319001"
+     }
+    },
+    "date": "2026-07-29",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NYS05MDRV-E0",
+     "companyName": "비자",
+     "announceDateTime": "2026-07-29T05:05:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_BEFORE_DAY_MARKET",
+     "announceMarketStatusText": "오전 5시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "KRX_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "삼성물산 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/A028260"
+     }
+    },
+    "date": "2026-07-29",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "028260",
+     "companyName": "삼성물산",
+     "announceDateTime": "2026-07-29T00:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "kr",
+     "announceMarketStatus": "KR_STOCK_AFTER_ANNOUNCEMENT",
+     "announceMarketStatusText": "발표 후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "KRX_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "LG전자 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/A066570"
+     }
+    },
+    "date": "2026-07-30",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "066570",
+     "companyName": "LG전자",
+     "announceDateTime": "2026-07-30T00:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "kr",
+     "announceMarketStatus": "KR_STOCK_AFTER_ANNOUNCEMENT",
+     "announceMarketStatusText": "발표 후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "램 리서치 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US19840504001"
+     }
+    },
+    "date": "2026-07-30",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NAS000NYZ-E0",
+     "companyName": "램 리서치",
+     "announceDateTime": "2026-07-30T05:05:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_BEFORE_DAY_MARKET",
+     "announceMarketStatusText": "오전 5시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "마스터카드 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US20060525001"
+     }
+    },
+    "date": "2026-07-30",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NYS0038M5-E0",
+     "companyName": "마스터카드",
+     "announceDateTime": "2026-07-30T21:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_PRE_MARKET",
+     "announceMarketStatusText": "오후 9시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "마이크로소프트 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US19860313001"
+     }
+    },
+    "date": "2026-07-30",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NAS000Q07-E0",
+     "companyName": "마이크로소프트",
+     "announceDateTime": "2026-07-30T05:05:22",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_BEFORE_DAY_MARKET",
+     "announceMarketStatusText": "오전 5시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "메타 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US20120518001"
+     }
+    },
+    "date": "2026-07-30",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NAS0077YX-E0",
+     "companyName": "메타",
+     "announceDateTime": "2026-07-30T05:01:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_BEFORE_DAY_MARKET",
+     "announceMarketStatusText": "오전 5시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "KRX_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "삼성SDI 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/A006400"
+     }
+    },
+    "date": "2026-07-30",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "006400",
+     "companyName": "삼성SDI",
+     "announceDateTime": "2026-07-30T00:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "kr",
+     "announceMarketStatus": "KR_STOCK_AFTER_ANNOUNCEMENT",
+     "announceMarketStatusText": "발표 후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "KRX_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "삼성전기 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/A009150"
+     }
+    },
+    "date": "2026-07-30",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "009150",
+     "companyName": "삼성전기",
+     "announceDateTime": "2026-07-30T00:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "kr",
+     "announceMarketStatus": "KR_STOCK_AFTER_ANNOUNCEMENT",
+     "announceMarketStatusText": "발표 후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "KRX_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "삼성전자 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/A005930"
+     }
+    },
+    "date": "2026-07-30",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "005930",
+     "companyName": "삼성전자",
+     "announceDateTime": "2026-07-30T00:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "kr",
+     "announceMarketStatus": "KR_STOCK_AFTER_ANNOUNCEMENT",
+     "announceMarketStatusText": "발표 후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "셰브론 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US19210624001"
+     }
+    },
+    "date": "2026-07-31",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NYS000DP6-E0",
+     "companyName": "셰브론",
+     "announceDateTime": "2026-07-31T19:15:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_PRE_MARKET",
+     "announceMarketStatusText": "오후 9시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "아마존 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US19970515001"
+     }
+    },
+    "date": "2026-07-31",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NAS001MF1-E0",
+     "companyName": "아마존",
+     "announceDateTime": "2026-07-31T05:01:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_BEFORE_DAY_MARKET",
+     "announceMarketStatusText": "오전 5시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "애브비 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US20121210001"
+     }
+    },
+    "date": "2026-07-31",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NYS00DYYX-E0",
+     "companyName": "애브비",
+     "announceDateTime": "2026-07-31T20:47:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_PRE_MARKET",
+     "announceMarketStatusText": "오후 9시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "애플 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US19801212001"
+     }
+    },
+    "date": "2026-07-31",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NAS000C7F-E0",
+     "companyName": "애플",
+     "announceDateTime": "2026-07-31T05:30:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_BEFORE_DAY_MARKET",
+     "announceMarketStatusText": "오전 5시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "엑슨 모빌 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US19200325001"
+     }
+    },
+    "date": "2026-07-31",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NYS002Q0G-E0",
+     "companyName": "엑슨 모빌",
+     "announceDateTime": "2026-07-31T19:30:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_PRE_MARKET",
+     "announceMarketStatusText": "오후 9시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "KRX_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "한화에어로스페이스 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/A012450"
+     }
+    },
+    "date": "2026-07-31",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "012450",
+     "companyName": "한화에어로스페이스",
+     "announceDateTime": "2026-07-31T00:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "kr",
+     "announceMarketStatus": "KR_STOCK_AFTER_ANNOUNCEMENT",
+     "announceMarketStatusText": "발표 후"
+    }
+   }
+  ],
+  "includeMajorStock": false
+ }
+}

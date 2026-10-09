@@ -68,6 +68,11 @@ vi.mock("@/components/SwipeRow", () => ({ SwipeRow: "SwipeRow", closeOpenRow: ()
 vi.mock("@/components/TossImportButton", () => ({ TossImportButton: "TossImportButton" }));
 vi.mock("@/components/StockLine", () => ({ PRICE_HEAD: "현재가·등락률", useLineCols: () => ({ rank: 30, price: 100, right: 108 }) }));
 vi.mock("@/components/HoldingsTableHead", () => ({ TableHeadRow: "TableHeadRow" }));
+// 토스 계좌 평가 요약 (main 의 tossAccountSnapshot): 속성(비중·테마·매매일지 링크)만 지문에 — 안의 계좌 칸은 children 으로 그대로 그린다
+vi.mock("@/components/TossAccountSummary", async () => {
+  const R = await import("react");
+  return { TossAccountSummary: ({ children, ...props }: { children: React.ReactNode }) => R.createElement("TossAccountSummary", props, children) };
+});
 
 const { default: StocksScreen } = await import("@/app/(tabs)/index");
 const { forgetWindowClass } = await import("@/lib/useFoldLayout");
@@ -128,6 +133,13 @@ const LAYOUTS = [
   ["넓은 933×704 한 줄 띠", 933, 704, { allocationView: true, foldLayout: true }, false, 1],
   ["넓은 704×933 두 줄 띠", 704, 933, { allocationView: true, foldLayout: true }, false, 1],
   ["넓은 704×933 촘촘 띠", 704, 933, { allocationView: true, foldLayout: true, densityMode: true }, true, 1],
+  // main 위에 다시 맞춤: 3-35 '테마' 버튼 · 토스 계좌 평가 요약과 함께
+  ["폰 475 기본 · 테마", 475, 751, { allocationView: true, holdingThemes: true }, false, 1],
+  ["폰 360 기본 200% · 테마", 360, 752, { allocationView: true, holdingThemes: true }, false, 2],
+  ["폰 475 촘촘 · 테마", 475, 751, { allocationView: true, densityMode: true, holdingThemes: true }, true, 1],
+  ["넓은 704×933 두 줄 띠 · 테마 130%", 704, 933, { allocationView: true, foldLayout: true, holdingThemes: true, numberBasis: true }, false, 1.3],
+  ["폰 475 토스 계좌 요약", 475, 751, { allocationView: true, holdingThemes: true, tossAccountSnapshot: true }, false, 1],
+  ["넓은 933×704 토스 계좌 요약", 933, 704, { allocationView: true, foldLayout: true, holdingThemes: true, tossAccountSnapshot: true }, false, 1],
 ] as const;
 
 /** 바꾸기 전 main(2793cd1) 코드에서 뜬 지문 — 매매일지를 끄면(두 플래그 중 하나라도) 이 값과 같아야 한다 */
@@ -139,6 +151,13 @@ const BASE: Record<string, string> = {
   "넓은 933×704 한 줄 띠": "c68cda32886efd278ce656de9f1a66175f42c09a",
   "넓은 704×933 두 줄 띠": "4d0c83426ec31656679c3f782d1368d5e818232e",
   "넓은 704×933 촘촘 띠": "f081f5a5373c479d90bac465c807c043f8bc2506",
+  // 아래는 main fdce7e8 의 잔고 화면(index.tsx)을 이 틀로 그려 뜬 지문
+  "폰 475 기본 · 테마": "b8ace79234d56ee2a4a27819cada12c913e0a038",
+  "폰 360 기본 200% · 테마": "b8ace79234d56ee2a4a27819cada12c913e0a038",
+  "폰 475 촘촘 · 테마": "0064653cac8e1de2b0e5b90c0d58473bd1d2c6a4",
+  "넓은 704×933 두 줄 띠 · 테마 130%": "59f1f4a6fd36fcf5279b3b8074e98d80d7f0a576",
+  "폰 475 토스 계좌 요약": "0b6cc3b308c2645f364efd54c9cc8223a013d728",
+  "넓은 933×704 토스 계좌 요약": "7cfe7ee2064951645ec4b3d953deb1d3a7519353",
 };
 
 describe("매매일지 입구를 끄면 잔고 탭이 지금과 같다 (지문)", () => {
@@ -253,6 +272,77 @@ describe("켜면: 입구 자리 (§4.1 ②)", () => {
         expect(cellsStyle(on)).toBe(cellsStyle(off));
         expect(icons.length <= 1).toBe(true);
       }
+    }
+  });
+});
+
+describe("main 의 '테마'(3-35)·토스 계좌 요약과 함께 (main 위에 다시 맞춤)", () => {
+  const THEMES = "내 종목 테마 보기";
+  it("폰 기본: 계좌 패널 한 줄에 [매매일지] [비중] [테마] 차례 · 줄이 모자라면 다음 줄로(테마와 같은 줄 규칙)", () => {
+    for (const [w, fs] of [
+      [475, 1],
+      [360, 2],
+    ] as const) {
+      const on = draw(w, w === 475 ? 751 : 752, { allocationView: true, holdingThemes: true, ...ON }, { fontScale: fs });
+      const btn = on.all().find((n) => n.type === "Button" && n.props.accessibilityLabel === OPEN)!;
+      const row = parentOf(on, btn);
+      expect(row.children.filter((c): c is HostNode => typeof c !== "string").map((k) => k.props.accessibilityLabel)).toEqual([OPEN, "비중 보기", THEMES]);
+      expect(flat(row.props.style)).toMatchObject({ flexDirection: "row", flexWrap: "wrap" });
+    }
+  });
+
+  it("촘촘: 보유 구역 머리에 아이콘 · 비중 · 테마 · 정렬 차례 (테마가 켜져 있으면 머리 줄이 모자랄 때 버튼 묶음이 다음 줄로)", () => {
+    const on = draw(475, 751, { allocationView: true, densityMode: true, holdingThemes: true, ...ON }, { dense: true });
+    const icon = on.all().find((n) => n.type === "Pressable" && n.props.accessibilityLabel === OPEN)!;
+    const labels = parentOf(on, icon).children.filter((c): c is HostNode => typeof c !== "string").map((c) => String(c.props.accessibilityLabel));
+    expect(labels.slice(0, 3)).toEqual([OPEN, "비중 보기", THEMES]);
+    expect(labels[3]).toMatch(/^정렬 바꾸기/);
+  });
+
+  it("넓은 띠 · 테마 켬: 띠 아이콘과 표 머리 아이콘을 합쳐 정확히 하나 (두 버튼을 옆으로·위아래로 둔 띠 모두)", () => {
+    const head = (r: R) => r.all().find((n) => n.type === "TableHeadRow" && String(n.props.title).startsWith("보유"))!;
+    const isIcon = (v: unknown) => React.isValidElement(v) && (v.type as { name?: string }).name === "JournalIconButton";
+    for (const extra of [{}, { numberBasis: true }, { densityMode: true }, { densityMode: true, numberBasis: true }] as Record<string, boolean>[]) {
+      for (const [w, hh] of [
+        [704, 933],
+        [933, 704],
+      ] as const) {
+        for (const fs of [1, 1.3, 2]) {
+          const r = draw(w, hh, { allocationView: true, foldLayout: true, holdingThemes: true, ...extra, ...ON }, { fontScale: fs, dense: "densityMode" in extra });
+          const themes = r.all().find((n) => n.type === "Button" && n.props.accessibilityLabel === THEMES)!;
+          // 띠 줄 = 테마 버튼 묶음(View)의 부모
+          const row = parentOf(r, parentOf(r, themes));
+          const inBand = r.all(row.children).filter((n) => n.type === "Pressable" && n.props.accessibilityLabel === OPEN).length;
+          expect(inBand + (isIcon(head(r).props.action) ? 1 : 0), `${w}×${hh} ${fs} ${JSON.stringify(extra)}`).toBe(1);
+        }
+      }
+    }
+  });
+
+  it("토스 계좌 평가 요약이 계좌 칸을 접어 두면 요약에 '매매일지 보기' 링크 (끄면 속성 없음)", () => {
+    for (const [w, hh, extra] of [
+      [475, 751, {}],
+      [933, 704, { foldLayout: true }],
+    ] as const) {
+      const flags = { allocationView: true, holdingThemes: true, tossAccountSnapshot: true, ...extra };
+      const summary = (r: R) => r.all().find((n) => n.type === "TossAccountSummary")!;
+      expect("onJournal" in summary(draw(w, hh, flags)).props).toBe(false);
+      const on = draw(w, hh, { ...flags, ...ON });
+      const link = summary(on).props.onJournal as () => void;
+      expect(typeof link).toBe("function");
+      on.act(() => link());
+      expect(h.push).toHaveBeenLastCalledWith("/journal");
+    }
+  });
+
+  it("주인 아닌 계정(계정 A단계 member)은 매매일지가 켜져 있어도 입구가 없다", async () => {
+    const account = await import("@/lib/account");
+    const spy = vi.spyOn(account, "useAccountView").mockReturnValue({ on: true, session: null, member: true });
+    try {
+      const r = draw(475, 751, { allocationView: true, holdingThemes: true, ...ON });
+      expect(r.all().filter((n) => n.props.accessibilityLabel === OPEN)).toHaveLength(0);
+    } finally {
+      spy.mockRestore();
     }
   });
 });

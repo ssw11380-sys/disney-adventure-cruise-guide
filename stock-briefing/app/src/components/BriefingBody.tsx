@@ -7,6 +7,8 @@ import type { BriefingWithData } from "@/api/types";
 import { Pills } from "@/components/BriefingList";
 import { BriefingSources } from "@/components/BriefingSources";
 import { StaleBanner } from "@/components/Freshness";
+import { ReportVerificationNotice } from "@/components/ReportVerification";
+import { ReportListNotice } from "@/components/ReportListNotice";
 import { useSettingsGuide } from "@/lib/settingsLink";
 import { MarkdownView } from "@/components/MarkdownView";
 import { Screen } from "@/components/Screen";
@@ -16,6 +18,7 @@ import { sentence, speakAmount, speakMove, speakProfit, speakRate } from "@/lib/
 import { createdTimeSameDay } from "@/lib/briefingPick";
 import { AI_NOTE } from "@/lib/disclaimer";
 import { estimateText } from "@/lib/briefingRun";
+import { failedCardText, failedRunText } from "@/lib/briefingStatus";
 import { afterMarketLabel, formatDateKo, formatPct, formatPrice, SESSION_LABEL, shownSign } from "@/lib/format";
 import { viewState } from "@/lib/freshness";
 import { changeColor, font, fontCap, slopFor, space, touch, useTheme } from "@/theme";
@@ -58,19 +61,24 @@ export function BriefingBody({
   const regenOn = useFeature("briefingManualRun", false); // 새 기능(3-19): 서버가 켤 때만
   // 브리핑 2차 6 (플래그 briefingSafeWording, 앱 fallback 꺼짐): 머리에 'AI가 쓴 글 · 틀릴 수 있음' 한 줄 (실패 브리핑에는 없음). 꺼지면 지금 그대로
   const aiOn = useFeature("briefingSafeWording", false);
-  // 2단 오른쪽 칸: 도구 줄의 '근거 뉴스 N · 공시 N' 을 누르면 아래 근거 자료로 스크롤한다
+  // 브리핑 3차 2 (플래그 briefingStatus, 앱 fallback 꺼짐): 실패 카드·다시 만들기 실패 창을 오류 원문 대신 쉬운 말로. 꺼지면 지금 그대로
+  const plainFail = useFeature("briefingStatus", false);
+  // 좁은 화면과 2단 오른쪽 칸: 본문을 끝까지 읽지 않아도 근거 자료로 이동한다
   const scrollRef = useRef<ScrollView | null>(null);
   const sourcesY = useRef<number | null>(null);
 
   const view = viewState(b);
   // 2단 오른쪽 칸은 고지가 이 칸에만 있으므로 불러오는 중·오류에도 붙인다 (고지 줄이 사라졌다 나타나며 들썩이지 않게). 전체 화면은 지금 그대로
   const paneNote = layout === "pane";
-  if (view === "loading") return <Screen disclaimer={paneNote}><CardsSkeleton count={2} /></Screen>;
-  if (view === "error") return <Screen disclaimer={paneNote}><ErrorView error={b.error} onRetry={() => void b.refetch()} {...guide} /></Screen>;
+  if (view === "loading") return <Screen disclaimer={paneNote} scrollRef={scrollRef}><CardsSkeleton count={2} /></Screen>;
+  if (view === "error") return <Screen disclaimer={paneNote} scrollRef={scrollRef}><ErrorView error={b.error} onRetry={() => void b.refetch()} {...guide} /></Screen>;
   const d = b.data!;
   const q = d.data?.quote ?? null;
   const failed = d.status === "failed";
   const ai = aiOn && !failed;
+  // 브리핑 3차 2 (briefingStatus): 실패 브리핑이면 '이 종목 다시 만들기'를 실패 카드 바로 아래로 (근거 자료 아래라 첫 화면에 안 보이던 것).
+  // 꺼져 있거나 성공 브리핑이면 지금 자리 그대로
+  const regenFirst = plainFail && failed;
   const open = (next: number) => (onPick ? onPick(next, d.code) : router.replace(`/briefings/${next}`));
 
   const regen = regenOn ? (
@@ -93,7 +101,7 @@ export function BriefingBody({
                     onSuccess: (r) => {
                       const res = r.results[0];
                       if (res?.status === "ok" && res.briefingId) open(res.briefingId);
-                      else Alert.alert("다시 만들기 실패", res?.error ?? "결과가 없습니다");
+                      else Alert.alert("다시 만들기 실패", res ? (plainFail ? failedRunText(res.error) : (res.error ?? "결과가 없습니다")) : "결과가 없습니다");
                     },
                     onError: (e) => Alert.alert("다시 만들기 실패", e instanceof Error ? e.message : String(e)),
                   },
@@ -106,14 +114,14 @@ export function BriefingBody({
     </View>
   ) : null;
 
+  const pastItems = (history.data ?? []).filter((h) => h.id !== d.id);
   const past =
-    history.data && history.data.length > 1 ? (
+    pastItems.length > 0 || history.isError ? (
       <View>
         <SectionTitle style={{ paddingHorizontal: space.lg, paddingTop: space.sm }}>지난 브리핑</SectionTitle>
+        <ReportListNotice label="지난 브리핑" query={history} />
         <View>
-          {history.data
-            .filter((h) => h.id !== d.id)
-            .map((h) => (
+          {pastItems.map((h) => (
               <Pressable
                 key={h.id}
                 onPress={() => open(h.id)}
@@ -138,7 +146,7 @@ export function BriefingBody({
   };
   const failedCard = (
     <Card>
-      <Text style={{ color: t.danger }}>{d.error ?? d.summary}</Text>
+      <Text style={{ color: t.danger }}>{plainFail ? failedCardText(d) : (d.error ?? d.summary)}</Text>
     </Card>
   );
   const text =
@@ -156,7 +164,7 @@ export function BriefingBody({
   if (layout === "stack") {
     // 지금 폰 화면 그대로 (접은 화면·플래그 꺼짐) — 순서·모양을 바꾸지 않는다
     return (
-      <Screen disclaimer top={<StaleBanner query={b} {...guide} />}>
+      <Screen disclaimer scrollRef={scrollRef} top={<StaleBanner query={b} {...guide} />}>
         {title?.(d)}
         <View style={{ gap: space.xxs, paddingHorizontal: space.lg, paddingTop: space.md }}>
           <Pressable onPress={() => router.push(`/stocks/${d.code}`)} accessibilityRole="link" accessibilityLabel={`${d.name ?? d.code} 종목 화면으로`} hitSlop={slopFor(font.title * 1.35)}>
@@ -185,6 +193,7 @@ export function BriefingBody({
           failedCard
         ) : (
           <>
+            {sources ? <View style={{ minHeight: touch.min, justifyContent: "center", paddingHorizontal: space.lg, paddingVertical: space.sm }}><SourceCount d={d} on={sourcesOn} onPress={toSources} /></View> : null}
             <Segmented
               options={[
                 { value: "summary", label: "요약" },
@@ -194,16 +203,20 @@ export function BriefingBody({
               onChange={setMode}
             />
             <Card>
+              <ReportVerificationNotice verification={d.verification} />
               {text}
               {missing}
             </Card>
           </>
         )}
 
-        {sources}
+        {/* 실패 브리핑(briefingStatus 켬)이면 다시 만들기를 실패 카드 바로 아래 */}
+        {regenFirst ? regen : null}
+
+        {sources ? <View onLayout={(e) => (sourcesY.current = e.nativeEvent.layout.y)}>{sources}</View> : null}
 
         {/* 이 종목만 다시 만들기 (3-19): 전체를 다시 만들지 않고 약 30초 */}
-        {regen}
+        {regenFirst ? null : regen}
 
         {past}
       </Screen>
@@ -229,6 +242,7 @@ export function BriefingBody({
   const headingFirst = mode === "detail" && HEADING_FIRST.test(d.detail);
   const bodyText = failed ? failedCard : (
     <View style={[styles.text, headingFirst && styles.textFlush]}>
+      <ReportVerificationNotice verification={d.verification} />
       {text}
       {missing}
     </View>
@@ -244,8 +258,9 @@ export function BriefingBody({
           left={
             <>
               <Head d={d} ai={ai} />
+              {regenFirst ? regen : null}
               {sources}
-              {regen}
+              {regenFirst ? null : regen}
               {past}
             </>
           }
@@ -260,17 +275,18 @@ export function BriefingBody({
     );
   }
 
-  // 브리핑 탭 2단의 오른쪽 칸 (끊김·지연 띠는 탭 위쪽에 한 번만 — 브리핑 본문은 만든 뒤 바뀌지 않는다).
+  // 브리핑 탭 2단의 오른쪽 칸. 목록 조회와 별개로 이 본문을 다시 받지 못한 경우도 알린다.
   // 머리·도구 줄·본문은 한 묶음 (화면 간격 없이 목업처럼 붙인다)
   return (
-    <Screen disclaimer scrollRef={scrollRef}>
+    <Screen disclaimer scrollRef={scrollRef} top={<StaleBanner query={b} {...guide} />}>
       <View>
         <Head d={d} ai={ai} />
         {toolbar}
         {bodyText}
       </View>
+      {regenFirst ? regen : null}
       {sources ? <View onLayout={(e) => (sourcesY.current = e.nativeEvent.layout.y)}>{sources}</View> : null}
-      {regen}
+      {regenFirst ? null : regen}
       {past}
     </Screen>
   );

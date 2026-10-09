@@ -1,7 +1,7 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { router } from "expo-router";
 import React, { useCallback, useState } from "react";
-import { Linking, Pressable, StyleSheet, Text, useWindowDimensions, View, type LayoutChangeEvent, type TextStyle } from "react-native";
+import { Pressable, StyleSheet, Text, useWindowDimensions, View, type LayoutChangeEvent, type TextStyle } from "react-native";
 import { useFeature, useFeatures, useMarketSummary } from "@/api/hooks";
 import type { CompareRow, HoldingsCompare, MarketSummary, MarketSummaryData, SummaryEvent } from "@/api/types";
 import { BriefingSplit, type BodyLayout } from "@/components/BriefingBody";
@@ -13,6 +13,7 @@ import { Badge, Button, Card, Empty, ErrorView, Muted, SectionTitle, TableHead }
 import { sentence, speakRate } from "@/lib/a11y";
 import { gated } from "@/lib/features";
 import { formatDateKo, shownSign } from "@/lib/format";
+import { openSourceLink } from "@/lib/openSourceLink";
 import { viewState } from "@/lib/freshness";
 import {
   basisText,
@@ -89,7 +90,7 @@ export function MarketSummaryBody({ numId, layout, title }: { numId: number | nu
   const view = viewState(q);
   if (view === "error") return <Screen disclaimer={paneNote}><ErrorView error={q.error} onRetry={() => void q.refetch()} {...guide} /></Screen>;
   if (view === "loading" || !data) return <Screen disclaimer={paneNote}><CardsSkeleton count={3} /></Screen>;
-  return <SummaryView s={data} top={layout === "pane" ? null : <StaleBanner query={q} {...guide} />} layout={layout} title={title} trim={trim} />;
+  return <SummaryView s={data} top={<StaleBanner query={q} {...guide} />} layout={layout} title={title} trim={trim} />;
 }
 
 /**
@@ -342,6 +343,7 @@ function IndicesCard({ d, fit }: { d: MarketSummaryData; fit: Fit }) {
   const t = useTheme();
   const [width, onLayout] = useMeasuredWidth(fit.guess);
   const mode = indicesTableMode(width, fit.scale);
+  const valueLabel = d.phase === "intraday" ? "장중 값" : "종가";
   const us = d.market === "US";
   const foot = `${
     d.phase === "intraday"
@@ -362,7 +364,7 @@ function IndicesCard({ d, fit }: { d: MarketSummaryData; fit: Fit }) {
         <TableHead>
           <Text style={[styles.th, styles.colName, { color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>지수</Text>
           <Text style={[styles.th, styles.right, { width: wValue, color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>
-            {mode === "compact" ? "종가 · 전일 대비" : "종가"}
+            {mode === "compact" ? `${valueLabel} · 전일 대비` : valueLabel}
           </Text>
           {mode === "full" ? (
             <Text style={[styles.th, styles.right, { width: wChange, color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>
@@ -606,7 +608,7 @@ function NewsCard({ d }: { d: MarketSummaryData }) {
               </View>
               {link ? (
                 <Pressable
-                  onPress={() => void Linking.openURL(link)}
+                  onPress={() => void openSourceLink(link)}
                   accessibilityRole="link"
                   accessibilityLabel={sentence([`${n.outlet} 기사 원문 열기`, n.title])}
                   style={({ pressed }) => [styles.link, { backgroundColor: pressed ? t.surfaceAlt : "transparent" }]}

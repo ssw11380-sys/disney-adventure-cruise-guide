@@ -95,17 +95,23 @@ export class DataCollector {
   }
 
   /** 현재가 + 밸류에이션·환율 보강 */
-  private async quote(code: string, market?: string): Promise<Quote> {
+  private async quote(code: string, market: string | undefined, missing: string[]): Promise<Quote> {
     const q = await this.deps.quotes.getQuote(code);
     const f = this.deps.fundamentals;
     if (!f) return q;
     const [fund, fx] = await Promise.all([
-      q.per === null || q.pbr === null ? f.get(code, market ?? null).catch(() => null) : Promise.resolve(null),
-      q.currency === "USD" ? f.usdKrw().catch(() => null) : Promise.resolve(null),
+      q.per === null || q.pbr === null ? f.getWithStatus(code, market ?? null).catch(() => ({ value: null, receivedAt: null, refreshFailed: true })) : Promise.resolve(null),
+      q.currency === "USD" ? f.usdKrwQuoteWithStatus().catch(() => ({ value: null, refreshFailed: true })) : Promise.resolve(null),
     ]);
-    let out = applyFundamentals(q, fund);
+    if (fund?.refreshFailed) {
+      missing.push(fund.value && fund.receivedAt ? `재무 보강 갱신 실패(${fund.receivedAt} 수신 자료 사용)` : "재무 보강 갱신 실패(사용할 이전 자료 없음)");
+    }
+    if (fx?.refreshFailed) {
+      missing.push(fx.value ? `환율 갱신 실패(${fx.value.asOf} 수신 자료 사용)` : "환율 갱신 실패(환율 자료 미확인)");
+    }
+    let out = applyFundamentals(q, fund?.value ?? null);
     // 원화 환산은 함께 넣는 환율(fxRate)로 — 앱(StockService)과 같은 규칙
-    if (q.currency === "USD" && fx) out = { ...out, fxRate: fx, priceKrw: Math.round(out.price * fx) };
+    if (q.currency === "USD" && fx?.value) out = { ...out, fxRate: fx.value.rate, priceKrw: Math.round(out.price * fx.value.rate) };
     return out;
   }
 
@@ -143,7 +149,7 @@ export class DataCollector {
     const kr = isKrCode(stock.code);
     const fin = this.finFor(stock.code);
     const [quote, series, news, disclosures, investorFlow, status] = await Promise.all([
-      this.attempt("현재가", missing, () => this.quote(stock.code, stock.market)),
+      this.attempt("현재가", missing, () => this.quote(stock.code, stock.market, missing)),
       this.attempt("일봉/기술적 지표", missing, () => q.quotes.getCandles(stock.code, "D", 160)),
       this.attempt("뉴스", missing, () => this.news(stock, 8)),
       fin.provider
@@ -199,7 +205,7 @@ export class DataCollector {
     const wantTechnical = kind !== "company";
 
     const [quote, daily, weekly, company, financials, dividends, disclosures, news, status] = await Promise.all([
-      this.attempt("현재가", missing, () => this.quote(stock.code, stock.market)),
+      this.attempt("현재가", missing, () => this.quote(stock.code, stock.market, missing)),
       wantTechnical ? this.attempt("일봉", missing, () => q.quotes.getCandles(stock.code, "D", 160)) : Promise.resolve(null),
       kind === "technical" ? this.attempt("주봉", missing, () => q.quotes.getCandles(stock.code, "W", 26)) : Promise.resolve(null),
       kind === "company" ? (fin ? this.attempt("회사 개요", missing, this.notListed<CompanyProfile | null>(notes, "회사 개요", null, () => fin.getCompany(stock.code))) : noDart<CompanyProfile>("회사 개요")) : Promise.resolve(null),
@@ -213,6 +219,8 @@ export class DataCollector {
     // 기술적 지표는 브리핑과 같이 끝난 정규장 봉까지만
     const marketState = marketContext(stock.code, status, now);
     const technical = daily ? computeTechnicalSummary(completedCandles(daily.candles, marketState, now)) : null;
+    // 조회 성공과 지표 계산 가능은 다르다. 빈 응답·신규 상장의 짧은 이력을 누락 없음으로 안내하지 않는다.
+    if (kind === "technical" && daily && !technical) missing.push("기술적 지표(봉 부족)");
     const latest = financials?.at(-1) ?? null;
     const ratios =
       latest
@@ -222,7 +230,7 @@ export class DataCollector {
             operatingMarginPct: pct(latest.operatingIncome, latest.revenue),
           }
         : null;
-    if (quote && quote.per === null && kind === "value") missing.push("PER/PBR(현재 시세 소스가 제공하지 않음)");
+    if (quote && (quote.per === null || quote.pbr === null) && kind === "value") missing.push("PER/PBR(현재 시세 소스가 제공하지 않음)");
 
     return {
       stock,

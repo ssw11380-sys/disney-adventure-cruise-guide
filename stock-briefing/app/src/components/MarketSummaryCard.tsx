@@ -329,16 +329,28 @@ export function MarketSummaryRow({
       style={({ pressed }) => [styles.listRow, { borderBottomColor: t.line, backgroundColor: selected || pressed ? t.surfaceAlt : t.surface }]}
     >
       {selected ? <View style={[styles.selBar, { backgroundColor: t.accent }]} /> : null}
+      {/*
+        머리: [지구 · 제목] [배지] [날짜 ›] 세 묶음. 한 줄에 모자라면(큰 글씨·좁은 칸) 뒤 묶음째 다음 줄로 — 제목을 말줄임으로 자르지 않는다
+        (예전: 475·360 200% 에서 '금요일(9/25) 미국 …'·'금요…'). 배지도 제목과 같은 글자 상한. 한 줄에 들어가면 지금 모양 그대로
+      */}
       <View style={styles.rowHead}>
-        <Ionicons name="globe-outline" size={18} color={t.accent} />
-        <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700", flexShrink: 1 }} numberOfLines={1} maxFontSizeMultiplier={fontCap.row}>
-          {d ? titleText(d, view) : "시장 요약"}
-        </Text>
-        {d && !failed ? <Badge tone={closeBadgeWarn(d) ? "warn" : "neutral"}>{closeBadge(d)}</Badge> : null}
-        <Text style={[styles.rowWhen, { color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>
-          {summaryWhen(summary)}
-        </Text>
-        <Ionicons name="chevron-forward" size={16} color={t.muted} />
+        <View style={styles.rowTitle}>
+          <Ionicons name="globe-outline" size={18} color={t.accent} />
+          <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700", flexShrink: 1 }} numberOfLines={1} maxFontSizeMultiplier={fontCap.row}>
+            {d ? titleText(d, view) : "시장 요약"}
+          </Text>
+        </View>
+        {d && !failed ? (
+          <Badge tone={closeBadgeWarn(d) ? "warn" : "neutral"} cap={fontCap.row}>
+            {closeBadge(d)}
+          </Badge>
+        ) : null}
+        <View style={styles.rowEnd}>
+          <Text style={[styles.rowWhen, { color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>
+            {summaryWhen(summary)}
+          </Text>
+          <Ionicons name="chevron-forward" size={16} color={t.muted} />
+        </View>
       </View>
       {failed ? (
         <Words text={`생성 실패 · ${summary.summary}`} style={{ color: t.danger, fontSize: font.small }} cap={fontCap.row} />
@@ -387,8 +399,11 @@ const styles = StyleSheet.create({
   newsLines: { gap: space.xxs },
   listRow: { minHeight: MS.rowMinH, justifyContent: "center", gap: space.xs, paddingLeft: space.lg, paddingRight: space.md, paddingVertical: space.sm, borderBottomWidth: StyleSheet.hairlineWidth },
   selBar: { position: "absolute", left: 0, top: 0, bottom: 0, width: FB.selBar },
-  rowHead: { flexDirection: "row", alignItems: "center", gap: space.s },
-  rowWhen: { marginLeft: "auto", fontSize: font.small, flexShrink: 0 },
+  // 줄 머리: 세 묶음(제목 · 배지 · 날짜 ›)을 옆으로, 모자라면 묶음째 다음 줄로. 제목 묶음만 줄어든다(혼자서도 넘칠 때만 말줄임)
+  rowHead: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: space.s, rowGap: space.xxs },
+  rowTitle: { flexDirection: "row", alignItems: "center", gap: space.s, flexShrink: 1, minWidth: 0 },
+  rowEnd: { flexDirection: "row", alignItems: "center", gap: space.s, marginLeft: "auto", flexShrink: 0 },
+  rowWhen: { fontSize: font.small, flexShrink: 0 },
   // 줄 안 휴장 줄 (브리핑 2차 2): 달력 아이콘 + 휴장 글 · 다음 개장 (카드의 휴장 띠보다 낮게 — 배경 없이)
   rowBanner: { flexDirection: "row", alignItems: "flex-start", gap: space.s },
 });

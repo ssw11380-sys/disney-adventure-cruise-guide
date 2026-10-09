@@ -57,6 +57,8 @@ export interface Quote {
   low52w: number | null;
   asOf: string; // ISO (한국 시간 오프셋)
   source: string; // 'kis' | 'naver' | 'yahoo'
+  /** 상세 시세에서 실제 보강한 숫자의 수신 기준. 시세 체결/공시 기준일과 구분한다. */
+  fundamentalsBasis?: { receivedAt: string | null; refreshFailed: boolean; source: string | null; fields: string[] };
   /**
    * 정규장 밖 거래 가격. 한국은 넥스트레이드(NXT) 프리/애프터마켓(08:00~08:50, 15:40~20:00).
    * 토스·네이버 앱이 장 마감 후 보여주는 값이 이것이라 정규장 종가와 다를 수 있다. 소스가 제공하지 않으면 없음.

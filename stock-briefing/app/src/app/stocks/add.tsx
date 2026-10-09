@@ -1,7 +1,7 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { router } from "expo-router";
 import React, { useEffect, useState } from "react";
-import { Alert, FlatList, Platform, Pressable, StyleSheet, Text, TextInput, ToastAndroid, View } from "react-native";
+import { Alert, FlatList, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, ToastAndroid, View } from "react-native";
 import { ApiRequestError } from "@/api/client";
 import { useRegisteredCodes, useSearch, useStockMutations } from "@/api/hooks";
 import type { ListedStock } from "@/api/types";
@@ -9,9 +9,11 @@ import { Screen } from "@/components/Screen";
 import { LineHead, LineMark, StockLine } from "@/components/StockLine";
 import { Button, Card, ConnectionLine, Muted } from "@/components/ui";
 import { formatPct, formatQuote, isUsMarket } from "@/lib/format";
+import { useAccountView } from "@/lib/account";
 import { holdingInput, NO_AVG_NOTE } from "@/lib/holdingForm";
 import { useRecentSearches, type RecentStock } from "@/lib/recentSearch";
 import { useSettingsGuide } from "@/lib/settingsLink";
+import { useSearchKeyboardInset } from "@/lib/useSearchKeyboardInset";
 import { changeColor, font, radius, slopFor, space, useTheme } from "@/theme";
 
 /**
@@ -20,6 +22,7 @@ import { changeColor, font, radius, slopFor, space, useTheme } from "@/theme";
  */
 export default function AddStockScreen() {
   const t = useTheme();
+  const { viewportRef, keyboardInset, onViewportLayout } = useSearchKeyboardInset();
   const [q, setQ] = useState("");
   const [debounced, setDebounced] = useState("");
   const [selected, setSelected] = useState<ListedStock | null>(null);
@@ -31,6 +34,10 @@ export default function AddStockScreen() {
   const { register } = useStockMutations();
   // 3-24 (emptyGuide — 빈 잔고의 '종목 검색'이 여는 화면): 검색이 서버 연결 오류로 실패하면 칸 이름 문구 + '설정 열기'. 꺼져 있으면 null → 지금 글 그대로
   const guideProps = useSettingsGuide();
+  // 계정 A단계: 주인 아닌 계정은 종목을 등록할 수 없다(서버가 막는다) → '등록' 칸 없이 검색·상세 보기만
+  const { member } = useAccountView();
+  const canRegister = !member;
+  const registerHead = canRegister ? "등록" : "";
 
   useEffect(() => {
     const id = setTimeout(() => setDebounced(q), 150);
@@ -40,6 +47,9 @@ export default function AddStockScreen() {
   // 입력이 멈추기 전(150ms)에도 "결과 없음"을 띄우지 않게
   const typing = q.trim() !== debounced.trim();
   const pending = search.pending || typing;
+  const retrySearch = () => {
+    if (!typing && q.trim() && search.isError && !search.isFetching) void search.refetch();
+  };
 
   const open = (s: RecentStock) => {
     recent.add(s);
@@ -95,6 +105,7 @@ export default function AddStockScreen() {
 
   return (
     // 결과 줄은 다른 목록(잔고·발견)과 같은 공용 줄이라 화면 가장자리까지 (3-21). 검색칸·안내만 안쪽 여백
+    <View ref={viewportRef} onLayout={onViewportLayout} collapsable={false} style={{ flex: 1, paddingBottom: keyboardInset, backgroundColor: t.bg }}>
     <Screen scroll={false} contentStyle={{ paddingVertical: space.lg, gap: space.md }}>
       <View style={[styles.search, { borderColor: t.line, backgroundColor: t.surface, marginHorizontal: space.lg }]}>
         <Ionicons name="search" size={18} color={t.muted} />
@@ -104,25 +115,29 @@ export default function AddStockScreen() {
             setQ(v);
             select(null);
           }}
-          placeholder="종목명·코드·미국 티커 (예: SK하이닉스, 000660, AAPL)"
+          placeholder="종목명·코드·티커"
           placeholderTextColor={t.muted}
           autoFocus
           autoCorrect={false}
           accessibilityLabel="종목 검색"
+          accessibilityHint="예: SK하이닉스, 000660, AAPL"
+          numberOfLines={1}
           style={[styles.input, { color: t.ink }]}
           returnKeyType="search"
+          onSubmitEditing={retrySearch}
         />
         {q ? (
-          <Pressable onPress={() => setQ("")} accessibilityRole="button" accessibilityLabel="검색어 지우기" hitSlop={slopFor(ICON, space.xs)}>
+          <Pressable onPress={() => { setQ(""); select(null); }} accessibilityRole="button" accessibilityLabel="검색어 지우기" hitSlop={slopFor(ICON, space.xs)}>
             <Ionicons name="close-circle" size={ICON} color={t.muted} />
           </Pressable>
         ) : null}
       </View>
 
       {selected ? (
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: space.lg, paddingBottom: space.lg }} keyboardShouldPersistTaps="handled">
         <Card>
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-            <View>
+            <View style={{ flex: 1, minWidth: 0, paddingRight: space.sm }}>
               <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700" }}>{selected.name}</Text>
               <Muted>
                 {selected.code} · {selected.market}
@@ -155,6 +170,7 @@ export default function AddStockScreen() {
           </View>
           <Button title="등록" accessibilityLabel={`${selected.name} 등록`} onPress={submit} loading={register.isPending} />
         </Card>
+        </ScrollView>
       ) : q.trim().length === 0 ? (
         recent.items.length ? (
           <FlatList
@@ -170,21 +186,23 @@ export default function AddStockScreen() {
                   </Pressable>
                 </View>
                 {/* 최근 검색은 시세를 들고 있지 않다 → 가격 칸을 비운다 */}
-                <LineHead price="" right="등록" />
+                <LineHead price="" right={registerHead} />
               </>
             }
-            renderItem={({ item }) => <ResultRow item={item} recent registered={registered.has(item.code)} onOpen={() => open(item)} onRegister={() => select({ ...item, isinCode: null, groupCode: null })} />}
+            renderItem={({ item }) => <ResultRow item={item} recent registered={registered.has(item.code)} onOpen={() => open(item)} onRegister={canRegister ? () => select({ ...item, isinCode: null, groupCode: null }) : null} />}
           />
         ) : (
           <Muted style={{ paddingHorizontal: space.lg }}>한국·미국 종목을 한글 이름(테슬라, 애플), 티커(TSLA, AAPL), 6자리 코드로 검색합니다. 토스증권 검색을 쓰므로 토스에서 보이는 이름 그대로 치면 됩니다.</Muted>
         )
       ) : search.isError ? (
-        <ConnectionLine
-          error={search.error}
-          {...guideProps}
-          style={{ paddingHorizontal: space.lg }}
-          fallback={<Text style={{ color: t.danger, paddingHorizontal: space.lg }}>{search.error instanceof Error ? search.error.message : "검색 실패"}</Text>}
-        />
+        <View style={{ paddingHorizontal: space.lg, gap: space.md, alignItems: "flex-start" }}>
+          <ConnectionLine
+            error={search.error}
+            {...guideProps}
+            fallback={<Text style={{ color: t.danger }}>{search.error instanceof Error ? search.error.message : "검색 실패"}</Text>}
+          />
+          <Button title="다시 검색" accessibilityLabel="다시 검색" variant="secondary" compact onPress={retrySearch} disabled={typing} loading={search.isFetching} />
+        </View>
       ) : (
         <FlatList
           data={search.data?.results ?? []}
@@ -192,7 +210,7 @@ export default function AddStockScreen() {
           style={{ opacity: search.previous ? 0.55 : 1 }}
           keyExtractor={(s) => s.code}
           keyboardShouldPersistTaps="handled"
-          ListHeaderComponent={(search.data?.results.length ?? 0) > 0 ? <LineHead right="등록" /> : null}
+          ListHeaderComponent={(search.data?.results.length ?? 0) > 0 ? <LineHead right={registerHead} /> : null}
           // 결과가 아직 없을 때만 안내 (입력이 바뀌는 동안은 이전 결과를 그대로 둔다 — 스피너·깜빡임 없음)
           ListEmptyComponent={pending ? null : search.error ? <Text style={{ color: t.danger, paddingHorizontal: space.lg }}>토스 검색에 실패했고 앱의 종목 목록에도 없습니다. 잠시 뒤 다시 검색해 보세요.</Text> : <Muted style={{ paddingHorizontal: space.lg }}>검색 결과가 없습니다.</Muted>}
           ListFooterComponent={
@@ -202,15 +220,16 @@ export default function AddStockScreen() {
               <Muted style={{ fontSize: font.tiny, paddingTop: space.xs, paddingHorizontal: space.lg }}>토스 검색 실패 — 앱의 종목 목록에서 찾은 결과만 보여 줍니다</Muted>
             ) : null
           }
-          renderItem={({ item }) => <ResultRow item={item} registered={registered.has(item.code)} onOpen={() => open(item)} onRegister={() => select(item)} />}
+          renderItem={({ item }) => <ResultRow item={item} registered={registered.has(item.code)} onOpen={() => open(item)} onRegister={canRegister ? () => select(item) : null} />}
         />
       )}
     </Screen>
+    </View>
   );
 }
 
 /** 검색 결과 한 줄 (공용 StockLine): 누르면 상세, 오른쪽 열은 등록됨 표시 또는 "등록" 버튼 */
-function ResultRow({ item, registered, onOpen, onRegister, recent = false }: { item: RecentStock & Partial<ListedStock>; registered: boolean; onOpen: () => void; onRegister: () => void; recent?: boolean }) {
+function ResultRow({ item, registered, onOpen, onRegister, recent = false }: { item: RecentStock & Partial<ListedStock>; registered: boolean; onOpen: () => void; onRegister: (() => void) | null; recent?: boolean }) {
   const t = useTheme();
   const us = isUsMarket(item.market);
   const c = changeColor(t, item.changeRate ?? null);
@@ -225,7 +244,7 @@ function ResultRow({ item, registered, onOpen, onRegister, recent = false }: { i
       right={
         registered ? (
           <LineMark label="등록됨" color={t.accent} />
-        ) : (
+        ) : !onRegister ? null : (
           <Pressable onPress={onRegister} hitSlop={slopFor(ADD_BTN_H, space.xs)} accessibilityRole="button" accessibilityLabel={`${item.name} 등록`} style={[styles.addBtn, { borderColor: t.line }]}>
             <Ionicons name="add" size={font.body} color={t.ink} />
             <Text style={{ color: t.ink, fontSize: font.tiny, fontWeight: "600" }}>등록</Text>
@@ -235,9 +254,9 @@ function ResultRow({ item, registered, onOpen, onRegister, recent = false }: { i
       onPress={onOpen}
       accessibilityLabel={`${item.name}, ${item.code}${registered ? ", 등록됨" : ""}. 누르면 상세 보기`}
       // 화면 읽기 프로그램에서도 줄 안의 "등록" 버튼을 쓸 수 있게
-      accessibilityActions={registered ? undefined : [{ name: "register", label: "등록" }]}
+      accessibilityActions={registered || !onRegister ? undefined : [{ name: "register", label: "등록" }]}
       onAccessibilityAction={(name) => {
-        if (name === "register") onRegister();
+        if (name === "register") onRegister?.();
       }}
     />
   );
