@@ -54,6 +54,8 @@ describe("종목 브리핑 AI 글 안전하게 (켬 — 서버 기본)", () => {
     await app.inject({ method: "POST", url: "/api/admin/master/refresh" });
     await app.inject({ method: "POST", url: "/api/stocks", payload: { code: "000660", quantity: 10, avgPrice: 150_000 } });
     await app.inject({ method: "POST", url: "/api/stocks", payload: { code: "005930" } });
+    // 이 검사는 기존 순차 호출의 위치까지 확인한다. 동시 실행의 문장 동등성은 별도 회귀로 확인한다.
+    await app.inject({ method: "PUT", url: "/api/admin/features", payload: { briefingParallel: false } });
   });
 
   afterEach(async () => {

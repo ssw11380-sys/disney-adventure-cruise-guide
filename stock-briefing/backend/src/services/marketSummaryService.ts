@@ -199,7 +199,7 @@ export class MarketSummaryService {
    * 지수 띠가 새 거래일 값이라 다시 만들면 지수가 모두 빠져 좋은 요약이 '생성 실패'로 바뀐다
    */
   async generate(session: SummarySession, opts: { date: string; force?: boolean; refinal?: boolean }): Promise<MarketSummary | null> {
-    if (!(await this.enabled())) return null;
+    if (this.stopped || !(await this.enabled()) || this.stopped) return null;
     const key = `${opts.date}|${session}`;
     const cur = this.inflight.get(key);
     if (cur) return cur;
@@ -280,11 +280,12 @@ export class MarketSummaryService {
     return n;
   }
 
-  /** 서버를 닫을 때: 예약한 다시 만들기를 모두 취소 */
-  stop(): void {
+  /** 서버를 닫을 때: 새 생성을 막고 예약을 취소한 뒤, 이미 수집 중인 요약의 저장까지 회수한다. */
+  async stop(): Promise<void> {
     this.stopped = true;
     for (const cancel of this.refinal.values()) cancel();
     this.refinal.clear();
+    await Promise.allSettled(this.inflight.values());
   }
 
   private src<T>(p: () => Promise<T>, label: string): Promise<Settled<T>> {

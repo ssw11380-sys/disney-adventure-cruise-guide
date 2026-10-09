@@ -26,7 +26,7 @@ import { seoulIso } from "../lib/time.js";
  * 가치 지표(3-44 2단계)의 SEC 재무·주간 비교 기준도 넣는다 — 다시 받을 수 있지만 되살린 서버가 SEC·Nasdaq 을 다시 받기 전까지 점수를 이어 보이게.
  * 관심 종목 그룹(3-34)도 사용자가 만든 값이라 넣는다 (종목의 그룹·자리는 registered_stocks 의 칸이라 select * 로 저절로 들어간다)
  */
-export const BACKUP_TABLES = ["registered_stocks", "meta", "briefings", "analyses", "devices", "app_errors", "account_briefings", "market_summaries", "account_snapshots", "trade_executions", "indicator_scores", "price_alerts", "value_fundamentals", "value_references", "watch_groups"] as const;
+export const BACKUP_TABLES = ["registered_stocks", "meta", "briefings", "analyses", "devices", "app_errors", "account_briefings", "market_summaries", "account_snapshots", "trade_executions", "indicator_scores", "price_alerts", "value_fundamentals", "value_references", "generation_jobs", "generation_requests", "fundamentals_cache", "watch_items", "movement_marks", "movement_events", "trade_notes", "fx_rates", "watch_groups"] as const;
 const MAGIC = Buffer.from("SBBK2\n");
 /** 헤더: MAGIC(6) + 종류(1) + salt(16) + iv(12), 끝에 인증 태그(16) */
 const HEADER = MAGIC.length + 1 + 16 + 12;

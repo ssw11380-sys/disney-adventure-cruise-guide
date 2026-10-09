@@ -1,11 +1,11 @@
 import React, { useMemo } from "react";
-import { Linking } from "react-native";
 import Markdown, { MarkdownIt } from "react-native-markdown-display";
+import { openSourceLink } from "@/lib/openSourceLink";
 import { font, radius, space, useTheme } from "@/theme";
 
 /** 본문 속 링크는 밖(브라우저)에서 연다. 모듈 상수라 다시 그려도 같은 함수다 */
 function openLink(url: string): boolean {
-  void Linking.openURL(url);
+  void openSourceLink(url);
   return false;
 }
 

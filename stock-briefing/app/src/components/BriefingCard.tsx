@@ -8,6 +8,7 @@ import { font, slopFor, space, useTheme } from "@/theme";
 import { foldBriefings as FB } from "@/tokens";
 import { sentence, speakRate } from "@/lib/a11y";
 import { AI_TAG } from "@/lib/disclaimer";
+import { failedLine, failedReasonSpeech } from "@/lib/briefingStatus";
 import { RankMark } from "./BriefingList";
 import { MarkdownView } from "./MarkdownView";
 import { Badge, Card, ChangeText, Muted } from "./ui";
@@ -24,6 +25,7 @@ export function BriefingCard({
   selected = false,
   aiTag = false,
   rank,
+  plainFail = false,
 }: {
   briefing: Briefing;
   mode: "line" | "summary" | "detail";
@@ -36,6 +38,8 @@ export function BriefingCard({
   aiTag?: boolean;
   /** 변동 큰 순 1~3위 (브리핑 2차 3, 플래그 moversMerge — 탭이 '변동 큰 종목' 카드를 없앨 때만 넘긴다). 이름 앞 순위 네모(넓은 창 RankMark), 화면 읽기 '변동 큰 순 1위'. 없으면 지금 그대로 */
   rank?: number;
+  /** 실패 브리핑 글을 쉬운 말로 '만들지 못함 · AI 서비스가 잠시 붐빔' (브리핑 3차 2, 플래그 briefingStatus — 부르는 곳이 넘긴다). 기본 false = 오류 원문 그대로 */
+  plainFail?: boolean;
 }) {
   const t = useTheme();
   const failed = briefing.status === "failed";
@@ -93,7 +97,9 @@ export function BriefingCard({
         </View>
       </Pressable>
       {failed ? (
-        <Text style={{ color: t.danger, fontSize: font.small }}>{briefing.error ?? briefing.summary}</Text>
+        <Text style={{ color: t.danger, fontSize: font.small }} {...(plainFail ? { accessibilityLabel: `만들지 못함, ${failedReasonSpeech(briefing)}` } : {})}>
+          {plainFail ? failedLine(briefing) : (briefing.error ?? briefing.summary)}
+        </Text>
       ) : mode === "line" ? (
         <Text style={{ color: t.ink, fontSize: font.body, lineHeight: 22 }} numberOfLines={1}>
           {lines[0] ?? ""}

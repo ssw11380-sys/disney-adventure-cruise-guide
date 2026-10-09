@@ -88,8 +88,12 @@ export function Button({
   );
 }
 
-/** 작은 선택 칩 (사각). 보이는 높이 32 + 위아래 hitSlop 6 = 44 (3-22) */
-export function Chip({ label, active, onPress, icon, accessibilityLabel }: { label: string; active?: boolean; onPress: () => void; icon?: keyof typeof Ionicons.glyphMap; accessibilityLabel?: string }) {
+/**
+ * 작은 선택 칩 (사각). 보이는 높이 32 + 위아래 hitSlop 6 = 44 (3-22).
+ * minWidth: 짧은 글의 칩도 누르는 폭을 맞출 때 (3-37 매매일지 기간 칩 — 없으면 지금 그대로).
+ * wideTouch: 이름이 짧은 칩('5일')도 누르는 폭이 44 가 되게 보이는 폭을 40 이상으로(좌우 hitSlop 2 씩 — 3-33 수급 탭 기간 칩). 없으면 지금 그대로
+ */
+export function Chip({ label, active, onPress, icon, accessibilityLabel, wideTouch, minWidth }: { label: string; active?: boolean; onPress: () => void; icon?: keyof typeof Ionicons.glyphMap; accessibilityLabel?: string; wideTouch?: boolean; minWidth?: number }) {
   const t = useTheme();
   return (
     <Pressable
@@ -98,7 +102,8 @@ export function Chip({ label, active, onPress, icon, accessibilityLabel }: { lab
       accessibilityLabel={accessibilityLabel ?? label}
       accessibilityState={{ selected: !!active }}
       hitSlop={slopFor(CHIP_H, space.xxs)}
-      style={({ pressed }) => [styles.chip, { backgroundColor: active ? t.surfaceAlt : "transparent", borderColor: active ? t.accent : t.lineStrong, opacity: pressed ? 0.75 : 1 }]}
+      // wideTouch·minWidth 가 없으면 style 배열 모양까지 지금 그대로
+      style={({ pressed }) => [styles.chip, { backgroundColor: active ? t.surfaceAlt : "transparent", borderColor: active ? t.accent : t.lineStrong, opacity: pressed ? 0.75 : 1 }, ...(wideTouch ? [styles.chipWide] : []), ...(minWidth ? [{ minWidth, justifyContent: "center" as const }] : [])]}
     >
       {icon ? <Ionicons name={icon} size={12} color={active ? t.accent : t.muted} /> : null}
       <Text style={{ color: active ? t.ink : t.muted, fontSize: font.small, fontWeight: active ? "700" : "500" }}>{label}</Text>
@@ -106,14 +111,17 @@ export function Chip({ label, active, onPress, icon, accessibilityLabel }: { lab
   );
 }
 
-/** 밑줄 탭 (증권사 앱의 종목 상세 탭처럼) */
+/**
+ * 밑줄 탭 (증권사 앱의 종목 상세 탭처럼). a11y: 화면 읽기 이름 — 자리가 모자라 이름을 줄인 탭(3-33 수급 탭이 켜진 종목 상세)이
+ * 원래 이름을 읽게 한다. 그 탭은 두 줄로 넘어가도 가운데 맞춤. 없으면 지금 그대로 (label 을 읽음)
+ */
 export function Segmented<T extends string>({
   options,
   value,
   onChange,
   style,
 }: {
-  options: { value: T; label: string }[];
+  options: { value: T; label: string; a11y?: string }[];
   value: T;
   onChange: (v: T) => void;
   style?: StyleProp<ViewStyle>;
@@ -123,9 +131,10 @@ export function Segmented<T extends string>({
     <View style={[styles.segment, { borderBottomColor: t.line, backgroundColor: t.surface }, style]} accessibilityRole="tablist">
       {options.map((o) => {
         const active = o.value === value;
+        const text: TextStyle = { color: active ? t.ink : t.muted, fontSize: font.body, fontWeight: active ? "700" : "500" };
         return (
-          <Pressable key={o.value} onPress={() => onChange(o.value)} accessibilityRole="tab" accessibilityLabel={o.label} accessibilityState={{ selected: active }} style={[styles.segmentItem, { borderBottomColor: active ? t.ink : "transparent" }]}>
-            <Text style={{ color: active ? t.ink : t.muted, fontSize: font.body, fontWeight: active ? "700" : "500" }}>{o.label}</Text>
+          <Pressable key={o.value} onPress={() => onChange(o.value)} accessibilityRole="tab" accessibilityLabel={o.a11y ?? o.label} accessibilityState={{ selected: active }} style={[styles.segmentItem, { borderBottomColor: active ? t.ink : "transparent" }]}>
+            <Text style={o.a11y ? [text, styles.segmentCenter] : text}>{o.label}</Text>
           </Pressable>
         );
       })}
@@ -133,12 +142,18 @@ export function Segmented<T extends string>({
   );
 }
 
-export function Badge({ children, tone = "neutral" }: { children: React.ReactNode; tone?: "neutral" | "good" | "warn" | "bad" | "gold" }) {
+/**
+ * 작은 테두리 글. cap 은 글자 확대 상한(maxFontSizeMultiplier) — 제목이 fontCap.row 로 묶인 줄 머리에서 배지만 200% 로 커져
+ * 제목을 말줄임으로 밀어내지 않게 같은 상한을 준다. 주지 않으면 지금과 같음
+ */
+export function Badge({ children, tone = "neutral", cap }: { children: React.ReactNode; tone?: "neutral" | "good" | "warn" | "bad" | "gold"; cap?: number }) {
   const t = useTheme();
   const color = tone === "good" ? t.accent : tone === "warn" ? t.warn : tone === "bad" ? t.danger : tone === "gold" ? t.gold : t.muted;
   return (
     <View style={[styles.badge, { borderColor: color }]}>
-      <Text style={{ color, fontSize: font.tiny, fontWeight: "700" }}>{children}</Text>
+      <Text style={{ color, fontSize: font.tiny, fontWeight: "700" }} {...(cap !== undefined ? { maxFontSizeMultiplier: cap } : {})}>
+        {children}
+      </Text>
     </View>
   );
 }
@@ -374,8 +389,10 @@ const styles = StyleSheet.create({
   buttonCompact: { minHeight: COMPACT_H, paddingHorizontal: space.md },
   buttonText: { fontSize: font.body, fontWeight: "700" },
   chip: { flexDirection: "row", alignItems: "center", gap: space.xs, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, paddingHorizontal: space.sm, paddingVertical: space.xs, minHeight: CHIP_H },
+  chipWide: { minWidth: touch.min - space.xxs * 2, justifyContent: "center" },
   segment: { flexDirection: "row", borderBottomWidth: StyleSheet.hairlineWidth },
   segmentItem: { flex: 1, alignItems: "center", justifyContent: "center", minHeight: touch.min, paddingVertical: space.sm, borderBottomWidth: 2 },
+  segmentCenter: { textAlign: "center" },
   badge: { borderWidth: 1, borderRadius: 3, paddingHorizontal: space.xs, paddingVertical: space.xxs },
   rateBox: { minWidth: 64, alignItems: "flex-end", borderRadius: 3, paddingHorizontal: space.s, paddingVertical: space.xxs },
   center: { alignItems: "center", justifyContent: "center", padding: space.xl },

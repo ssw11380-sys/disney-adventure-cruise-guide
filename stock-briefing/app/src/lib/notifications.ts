@@ -5,7 +5,9 @@ import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 import { ApiRequestError, type Api } from "@/api/client";
-import { parseStockCode } from "@/lib/freshness";
+import type { BriefingPick } from "@/lib/briefingPick";
+import { CHANNEL_ABOUT, CHANNEL_NAME, parseAccession } from "@/lib/filingAlerts";
+import { parseBriefingId, parseStockCode } from "@/lib/freshness";
 import type { AlertNotification } from "@/lib/priceAlerts";
 
 /**
@@ -17,6 +19,8 @@ import type { AlertNotification } from "@/lib/priceAlerts";
 export const ANDROID_CHANNEL = "briefings";
 /** 가격 알림(가격·등락률·거래량) 채널 — 브리핑과 따로 끄고 켤 수 있게 미리 만든다 (3-19) */
 export const PRICE_CHANNEL = "prices";
+/** 새 공시 알림 채널 (3-38) — 브리핑·가격보다 한 단계 낮은 중요도(DEFAULT). 런타임에 만들어 OTA 로도 생긴다 */
+export const FILING_CHANNEL = "filings";
 const TOKEN_KEY = "push.expoToken";
 
 /**
@@ -59,6 +63,20 @@ export async function ensureAndroidChannel(): Promise<void> {
     description: "가격·등락률·거래량 알림",
     importance: Notifications.AndroidImportance.HIGH,
     vibrationPattern: [0, 150, 100, 150],
+    sound: "default",
+  });
+}
+
+/**
+ * 새 공시 알림 채널 (3-38, 플래그 filingAlerts): 기능이 켜져 있을 때만 만든다 — 앞 화면 확인(FilingAlertBridge)이 켤 때, 알림을 보내기 직전에.
+ * 꺼져 있으면 기기 설정의 채널 목록도 지금과 같다
+ */
+export async function ensureFilingChannel(): Promise<void> {
+  if (Platform.OS !== "android") return;
+  await Notifications.setNotificationChannelAsync(FILING_CHANNEL, {
+    name: CHANNEL_NAME,
+    description: CHANNEL_ABOUT,
+    importance: Notifications.AndroidImportance.DEFAULT,
     sound: "default",
   });
 }
@@ -126,6 +144,31 @@ export async function unregisterPush(api: Api): Promise<void> {
   }
 }
 
+/**
+ * 로그아웃할 때 (계정 A단계, lib/logout 이 5초까지 기다린다): 서버에서 이 기기 등록을 빼되, 기기에 적어 둔 토큰(= 이 기기에서 알림을 켜 둠)은 남긴다.
+ * 주인으로 다시 로그인하면 rebindPush 가 그대로 다시 등록한다 — 예전에는 로그아웃하면 알림 설정이 조용히 꺼진 채 남았다.
+ * 빼지 못해도(인터넷 끊김) 서버가 로그아웃할 때 이 세션으로 등록한 기기를 지운다
+ */
+export async function detachPush(api: Api): Promise<void> {
+  const token = await getStoredToken();
+  if (!token) return;
+  try {
+    await api.unregisterDevice(token);
+  } catch {
+    /* 서버가 세션을 끊으며 지운다 */
+  }
+}
+
+/**
+ * 로그인한 뒤·비밀번호를 바꾼 뒤 (계정 A단계): 이 기기에서 알림을 켜 둔 경우만(적어 둔 토큰이 있을 때) 지금 로그인 세션으로 다시 등록한다.
+ * 권한 창을 띄우거나 토큰을 새로 받지 않는다. 서버는 세션을 끊을 때 그 세션으로 등록한 기기를 지우므로 새 세션에 다시 묶어야 알림이 온다
+ */
+export async function rebindPush(api: Api): Promise<void> {
+  const token = await getStoredToken();
+  if (!token) return;
+  await api.registerDevice({ token, platform: Platform.OS === "android" ? "android" : Platform.OS === "ios" ? "ios" : "unknown", deviceName: Device.modelName });
+}
+
 export async function getStoredToken(): Promise<string | null> {
   try {
     return await AsyncStorage.getItem(TOKEN_KEY);
@@ -155,11 +198,93 @@ export function routeForNotification(data: Record<string, unknown> | undefined):
   if (data["type"] === "briefing" && typeof data["briefingId"] === "number") return `/briefings/${data["briefingId"]}`;
   if (data["type"] === "briefing" && typeof data["briefingId"] === "string") return `/briefings/${data["briefingId"]}`;
   // 가격 알림(3-29)은 그 종목 상세로. 코드는 화면 주소에 넣기 전에 거른다 ("../x" 같은 값은 이동하지 않음)
-  if (data["type"] === "priceAlert" && typeof data["code"] === "string") {
+  if ((data["type"] === "priceAlert" || data["type"] === "movementAlert") && typeof data["code"] === "string") {
     const code = parseStockCode(data["code"]);
     if (code) return `/stocks/${code}`;
   }
+  // 새 공시 알림(3-38)은 '일정·공시' 화면에서 그 공시를 펼친다. 접수 번호 모양이 아니면 화면만 (주소에 넣기 전에 거른다)
+  if (data["type"] === "filing") {
+    const focus = parseAccession(data["focus"]);
+    return focus ? `/schedule?focus=${focus}` : "/schedule";
+  }
   return null;
+}
+
+/**
+ * 알림을 누른 뒤 옮겨 가는 방법 (브리핑 3차 1, 플래그 notifBack — NotificationBridge 가 부른다).
+ *  - legacy: 지금 그대로 (openNotificationPath). 플래그 꺼짐·모름, 브리핑이 아닌 알림(가격 알림), 입력 중인 화면 위
+ *  - tab: 브리핑 탭만 (묶음 알림 · 2단인데 고를 시장 요약이 없는 묶음 알림)
+ *  - tabThenPush: 브리핑 탭으로 바꾼 뒤 상세를 쌓는다 → '뒤로' = 브리핑 탭 (폰·접은 화면·펼친 세로 카드 격자)
+ *  - pane: 펼친 가로 2단 — 새 화면을 쌓지 않고 브리핑 탭 오른쪽 칸에서 그 브리핑을 고른다
+ */
+export type NotificationNav = { kind: "legacy"; path: string } | { kind: "tab" } | { kind: "tabThenPush"; path: string } | { kind: "pane"; pick: BriefingPick };
+
+export interface NotificationNavContext {
+  /** 플래그 notifBack (모르면 false → 지금 그대로) */
+  back: boolean;
+  /** 펼친 가로 2단인지 (useFoldLayout().twoPane) */
+  twoPane: boolean;
+  /** 지금 화면 주소 (usePathname). 모르면 null */
+  path: string | null;
+}
+
+/** 입력을 잃을 수 있는 화면: 잔고 수정·종목 검색·이동평균선·첫 실행 안내 (알림을 눌러도 닫지 않고 지금처럼 위에 쌓기만 한다) */
+const INPUT_SCREENS: readonly RegExp[] = [/^\/stocks\/[^/]+\/edit\/?$/, /^\/stocks\/add\/?$/, /^\/chart-lines\/?$/, /^\/welcome\/?$/];
+
+export function isInputScreen(path: string | null | undefined): boolean {
+  return !!path && INPUT_SCREENS.some((re) => re.test(path));
+}
+
+/** 알림 data 의 id (숫자 또는 숫자 글자) */
+function idOf(v: unknown): number | null {
+  if (typeof v === "number") return Number.isInteger(v) && v > 0 ? v : null;
+  return typeof v === "string" ? parseBriefingId(v) : null;
+}
+
+/** 2단 오른쪽 칸에서 고를 브리핑: 계좌 브리핑 · 종목 브리핑 · 묶음이면 알림 첫 줄의 시장 요약 (id 가 이상하면 null) */
+function paneFor(path: string, data: Record<string, unknown>): BriefingPick | null {
+  const account = /^\/briefings\/account\/([^/]+)$/.exec(path);
+  if (account) {
+    const id = parseBriefingId(account[1]);
+    return id ? { kind: "account", id } : null;
+  }
+  if (path === "/briefings") {
+    const id = idOf(data["marketSummaryId"]);
+    return id ? { kind: "market", id } : null;
+  }
+  const stock = /^\/briefings\/([^/]+)$/.exec(path);
+  if (!stock) return null;
+  const id = parseBriefingId(stock[1]);
+  if (!id) return null;
+  const code = typeof data["code"] === "string" ? parseStockCode(data["code"]) : null;
+  return code ? { kind: "stock", id, code } : { kind: "stock", id };
+}
+
+/**
+ * 알림을 누른 뒤 어디로 어떻게 갈지 (순수 함수 — 표 테스트 test/notifBack.test.ts). 이동할 곳이 없으면 null.
+ * 켜져 있으면 브리핑 알림의 '뒤로'가 브리핑 탭이 되게 한다 (지금은 콜드 스타트면 잔고 탭, 앱을 쓰던 중이면 보던 화면)
+ */
+export function notificationNav(data: Record<string, unknown> | undefined, ctx: NotificationNavContext): NotificationNav | null {
+  const path = routeForNotification(data);
+  if (!path || !data) return null;
+  if (!ctx.back || data["type"] !== "briefing" || isInputScreen(ctx.path)) return { kind: "legacy", path };
+  if (ctx.twoPane) {
+    const pick = paneFor(path, data);
+    if (pick) return { kind: "pane", pick };
+  }
+  return path === "/briefings" ? { kind: "tab" } : { kind: "tabThenPush", path };
+}
+
+/**
+ * 계정 A단계: 주인 아닌 계정으로 로그인한 기기에서 누른 브리핑 알림 (주인이 로그아웃하기 전에 받아 둔 알림 등 — 서버는 주인 세션 기기에만 보낸다).
+ * 주인의 종목·계좌 브리핑·시장 요약 상세를 열지 않고(2단 오른쪽 칸에서 고르지도 않고) 브리핑 탭으로만 — 탭 맨 위에 차분한 안내(MemberNotice)가 보인다.
+ * 서버도 그 상세를 403 으로 막는다. 새 공시 알림(3-38 → '일정·공시')도 브리핑 탭으로만. 그 밖의 알림(가격 알림 → 종목 상세, 공유 정보)은 그대로
+ */
+export function memberNotificationNav(nav: NotificationNav | null, data: Record<string, unknown> | undefined): NotificationNav | null {
+  if (!nav) return null;
+  const path = routeForNotification(data);
+  // 새 공시 알림(3-38)의 '일정·공시' 화면도 주인의 보유 종목 기준이라 열지 않는다
+  return path !== null && (path === "/briefings" || path.startsWith("/briefings/") || path === "/schedule" || path.startsWith("/schedule?")) ? { kind: "tab" } : nav;
 }
 
 /**

@@ -14,7 +14,7 @@ vi.mock("@react-native-async-storage/async-storage", () => ({
   },
 }));
 
-const { getStoredToken, PushUnregisterError, unregisterPush } = await import("@/lib/notifications");
+const { detachPush, getStoredToken, PushUnregisterError, rebindPush, unregisterPush } = await import("@/lib/notifications");
 const { createApi } = await import("@/api/client");
 
 const API = "https://server.test";
@@ -22,7 +22,7 @@ const TOKEN = "ExponentPushToken[fake-device]";
 const api = createApi(API);
 
 /** 가짜 서버: 등록된 기기 목록 + 장애 흉내. missing = 없는 토큰을 지울 때 응답 (지금 서버 204, 다른 서버·프록시 404) */
-const server = { devices: new Set<string>(), outage: "none" as "none" | "network" | "503", missing: 204 as 204 | 404, deletes: 0 };
+const server = { devices: new Set<string>(), outage: "none" as "none" | "network" | "503", missing: 204 as 204 | 404, deletes: 0, posts: [] as Record<string, unknown>[] };
 
 beforeEach(() => {
   store.clear();
@@ -30,10 +30,17 @@ beforeEach(() => {
   server.outage = "none";
   server.missing = 204;
   server.deletes = 0;
+  server.posts = [];
   store.set("push.expoToken", TOKEN);
   vi.stubGlobal("fetch", async (url: string, init: RequestInit = {}) => {
     if (server.outage === "network") throw new TypeError("Network request failed");
     if (server.outage === "503") return new Response(JSON.stringify({ error: "UNAVAILABLE" }), { status: 503 });
+    if (init.method === "POST" && url.endsWith("/api/devices")) {
+      const body = JSON.parse(String(init.body)) as { token: string };
+      server.posts.push(body);
+      server.devices.add(body.token);
+      return new Response(JSON.stringify(body), { status: 201 });
+    }
     const m = /\/api\/devices\/(.+)$/.exec(url);
     if (init.method === "DELETE" && m) {
       server.deletes++;
@@ -87,5 +94,25 @@ describe("알림 끄기 — 서버 해제 실패 (N1)", () => {
     server.outage = "network";
     await unregisterPush(api);
     expect(server.deletes).toBe(0);
+  });
+});
+
+describe("로그아웃·다시 로그인 (계정 A단계)", () => {
+  it("로그아웃(detachPush): 서버 등록만 빼고 기기 토큰(알림을 켜 둔 기록)은 남긴다 — 실패해도 던지지 않는다 (서버가 세션을 끊으며 지운다)", async () => {
+    await detachPush(api);
+    expect(server.devices.has(TOKEN)).toBe(false);
+    expect(await getStoredToken()).toBe(TOKEN);
+    server.outage = "network";
+    await expect(detachPush(api)).resolves.toBeUndefined();
+  });
+
+  it("다시 로그인하면(rebindPush) 남겨 둔 토큰으로 새 세션에 다시 등록한다 — 권한 창·새 토큰 없이. 알림을 끈 기기(토큰 없음)는 등록하지 않는다", async () => {
+    await detachPush(api);
+    await rebindPush(api);
+    expect(server.posts).toEqual([{ token: TOKEN, platform: "android", deviceName: "test" }]);
+    expect(server.devices.has(TOKEN)).toBe(true);
+    store.clear();
+    await rebindPush(api);
+    expect(server.posts).toHaveLength(1);
   });
 });

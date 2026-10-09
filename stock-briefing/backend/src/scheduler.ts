@@ -1,4 +1,5 @@
 import cron, { type ScheduledTask } from "node-cron";
+import { seoulDate } from "./lib/time.js";
 import type { BriefingService, BriefingSession } from "./services/briefingService.js";
 
 export interface SchedulerOptions {
@@ -34,6 +35,8 @@ export class BriefingScheduler {
   private crons: { morningCron: string | null; afternoonCron: string | null };
   private readonly beforeRun: SchedulerOptions["beforeRun"];
   private readonly now: () => Date;
+  private readonly activeRuns = new Set<Promise<void>>();
+  private shuttingDown = false;
 
   constructor(
     private readonly service: BriefingService,
@@ -52,6 +55,7 @@ export class BriefingScheduler {
 
   start(): void {
     this.stop();
+    if (this.shuttingDown) return;
     const jobs: Array<[BriefingSession, string | null]> = [
       ["morning", this.crons.morningCron],
       ["afternoon", this.crons.afternoonCron],
@@ -59,7 +63,7 @@ export class BriefingScheduler {
     for (const [session, expr] of jobs) {
       if (!expr) continue;
       if (!cron.validate(expr)) throw new Error(`잘못된 cron 표현식 (${session}): ${expr}`);
-      const task = cron.schedule(expr, () => this.runScheduled(session), {
+      const task = cron.schedule(expr, () => this.runScheduled(session, expr), {
         timezone: this.timezone,
         name: `briefing-${session}-${Date.now()}`,
         missedExecutionTolerance: LATE_TOLERANCE_MS,
@@ -74,13 +78,23 @@ export class BriefingScheduler {
    *  - 예약 시각보다 먼저(수동으로) 만든 같은 회차 브리핑은 다시 만든다 — 장중·장전 내용이 그날 회차로 남지 않고 회차 알림에도 들어가게.
    *    예약 시각 뒤에 만든 것(겹친 수동 실행이 막 만든 것)은 그대로 쓴다
    */
-  private async runScheduled(session: BriefingSession): Promise<void> {
+  private runScheduled(session: BriefingSession, expr?: string): Promise<void> {
+    if (this.shuttingDown) return Promise.resolve();
+    const work = this.executeScheduled(session, expr);
+    this.activeRuns.add(work);
+    void work.then(() => this.activeRuns.delete(work), () => this.activeRuns.delete(work));
+    return work;
+  }
+
+  private async executeScheduled(session: BriefingSession, expr?: string): Promise<void> {
     const firedAt = this.now();
+    // 브리핑 3차 2 (늦음·실패 안내): 실행 기록에 적을 그날 예약 시각 — 부른 그때의 cron 시·분 (나중에 설정 시각을 바꿔도 그날 기준이 흔들리지 않게)
+    const scheduledAt = expr ? scheduledAtFor(expr, firedAt, this.timezone) : null;
     this.log?.info({ session }, "정기 브리핑 시작");
     try {
       if (this.service.isRunning) this.log?.info({ session }, "다른 브리핑이 실행 중이라 끝나면 이어서 실행");
       await this.beforeRun?.(session).catch((e: unknown) => this.log?.error({ session, err: (e as Error).message }, "브리핑 사전 작업 실패"));
-      const r = await this.service.runSession(session, { trigger: "schedule", wait: true, staleBefore: firedAt });
+      const r = await this.service.runSession(session, { trigger: "schedule", wait: true, staleBefore: firedAt, firedAt, scheduledAt });
       const failed = r.results.filter((x) => x.status === "failed").length;
       const skipped = r.results.filter((x) => x.status === "skipped").length;
       this.log?.info({ session, total: r.results.length, failed, skipped }, "정기 브리핑 완료");
@@ -103,6 +117,18 @@ export class BriefingScheduler {
     this.tasks = [];
   }
 
+  /** 종료 시작 때 새 예약만 즉시 막는다. 진행 중 작업의 회수는 자원 정리 직전에 한다. */
+  beginShutdown(): void {
+    this.shuttingDown = true;
+    this.stop();
+  }
+
+  /** 정상 종료 때 이미 시작한 사전 작업·생성·완료 처리를 DB 정리 전에 회수한다. */
+  async shutdown(): Promise<void> {
+    this.beginShutdown();
+    await Promise.allSettled(this.activeRuns);
+  }
+
   status(): SchedulerStatus {
     return {
       timezone: this.timezone,
@@ -119,4 +145,17 @@ export class BriefingScheduler {
       }),
     };
   }
+}
+
+/**
+ * cron 표현식("30 8 * * 1-5")의 그날(부른 시각의 한국 날짜) 예약 시각 ISO — "2026-09-28T08:30:00+09:00".
+ * 분·시가 숫자 하나가 아니면(초 단위·범위·목록) 또는 한국 시간 스케줄러가 아니면 null (브리핑 3차 2 실행 기록)
+ */
+export function scheduledAtFor(expr: string, firedAt: Date, timezone = "Asia/Seoul"): string | null {
+  if (timezone !== "Asia/Seoul") return null;
+  const parts = expr.trim().split(/\s+/);
+  if (parts.length !== 5) return null;
+  const [m, h] = parts as [string, string];
+  if (!/^\d{1,2}$/.test(m) || !/^\d{1,2}$/.test(h) || Number(m) > 59 || Number(h) > 23) return null;
+  return `${seoulDate(firedAt)}T${h.padStart(2, "0")}:${m.padStart(2, "0")}:00+09:00`;
 }

@@ -1,0 +1,408 @@
+{
+ "result": {
+  "events": [
+   {
+    "id": {
+     "uniqueName": "20261001_ISM제조업구매관리자지수발표_ECONOMIC",
+     "group": "ECONOMIC"
+    },
+    "view": {
+     "title": "ISM 제조업 구매관리자지수 발표",
+     "landingOption": {
+      "type": "BOTTOM_SHEET"
+     }
+    },
+    "date": "2026-10-01",
+    "excludeFromAll": false,
+    "stockEarnings": null
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "마이크론 테크놀로지 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US19890516001"
+     }
+    },
+    "date": "2026-10-01",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NAS000PZY-E0",
+     "companyName": "마이크론 테크놀로지",
+     "announceDateTime": "2026-10-01T05:01:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_BEFORE_DAY_MARKET",
+     "announceMarketStatusText": "오전 5시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "20261005_개천절 (대체)_HOLIDAY_KR",
+     "group": "HOLIDAY"
+    },
+    "view": {
+     "title": "국내 휴장일",
+     "landingOption": null
+    },
+    "date": "2026-10-05",
+    "excludeFromAll": false,
+    "stockEarnings": null
+   },
+   {
+    "id": {
+     "uniqueName": "20261009_한글날_HOLIDAY_KR",
+     "group": "HOLIDAY"
+    },
+    "view": {
+     "title": "국내 휴장일",
+     "landingOption": null
+    },
+    "date": "2026-10-09",
+    "excludeFromAll": false,
+    "stockEarnings": null
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "존슨 앤 존슨 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US19440925001"
+     }
+    },
+    "date": "2026-10-13",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NYS000NB6-E0",
+     "companyName": "존슨 앤 존슨",
+     "announceDateTime": "2026-10-13T19:20:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_PRE_MARKET",
+     "announceMarketStatusText": "오후 9시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "램 리서치 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US19840504001"
+     }
+    },
+    "date": "2026-10-22",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NAS000NYZ-E0",
+     "companyName": "램 리서치",
+     "announceDateTime": "2026-10-22T05:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_BEFORE_DAY_MARKET",
+     "announceMarketStatusText": "오전 5시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "테슬라 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US20100629001"
+     }
+    },
+    "date": "2026-10-22",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NAS006XY7-E0",
+     "companyName": "테슬라",
+     "announceDateTime": "2026-10-22T05:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_BEFORE_DAY_MARKET",
+     "announceMarketStatusText": "오전 5시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "인텔 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US19711013001"
+     }
+    },
+    "date": "2026-10-23",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NAS000N01-E0",
+     "companyName": "인텔",
+     "announceDateTime": "2026-10-23T05:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_BEFORE_DAY_MARKET",
+     "announceMarketStatusText": "오전 5시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "비자 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US20080319001"
+     }
+    },
+    "date": "2026-10-28",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NYS05MDRV-E0",
+     "companyName": "비자",
+     "announceDateTime": "2026-10-28T05:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_BEFORE_DAY_MARKET",
+     "announceMarketStatusText": "오전 5시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "마스터카드 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US20060525001"
+     }
+    },
+    "date": "2026-10-29",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NYS0038M5-E0",
+     "companyName": "마스터카드",
+     "announceDateTime": "2026-10-29T21:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_PRE_MARKET",
+     "announceMarketStatusText": "오후 9시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "마이크로소프트 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US19860313001"
+     }
+    },
+    "date": "2026-10-29",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NAS000Q07-E0",
+     "companyName": "마이크로소프트",
+     "announceDateTime": "2026-10-29T05:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_BEFORE_DAY_MARKET",
+     "announceMarketStatusText": "오전 5시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "메타 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US20120518001"
+     }
+    },
+    "date": "2026-10-29",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NAS0077YX-E0",
+     "companyName": "메타",
+     "announceDateTime": "2026-10-29T05:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_BEFORE_DAY_MARKET",
+     "announceMarketStatusText": "오전 5시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "일라이 릴리 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US19700709001"
+     }
+    },
+    "date": "2026-10-29",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NYS000P56-E0",
+     "companyName": "일라이 릴리",
+     "announceDateTime": "2026-10-29T19:45:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_PRE_MARKET",
+     "announceMarketStatusText": "오후 9시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "셰브론 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US19210624001"
+     }
+    },
+    "date": "2026-10-30",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NYS000DP6-E0",
+     "companyName": "셰브론",
+     "announceDateTime": "2026-10-30T19:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_PRE_MARKET",
+     "announceMarketStatusText": "오후 9시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "아마존 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US19970515001"
+     }
+    },
+    "date": "2026-10-30",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NAS001MF1-E0",
+     "companyName": "아마존",
+     "announceDateTime": "2026-10-30T05:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_BEFORE_DAY_MARKET",
+     "announceMarketStatusText": "오전 5시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "애브비 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US20121210001"
+     }
+    },
+    "date": "2026-10-30",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NYS00DYYX-E0",
+     "companyName": "애브비",
+     "announceDateTime": "2026-10-30T20:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_PRE_MARKET",
+     "announceMarketStatusText": "오후 9시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "애플 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US19801212001"
+     }
+    },
+    "date": "2026-10-30",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NAS000C7F-E0",
+     "companyName": "애플",
+     "announceDateTime": "2026-10-30T05:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_BEFORE_DAY_MARKET",
+     "announceMarketStatusText": "오전 5시 이후"
+    }
+   },
+   {
+    "id": {
+     "uniqueName": "",
+     "group": "USD_EARNINGS_ANNOUNCEMENT"
+    },
+    "view": {
+     "title": "엑슨 모빌 실적발표",
+     "landingOption": {
+      "type": "NAVIGATE",
+      "url": "/stocks/US19200325001"
+     }
+    },
+    "date": "2026-10-30",
+    "excludeFromAll": false,
+    "stockEarnings": {
+     "companyCode": "NYS002Q0G-E0",
+     "companyName": "엑슨 모빌",
+     "announceDateTime": "2026-10-30T19:00:00",
+     "stockCategory": "MAJOR_STOCK",
+     "countryType": "us",
+     "announceMarketStatus": "US_MARKET_PRE_MARKET",
+     "announceMarketStatusText": "오후 9시 이후"
+    }
+   }
+  ],
+  "includeMajorStock": false
+ }
+}

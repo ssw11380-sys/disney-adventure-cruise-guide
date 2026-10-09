@@ -117,20 +117,20 @@ describe("마이그레이션", () => {
     dbs.push(db);
     await migrate(db, dialect);
     const versions = (await sql<{ version: number }>`select version from schema_version order by version`.execute(db)).rows.map((r) => Number(r.version));
-    expect(versions.at(-1)).toBe(12);
+    expect(versions.at(-1)).toBe(17); // 처음 12 → main 의 12~16 다음으로 다시 매김
     const cols = async (t: string) => (await sql<{ name: string; type: string }>`select name, type from pragma_table_info(${t})`.execute(db)).rows.map((r) => `${r.name}:${r.type.toUpperCase()}`);
     expect(await cols("watch_groups")).toEqual(["id:INTEGER", "name:TEXT", "position:INTEGER", "created_at:TEXT", "updated_at:TEXT"]);
     expect(await cols("registered_stocks")).toEqual(expect.arrayContaining(["watch_group_id:INTEGER", "watch_position:INTEGER"]));
     await register(db, "005930");
     expect(await db.selectFrom("registered_stocks").select(["watch_group_id", "watch_position"]).execute()).toEqual([{ watch_group_id: null, watch_position: null }]);
 
-    // 한 칸을 더한 뒤 멈춘 DB 흉내: 버전 12 기록만 지우고 칸 하나를 뺀다 → 다시 돌면 남은 칸만 더한다
-    await sql`delete from schema_version where version = 12`.execute(db);
+    // 한 칸을 더한 뒤 멈춘 DB 흉내: 버전 17 기록만 지우고 칸 하나를 뺀다 → 다시 돌면 남은 칸만 더한다
+    await sql`delete from schema_version where version = 17`.execute(db);
     await sql`alter table registered_stocks drop column watch_position`.execute(db);
     await migrate(db, dialect);
     await migrate(db, dialect);
     expect(await cols("registered_stocks")).toEqual(expect.arrayContaining(["watch_group_id:INTEGER", "watch_position:INTEGER"]));
-    expect((await sql<{ version: number }>`select version from schema_version where version = 12`.execute(db)).rows).toHaveLength(1);
+    expect((await sql<{ version: number }>`select version from schema_version where version = 17`.execute(db)).rows).toHaveLength(1);
   });
 });
 

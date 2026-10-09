@@ -40,7 +40,8 @@ describe("GET /api/widget: 브리핑 위젯 첫 줄 (시장 요약, &ms=1 만)",
       logger: false,
       enableScheduler: false,
     });
-    await app.inject({ method: "PUT", url: "/api/admin/features", payload: { numberBasis: false } });
+    // 기존 요약 응답 검사는 새 표시 기능을 끈 상태로 그대로 보존한다. 켜짐은 widgetClarity.test에서 별도 검사한다.
+    await app.inject({ method: "PUT", url: "/api/admin/features", payload: { numberBasis: false, widgetClarity: false, widgetLeanLive: false } });
   };
   const insert = async (d: MarketSummaryData, status: "ok" | "failed" = "ok") => {
     await db!

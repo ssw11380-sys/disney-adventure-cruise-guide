@@ -755,14 +755,15 @@ describe("전체 화면 브리핑 상세 (알림·위젯·종목 상세에서 �
     expect(h.store.size).toBe(0);
   });
 
-  it("폰 화면 구조: 이름 링크 → 날짜 → 시세 칸 → 요약|상세 탭 → 본문 카드 → 근거 → 다시 만들기 → 지난 브리핑(주소 바꿔 끼움)", () => {
+  it("폰 화면 구조: 이름·시세 → 근거 바로가기 → 요약|상세 → 본문 → 근거 → 다시 만들기 → 지난 브리핑", () => {
     const r = render(<BriefingDetailScreen />);
     const screen = ofType(r, "Screen")[0]!;
     expect(screen.props.disclaimer).toBe(true);
     expect(screen.props.scroll).toBeUndefined();
     expect(ofType(r, "StackScreen")[0]!.props.options).toEqual({ title: "퀀티넘 · 오전" });
     const kids = screen.children.filter((c): c is HostNode => typeof c !== "string").map((c) => c.type);
-    expect(kids).toEqual(["StackScreen", "View", "Card", "Segmented", "Card", "BriefingSources", "View", "View"]);
+    expect(kids).toEqual(["StackScreen", "View", "Card", "View", "Segmented", "Card", "View", "View", "View"]);
+    expect(r.all().some((n) => n.props.accessibilityRole === "link" && String(n.props.accessibilityLabel).endsWith("근거 자료로 이동"))).toBe(true);
     expect(r.byLabel("퀀티넘 종목 화면으로").props.accessibilityRole).toBe("link");
     expect(ofType(r, "Row").map((n) => n.props.label)).toEqual(["브리핑 시점 가격", "전일 대비", "보유 손익"]);
     press(r, r.all().find((n) => n.type === "Pressable" && String(n.props.accessibilityLabel).startsWith("9월 24일 (목)"))!);
@@ -1339,5 +1340,89 @@ describe("순수 함수", () => {
   it("알약 선택 칸: 보이는 34 + 위아래 hitSlop = 44", () => {
     const s = slopFor(FB.pillH);
     expect(FB.pillH + s.top + s.bottom).toBeGreaterThanOrEqual(touch.min);
+  });
+});
+
+describe("브리핑 3차 1 notifBack: 2단에서 알림으로 고른 브리핑은 새 세션 목록이 늦게 와도 그대로", () => {
+  const open = async (read: number[] = [512]) => {
+    h.flags.foldLayout = true;
+    h.store.set("briefings.read", JSON.stringify(read));
+    size(933, 632);
+    const r = render(<BriefingsScreen />);
+    await settle(r);
+    return r;
+  };
+  const acctRow = (r: R) => r.all().find((n) => n.type === "Pressable" && String(n.props.accessibilityLabel).startsWith("내 계좌 브리핑"))!;
+  /** 오후 세션 종목 브리핑 (종목마다 새 id) */
+  const afternoon = (day = "2026-09-25", plus = 100) => LIST.map((i) => (i.latest ? { ...i, latest: B(i.latest.id + plus, i.code, i.name, day, "afternoon") } : i));
+  const ACCOUNT_PM = { ...ACCOUNT, id: 13, session: "afternoon" as const };
+
+  it("오후 계좌 알림을 누름 → 종목 목록(새 세션)이 계좌 목록보다 먼저 와도 오른쪽 칸은 그 계좌 브리핑 → 계좌 목록이 오면 계좌 줄 강조", async () => {
+    const r = await open();
+    expect(pick.currentPick().pick).toMatchObject({ kind: "stock", id: 510 });
+    // 알림 누름 (NotificationBridge → pickNotified). 목록들은 아직 오전 것
+    pick.pickNotified({ kind: "account", id: 13 });
+    r.rerender();
+    await settle(r);
+    expect(pick.currentPick()).toEqual({ pick: { kind: "account", id: 13 }, highlight: true });
+    // 종목 목록이 먼저 오후 세션으로 (계좌 목록은 아직 12)
+    h.latest = afternoon();
+    r.rerender();
+    await settle(r);
+    expect(pick.currentPick().pick).toEqual({ kind: "account", id: 13 });
+    // 계좌 목록 도착
+    h.accounts = [ACCOUNT_PM];
+    r.rerender();
+    await settle(r);
+    expect(pick.currentPick().pick).toEqual({ kind: "account", id: 13 });
+    expect(acctRow(r).props.accessibilityState).toEqual({ selected: true });
+  });
+
+  it("(대조 — 플래그 꺼짐과 같은 길) 알림이 아니라 그냥 고른 것이면 지금처럼 새 목록의 첫 미확인을 다시 고른다", async () => {
+    const r = await open();
+    pick.pickBriefing({ kind: "account", id: 13 }, { highlight: true });
+    r.rerender();
+    await settle(r);
+    h.latest = afternoon();
+    r.rerender();
+    await settle(r);
+    expect(pick.currentPick().pick).toEqual({ kind: "stock", id: 612, code: "QNTM" });
+  });
+
+  it("지키는 것은 한 번: 그 뒤 또 새 세션이 오면(계좌 목록이 끝내 오지 않음) 지금 규칙대로 첫 미확인", async () => {
+    const r = await open();
+    pick.pickNotified({ kind: "account", id: 13 });
+    h.latest = afternoon();
+    r.rerender();
+    await settle(r);
+    expect(pick.currentPick().pick).toEqual({ kind: "account", id: 13 });
+    h.latest = afternoon("2026-09-28", 200);
+    r.rerender();
+    await settle(r);
+    expect(pick.currentPick().pick).toMatchObject({ kind: "stock" });
+  });
+
+  it("종목 알림: 새 세션 목록이 오기 전(오전 목록)에도 오른쪽 칸은 알림의 오후 브리핑, 목록이 오면 그 줄 강조", async () => {
+    const r = await open();
+    pick.pickNotified({ kind: "stock", id: 613, code: "TSLA" });
+    r.rerender();
+    await settle(r);
+    expect(pick.currentPick().pick).toEqual({ kind: "stock", id: 613, code: "TSLA" });
+    // 오전 목록에서는 같은 종목(테슬라) 줄을 강조 (지금 규칙)
+    expect(selectedRows(r)).toEqual([expect.stringContaining("테슬라")]);
+    h.latest = afternoon();
+    r.rerender();
+    await settle(r);
+    expect(pick.currentPick().pick).toEqual({ kind: "stock", id: 613, code: "TSLA" });
+    expect(selectedRows(r)).toEqual([expect.stringContaining("테슬라")]);
+  });
+
+  it("알림으로 고른 계좌 브리핑이어도 서버가 계좌 브리핑을 끄면 지금처럼 첫 미확인 (막다른 안내 없음)", async () => {
+    const r = await open();
+    pick.pickNotified({ kind: "account", id: 12 });
+    h.flags.accountBriefing = false;
+    r.rerender();
+    await settle(r);
+    expect(pick.currentPick().pick).toMatchObject({ kind: "stock" });
   });
 });

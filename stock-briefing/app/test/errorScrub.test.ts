@@ -27,6 +27,12 @@ describe("오류 보고: 토큰·금액은 기기를 떠나기 전에 지운다"
     expect(a.id).not.toBe(b.id);
   });
   it("스택의 줄·열 번호는 남긴다", () => expect(scrubText("at f (index.bundle:12345:67)", { numbers: false })).toBe("at f (index.bundle:12345:67)"));
+  it("로그인 세션 토큰(gzs1_…·?session=)도 지운다 — 웹 스트림 주소가 웹소켓 오류에 담겨도 (계정 A단계)", () => {
+    const tok = "gzs1_Ab-9_zZ0123456789abcdefghijklmnopqrstuvwxy";
+    expect(scrubText(`WebSocket wss://h.test/api/stream?token=t0k&session=${tok} 실패`, { numbers: false })).toBe("WebSocket wss://h.test/api/stream?token=[지움]&session=[지움] 실패");
+    expect(scrubText(`세션 ${tok} 끝`, { numbers: true })).toBe("세션 [지움] 끝");
+    expect(buildReport("js", new Error(`x-session-token: ${tok}`), { screen: `/login?session=${tok}`, appVersion: null, updateId: null, platform: null }, 0)).not.toMatchObject({ message: expect.stringContaining("gzs1_") });
+  });
   it("buildReport: Error·문자열·객체 모두 한 건으로", () => {
     const e = new TypeError("Cannot read 'data' of undefined 1,000원");
     const r = buildReport("render", e, META, NOW);

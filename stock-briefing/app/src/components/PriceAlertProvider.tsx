@@ -1,7 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useQuery, useQueryClient, type Query } from "@tanstack/react-query";
 import { router, usePathname } from "expo-router";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { AccessibilityInfo, Alert, AppState } from "react-native";
 import { ApiRequestError } from "@/api/client";
 import { useApi, useFeatures, useLivePoll } from "@/api/hooks";
@@ -13,6 +13,7 @@ import { haptic } from "@/lib/haptics";
 import { quotesOf } from "@/lib/liveDot";
 import { PRICE_ALERTS_OFF, PriceAlertContext, type PriceAlertState } from "@/lib/priceAlertContext";
 import { activeRules, ALERT_TEXT, announceText, checkQuoteRules, checkVolumeRules, codesKey, firedBook, isDetailPath, notificationContent, notifyPriceAlert, sessionEdges, type Hit } from "@/lib/priceAlerts";
+import { personalBlocked, sessionVersion, subscribeSession } from "@/lib/session";
 import { useSettings } from "@/lib/settings";
 import { priceAlert } from "@/tokens";
 
@@ -187,9 +188,11 @@ function BannerHost({ hits, onClose }: { hits: Hit[]; onClose: () => void }) {
 }
 
 export function PriceAlertProvider({ children }: { children: React.ReactNode }) {
-  const on = featureOn(useFeatures().data, "priceAlerts", false);
   const api = useApi();
   const { apiUrl } = useSettings();
+  // 계정 A단계 (검증 4차): 로그인 화면이 떠 있는 동안·주인 아닌 계정은 꺼짐 — 조건을 묻지도(서버는 403·빈 값) 1분마다 다시 묻지도 않는다
+  useSyncExternalStore(subscribeSession, sessionVersion, sessionVersion);
+  const on = featureOn(useFeatures().data, "priceAlerts", false) && !personalBlocked(apiUrl);
   const qc = useQueryClient();
 
   const rulesQ = useQuery({

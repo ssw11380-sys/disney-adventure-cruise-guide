@@ -62,7 +62,7 @@ export function excludedCount(stocks: RegisteredWithQuote[]): number {
 }
 
 /** 위젯 목록 순서: 보유(원화 환산 평가금액 큰 순, 시세 없는 보유는 보유 맨 뒤) → 관심(이름 순) */
-export function widgetOrder(stocks: RegisteredWithQuote[], fxOf: (s: RegisteredWithQuote) => number | null): RegisteredWithQuote[] {
+export function widgetOrder(stocks: RegisteredWithQuote[], fxOf: (s: RegisteredWithQuote) => number | null, options?: { sort: "value" | "name"; pinnedCodes: readonly string[] }): RegisteredWithQuote[] {
   const krw = (s: RegisteredWithQuote) => {
     const v = s.evaluation?.marketValue;
     if (v === undefined) return Number.NEGATIVE_INFINITY;
@@ -70,7 +70,16 @@ export function widgetOrder(stocks: RegisteredWithQuote[], fxOf: (s: RegisteredW
   };
   const held = stocks.filter(isHeld).sort((a, b) => krw(b) - krw(a));
   const watch = stocks.filter((s) => !isHeld(s)).sort((a, b) => a.name.localeCompare(b.name, "ko"));
-  return [...held, ...watch];
+  const ordered = [...held, ...watch];
+  if (!options) return ordered;
+  const pins = new Map<string, number>();
+  for (const code of options.pinnedCodes) if (!pins.has(code)) pins.set(code, pins.size);
+  // 고정 종목을 앞에 두되 입력 목록·전체 합계는 바꾸지 않는다. 없는 종목은 새로 만들지 않는다.
+  return ordered.sort((a, b) => {
+    const ap = pins.get(a.code), bp = pins.get(b.code);
+    if (ap !== undefined || bp !== undefined) return (ap ?? Infinity) - (bp ?? Infinity);
+    return options.sort === "name" ? a.name.localeCompare(b.name, "ko") : 0;
+  });
 }
 
 /** 시세 기준 시각: 받은 시세 중 가장 늦은 asOf. 없으면 받은 시각 */
@@ -93,9 +102,26 @@ export function asOfLabel(ms: number, now: number): string {
   return `${today ? hm : `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${hm}`} 기준`;
 }
 
+/**
+ * 실패가 아닌 조용한 안내 상태인지 (검증 5차): 로그인이 필요함(자동 로그인 끔·로그인 전·세션 끊김)·주인 아닌 계정.
+ * 사용자가 고른 정상 상태라 '갱신 실패' 표시·실패 기록·연달아 실패 다시 그리기를 하지 않는다 (failureText 와 같은 글로 알아본다)
+ */
+export function quietState(error: string | null): boolean {
+  return !!error && /로그인|준비 중/.test(error);
+}
+
+/** 로그인한 주인 아닌 계정이라 개인 데이터가 없는 상태인지 ('개인 종목 기능은 준비 중' — 공유 데이터인 지수·환율 판은 보통처럼 그린다, 검증 6차) */
+export function memberState(error: string | null): boolean {
+  return !!error && /준비 중/.test(error) && !/로그인/.test(error);
+}
+
 /** 조회 실패 사유를 짧은 한국어로 (영어 오류 문구를 위젯에 그대로 보이지 않게) */
 export function failureText(error: string | null): string | null {
   if (!error) return null;
+  // 로그인 필요 (세션 없음·끊김·자동 로그인 끔 — 계정 A단계): 잔고 대신 이 한 줄 (검증 4차)
+  if (/로그인/.test(error)) return "로그인하면 보여요";
+  // 로그인한 주인 아닌 계정 (계정 A단계 — 서버 403 personal_data_not_ready): 로그인하라고 하지 않는다
+  if (/준비 중/.test(error)) return "개인 종목 기능은 준비 중";
   if (/HTTP 401|토큰/.test(error)) return "갱신 실패 · 토큰 확인";
   if (/abort|timeout|시간/i.test(error)) return "갱신 실패 · 응답 없음";
   if (/network|fetch|연결/i.test(error)) return "갱신 실패 · 연결 안 됨";
@@ -104,9 +130,9 @@ export function failureText(error: string | null): string | null {
 }
 
 /** 자산 위젯 아랫줄: 오늘 손익과 총손익을 각자 부호 색으로 (위젯-2) */
-export function assetLine(day: number, profit: number, fmt: (n: number) => string): { day: { text: string; color: string }; total: { text: string; color: string } } {
+export function assetLine(day: number, profit: number, fmt: (n: number) => string, dayLabel = DAY_LABEL): { day: { text: string; color: string }; total: { text: string; color: string } } {
   return {
-    day: { text: `오늘 ${fmt(day)}`, color: tone(day) },
+    day: { text: `${dayLabel} ${fmt(day)}`, color: tone(day) },
     total: { text: `총 ${fmt(profit)}`, color: tone(profit) },
   };
 }
@@ -269,7 +295,8 @@ export const HOME_URI = "stockbriefing://";
  * 아니면 서버 알림 설정의 브리핑 시간(예전: 늘 "평일 08:30·16:00"). 시간을 모르면(예전 서버) 시간을 지어내지 않는다
  */
 export function briefingEmptyText(error: string | null, brief: WidgetBrief | null | undefined): string {
-  if (error) return `${failureText(error)} · ↻ 로 다시 시도`;
+  // 로그인 필요·주인 아닌 계정: 다시 시도할 일이 아니다 — 앱을 열어 로그인 (검증 5차)
+  if (error) return quietState(error) ? `${failureText(error)} · 눌러서 앱 열기` : `${failureText(error)} · ↻ 로 다시 시도`;
   if (!brief) return "아직 브리핑이 없습니다. 설정한 브리핑 시간에 생성됩니다.";
   if (brief.failed > 0) return `브리핑 생성 실패 ${brief.failed}종목. 앱의 브리핑 탭에서 확인해 주세요.`;
   const times = [brief.morning, brief.afternoon].filter((x): x is string => !!x);
@@ -411,9 +438,9 @@ export function polishedIndexItems(list: readonly (WidgetIndexLike & { asOf?: st
 }
 
 /** 잔고 한 줄을 화면 읽기가 읽는 문장 (다듬은 모습): "삼성전자 72,000원, 오늘 1.50% 상승, 수익 2.86% 상승". 시세가 없으면 "삼성전자 시세 없음" */
-export function polishedRowSpeech(name: string, price: string | null, changeRate: number | null | undefined, profitRate: number | null | undefined): string {
+export function polishedRowSpeech(name: string, price: string | null, changeRate: number | null | undefined, profitRate: number | null | undefined, dayLabel = DAY_LABEL): string {
   if (!price || price === "-") return `${name} 시세 없음`;
   const today = speakRate(changeRate);
   const profit = speakRate(profitRate);
-  return sentence([`${name} ${speakAmount(price)}`, today ? `오늘 ${today}` : null, profit ? `수익 ${profit}` : null]);
+  return sentence([`${name} ${speakAmount(price)}`, today ? `${dayLabel} ${today}` : null, profit ? `수익 ${profit}` : null]);
 }

@@ -1440,7 +1440,7 @@ describe("매매 기록 — 읽기 API · /health · 백업 · 마이그레이�
     const db: Db = await createMigratedDb(":memory:");
     await migrate(db, "sqlite");
     const versions = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
-    expect(versions.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    expect(versions.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
     const idx = await sql<{ name: string }>`select name from sqlite_master where type = 'index' and tbl_name in ('account_snapshots', 'trade_executions') order by name`.execute(db);
     expect(idx.rows.map((r) => r.name)).toEqual(expect.arrayContaining(["uq_account_snapshots_date_market", "uq_trade_executions_account_order"]));
     await db.destroy();

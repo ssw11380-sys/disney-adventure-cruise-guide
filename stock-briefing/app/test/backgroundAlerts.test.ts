@@ -7,6 +7,7 @@ const scheduled: unknown[] = [];
 // 알림을 띄우는 도중에 멈춰 둘 수 있게 (hold 가 있으면 풀릴 때까지 기다린다. reached: 알림을 띄우기 시작함)
 const gate: { hold: Promise<void> | null; reached: () => void } = { hold: null, reached: () => undefined };
 vi.mock("expo-notifications", () => ({
+  getPresentedNotificationsAsync: async () => [], getAllScheduledNotificationsAsync: async () => [],
   getPermissionsAsync: async () => ({ status: "granted" }),
   requestPermissionsAsync: async () => ({ status: "granted" }),
   scheduleNotificationAsync: async (x: unknown) => {
@@ -480,7 +481,7 @@ describe("백그라운드 브리핑 알림 (3-16 리뷰 M1)", () => {
       placed.market = true;
       const urls = serveBoard();
       await runBriefingCheck();
-      expect(urls.filter((u) => u.includes("/api/widget"))).toEqual(["https://server.test/api/widget?indices=1&sessions=1&ui=2&ms=1&board=1"]);
+      expect(urls.filter((u) => u.includes("/api/widget"))).toEqual(["https://server.test/api/widget?indices=1&sessions=1&ui=2&ms=1&account=1&board=1"]);
       const r = refreshed[0] as { board: { at: number; list: { code: string }[] } | null; features: { flags: { market: boolean } } | null };
       expect(r.board!.list.map((i) => i.code)).toEqual(["KOSPI", "USDKRW"]);
       expect(r.board!.at).toBe(NOW);
@@ -490,7 +491,7 @@ describe("백그라운드 브리핑 알림 (3-16 리뷰 M1)", () => {
     it("위젯이 없으면 판을 묻지 않는다 (응답·ETag 가 예전과 같다)", async () => {
       const urls = serveBoard();
       await runBriefingCheck();
-      expect(urls.filter((u) => u.includes("/api/widget"))).toEqual(["https://server.test/api/widget?indices=1&sessions=1&ui=2&ms=1"]);
+      expect(urls.filter((u) => u.includes("/api/widget"))).toEqual(["https://server.test/api/widget?indices=1&sessions=1&ui=2&ms=1&account=1"]);
       expect((refreshed[0] as { board: unknown }).board).toBeNull();
     });
   });

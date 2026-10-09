@@ -22,6 +22,11 @@ import type { FetchFn, QuoteProvider, StockSearchProvider } from "./types.js";
  */
 
 const BASE = "https://wts-info-api.tossinvest.com/api";
+/**
+ * 토스증권 공개 캘린더(tossinvest.com/calendar 화면 — 로그인 없음)가 쓰는 호스트 (브리핑 3차 5 다가오는 일정의 실적 발표일, 플래그 holdingEarnings).
+ * POST /api/v4/calendar/monthly/{YYYY-MM} (빈 본문) → 그달의 경제 지표·휴장일·큰 종목 실적 발표
+ */
+const CERT_BASE = "https://wts-cert-api.tossinvest.com/api";
 /** 토스 웹 요청 하나의 최대 대기 (응답이 멈추면 시세 체인이 다음 소스로 넘어가게) */
 const REQUEST_TIMEOUT_MS = 8_000;
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36";
@@ -95,6 +100,78 @@ export function parseProductFacts(r: Json): ProductFacts {
   };
 }
 
+/** 배당 요약 한 줄 (브리핑 3차 5 다가오는 일정 — 회사가 발표한 앞날 배당락일도 들어 있음) */
+export interface TossDividend {
+  /** 배당락일 (그 시장 날짜 YYYY-MM-DD — 미국 종목은 미국 날짜) */
+  exDate: string;
+  /** 지급일 (모르면 null) */
+  paymentDate: string | null;
+  /** 주당 현금 배당 (종목 통화, 모르거나 0 이면 null) */
+  cash: number | null;
+  currency: "KRW" | "USD" | null;
+}
+
+/** 캘린더의 실적 발표 한 건 (브리핑 3차 5, 플래그 holdingEarnings — 큰 종목만 오른다) */
+export interface TossCalendarEarning {
+  /** 토스 상품 코드 (landingOption.url '/stocks/US19860313001' · 한국 '/stocks/A005930') */
+  productCode: string;
+  /** 토스가 보인 회사 이름 */
+  name: string;
+  /** 한국 날짜 YYYY-MM-DD */
+  date: string;
+  /** 발표 한국 시각 'YYYY-MM-DDTHH:MM:SS' (오프셋 없음 — 토스가 한국 시각으로 줌). 한국 종목은 00:00(시각 모름) */
+  announceAt: string | null;
+  /** 토스가 보인 시각 글 ('오전 5시 이후' · 한국 '발표 후') */
+  timeText: string | null;
+  country: "us" | "kr" | null;
+}
+
+const YMD = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * 배당 요약 응답(result) → 배당락일 목록. 배열이 아니면 모양이 바뀐 것이라 던진다 (빈 배열 = 배당 기록 없음 — TSLA).
+ * 날짜가 없거나 틀린 줄은 뺀다
+ */
+export function parseDividendSummary(result: unknown): TossDividend[] {
+  if (!Array.isArray(result)) throw new ProviderError("toss", "배당 요약 응답 모양이 바뀌었습니다");
+  const out: TossDividend[] = [];
+  for (const r of result as Json[]) {
+    const exDate = typeof r?.["exDate"] === "string" ? r["exDate"].slice(0, 10) : "";
+    if (!YMD.test(exDate)) continue;
+    const pay = typeof r["paymentDate"] === "string" ? r["paymentDate"].slice(0, 10) : "";
+    const cash = num(r["cash"]);
+    const cur = r["currency"];
+    out.push({ exDate, paymentDate: YMD.test(pay) ? pay : null, cash: cash !== null && cash > 0 ? cash : null, currency: cur === "USD" || cur === "KRW" ? cur : null });
+  }
+  return out;
+}
+
+/**
+ * 캘린더 응답(result) → 실적 발표만 (USD_/KRX_EARNINGS_ANNOUNCEMENT, 상품 코드가 있는 것). events 가 배열이 아니면 모양이 바뀐 것이라 던진다.
+ * 경제 지표·휴장일 등 다른 일정은 뺀다
+ */
+export function parseCalendarEarnings(result: unknown): TossCalendarEarning[] {
+  const events = (result as Json | null | undefined)?.["events"];
+  if (!Array.isArray(events)) throw new ProviderError("toss", "캘린더 응답 모양이 바뀌었습니다");
+  const out: TossCalendarEarning[] = [];
+  for (const e of events as Json[]) {
+    const group = String((e?.["id"] as Json | undefined)?.["group"] ?? "");
+    if (group !== "USD_EARNINGS_ANNOUNCEMENT" && group !== "KRX_EARNINGS_ANNOUNCEMENT") continue;
+    const view = (e["view"] as Json | undefined) ?? {};
+    const url = String((view["landingOption"] as Json | null | undefined)?.["url"] ?? "");
+    const productCode = /^\/stocks\/([A-Za-z0-9]+)$/.exec(url)?.[1] ?? "";
+    const date = typeof e["date"] === "string" ? e["date"].slice(0, 10) : "";
+    if (!productCode || !YMD.test(date)) continue;
+    const se = (e["stockEarnings"] as Json | null | undefined) ?? {};
+    const at = typeof se["announceDateTime"] === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(se["announceDateTime"]) ? se["announceDateTime"].slice(0, 19) : null;
+    const text = typeof se["announceMarketStatusText"] === "string" && se["announceMarketStatusText"].trim() ? se["announceMarketStatusText"].trim() : null;
+    const country = se["countryType"] === "us" || se["countryType"] === "kr" ? se["countryType"] : group === "KRX_EARNINGS_ANNOUNCEMENT" ? "kr" : "us";
+    const name = (typeof se["companyName"] === "string" && se["companyName"].trim()) || String(view["title"] ?? "").replace(/\s*실적발표$/, "").trim() || productCode;
+    out.push({ productCode, name, date, announceAt: at, timeText: text, country });
+  }
+  return out;
+}
+
 /** 티커 → 토스 상품 코드 매핑을 재시작 후에도 남기기 위한 저장소 (meta 테이블 등) */
 export interface CodeStore {
   get(key: string): Promise<string | null>;
@@ -134,8 +211,8 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
     private readonly now: () => Date = () => new Date(),
   ) {}
 
-  private async request(path: string, init: RequestInit = {}): Promise<unknown> {
-    const url = `${BASE}${path}`;
+  private async request(path: string, init: RequestInit = {}, base: string = BASE): Promise<unknown> {
+    const url = `${base}${path}`;
     let res: Response;
     try {
       res = await this.fetchFn(url, {
@@ -234,6 +311,23 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
     } catch {
       return null;
     }
+  }
+
+  // ── 다가오는 일정 (브리핑 3차 5) ─────────────────────────────────────
+
+  /**
+   * 종목의 배당 기록과 회사가 발표한 앞날 배당락일 (토스 웹 배당 요약 — 로그인 없음, 시세와 같은 호스트).
+   * 받지 못하면 던진다 (부르는 쪽이 캐시·네이버로). 배당 기록이 없는 종목은 빈 배열
+   */
+  async dividendSummary(code: string): Promise<TossDividend[]> {
+    const pc = await this.productCode(normalizeCode(code));
+    return parseDividendSummary(await this.request(`/v1/stock-infos/dividend/${encodeURIComponent(pc)}/summary`));
+  }
+
+  /** 한 달(YYYY-MM)의 실적 발표 일정 (토스증권 공개 캘린더 — 큰 종목만). 받지 못하거나 모양이 바뀌면 던진다 */
+  async calendarMonth(ym: string): Promise<TossCalendarEarning[]> {
+    if (!/^\d{4}-\d{2}$/.test(ym)) throw new ProviderError(this.name, `캘린더 달이 올바르지 않습니다: ${ym}`);
+    return parseCalendarEarnings(await this.request(`/v4/calendar/monthly/${ym}`, { method: "POST" }, CERT_BASE));
   }
 
   // ── 시세 ────────────────────────────────────────────────────────

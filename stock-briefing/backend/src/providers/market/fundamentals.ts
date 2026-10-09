@@ -33,7 +33,44 @@ export interface Fundamentals {
    * 없으면 영문(ETF: "Defiance Daily Target 2X Long RGTI ETF"). 모르면 null
    */
   name?: string | null;
+  /**
+   * 가장 최근에 발표된 배당락일 (미국만 — 네이버 basic 의 exDividendAt '2026.11.19.' → '2026-11-19', 미국 날짜).
+   * 브리핑 3차 5 다가오는 일정이 토스 배당 요약과 맞춰 보는 데 쓴다. 칸이 없으면 없음 (예전 모양에 칸을 새로 만들지 않게)
+   */
+  exDividendAt?: string;
   source: string;
+}
+
+export interface FundamentalsStatus {
+  value: Fundamentals | null;
+  /** 마지막 정상 자료를 받은 시각. 갱신 실패로 이전 값을 쓸 때도 바꾸지 않는다. */
+  receivedAt: string | null;
+  refreshFailed: boolean;
+}
+
+export interface FundamentalsCache {
+  at: number;
+  ttl: number;
+  value: Fundamentals | null;
+  receivedAt: number | null;
+  refreshFailed: boolean;
+}
+
+/** 마지막 정상 응답은 메모리에서 내보내기 전에 보존한다. 실패 응답이 새 정상값을 덮지 않는다. */
+export interface FundamentalsCacheStore {
+  load(code: string): Promise<FundamentalsCache | null>;
+  save(code: string, entry: FundamentalsCache): Promise<void>;
+}
+
+interface FxQuote {
+  rate: number;
+  source: "toss" | "naver";
+  asOf: string;
+}
+
+export interface FxQuoteStatus {
+  value: FxQuote | null;
+  refreshFailed: boolean;
 }
 
 type Json = Record<string, unknown>;
@@ -54,8 +91,16 @@ const NOT_FOUND_STATUS = new Set([400, 404, 409]);
 
 export class NaverFundamentals {
   readonly name = "naver-fundamentals";
-  private readonly cache = new Map<string, { at: number; ttl: number; value: Fundamentals | null }>();
+  private readonly cache = new Map<string, FundamentalsCache>();
+  private readonly inFlight = new Map<string, Promise<FundamentalsCache>>();
+  private cacheStore: FundamentalsCacheStore | null = null;
+  private readonly persisted = new WeakSet<FundamentalsCache>();
+  private readonly normalEntries = new WeakMap<FundamentalsCache, FundamentalsCache>();
+  private readonly writes = new Map<string, { entry: FundamentalsCache; promise: Promise<void> }>();
+  private readonly pendingWrites = new Set<Promise<void>>();
+  private persistenceFailures = 0;
   private fx: { at: number; rate: number; source: "toss" | "naver" } | null = null;
+  private fxInFlight: Promise<FxQuoteStatus> | null = null;
 
   /** 우선 쓸 환율 소스(토스 Open API 등). 토스 앱의 평가금과 같은 숫자를 내기 위해 토스 환율을 먼저 쓴다 */
   fxPrimary: (() => Promise<number | null>) | null = null;
@@ -66,7 +111,58 @@ export class NaverFundamentals {
     private readonly ttlMs = 60 * 60_000,
     /** 받기에 실패한 결과는 이만큼만 기억한다 (한 번의 오류로 1시간 동안 PER/PBR 이 비지 않게) */
     private readonly failTtlMs = 2 * 60_000,
+    private readonly maxCacheEntries = 500,
   ) {}
+
+  setCacheStore(store: FundamentalsCacheStore): void {
+    this.cacheStore = store;
+    for (const [code, entry] of this.cache) this.persist(code, entry);
+    this.trimCache();
+  }
+
+  /** 정상 응답을 기다리게 하지 않는다. 서버의 정상 종료 때만 미완료 저장을 마친다. */
+  async flushCache(): Promise<void> {
+    await Promise.all([...this.pendingWrites]);
+  }
+
+  cacheStats(): { entries: number; limit: number; pendingWrites: number; safetyOverflow: number; persistenceFailures: number } {
+    const limit = Math.max(1, this.maxCacheEntries);
+    return { entries: this.cache.size, limit, pendingWrites: this.pendingWrites.size, safetyOverflow: Math.max(0, this.cache.size - limit), persistenceFailures: this.persistenceFailures };
+  }
+
+  private remember(code: string, entry: FundamentalsCache): void {
+    this.cache.delete(code);
+    this.cache.set(code, entry);
+    this.trimCache();
+  }
+
+  private trimCache(): void {
+    for (const [code, entry] of this.cache) {
+      if (this.cache.size <= Math.max(1, this.maxCacheEntries)) break;
+      // 저장 장애 중 마지막 정상 자료를 버려 한도를 맞추지는 않는다. 저장이 회복되면 다시 정리한다.
+      if (entry.value === null || this.persisted.has(entry)) this.cache.delete(code);
+    }
+  }
+
+  private persist(code: string, entry: FundamentalsCache): void {
+    entry = this.normalEntries.get(entry) ?? entry;
+    if (!this.cacheStore || entry.refreshFailed || this.persisted.has(entry) || this.writes.get(code)?.entry === entry) return;
+    const store = this.cacheStore;
+    const promise = Promise.resolve().then(() => store.save(code, entry)).then(() => {
+      this.persisted.add(entry);
+      const current = this.cache.get(code);
+      if (current?.value === entry.value && current.receivedAt === entry.receivedAt) this.persisted.add(current);
+      this.trimCache();
+    }).catch(() => {
+      // 분석 입력을 줄이지 않도록 정상 자료는 메모리에 남기고 다음 접근에서 저장을 다시 시도한다.
+      this.persistenceFailures++;
+    }).finally(() => {
+      this.pendingWrites.delete(promise);
+      if (this.writes.get(code)?.promise === promise) this.writes.delete(code);
+    });
+    this.pendingWrites.add(promise);
+    this.writes.set(code, { entry, promise });
+  }
 
   private async getJson(url: string): Promise<Fetched<Json>> {
     try {
@@ -89,35 +185,90 @@ export class NaverFundamentals {
    *  - asOf: 그 값을 받은 시각(한국 시간 ISO). 둘 다 실패해 전에 받아 둔 값을 돌려줄 때는 그때 시각이라, 지금보다 오래됐으면 옛 값이다
    * usdKrw() 와 같은 1분 캐시·같은 순서를 쓴다. 한 번도 못 받았으면 null
    */
-  async usdKrwQuote(): Promise<{ rate: number; source: "toss" | "naver"; asOf: string } | null> {
+  async usdKrwQuote(): Promise<FxQuote | null> {
+    return (await this.usdKrwQuoteWithStatus()).value;
+  }
+
+  /** 오래됐다는 추정 대신, 기존 환율 갱신의 실제 성공·실패를 함께 전달한다. */
+  async usdKrwQuoteWithStatus(): Promise<FxQuoteStatus> {
     const t = this.now().getTime();
     const quote = (fx: { at: number; rate: number; source: "toss" | "naver" }) => ({ rate: fx.rate, source: fx.source, asOf: seoulIso(new Date(fx.at)) });
-    if (this.fx && t - this.fx.at < 60_000) return quote(this.fx);
-    if (this.fxPrimary) {
-      const primary = await this.fxPrimary().catch(() => null);
-      if (primary && primary > 0) {
-        this.fx = { at: t, rate: primary, source: "toss" };
-        return quote(this.fx);
+    if (this.fx && t - this.fx.at < 60_000) return { value: quote(this.fx), refreshFailed: false };
+    if (this.fxInFlight) return this.fxInFlight;
+    const pending = (async () => {
+      if (this.fxPrimary) {
+        const primary = await this.fxPrimary().catch(() => null);
+        if (primary && primary > 0) {
+          this.fx = { at: t, rate: primary, source: "toss" };
+          return { value: quote(this.fx), refreshFailed: false };
+        }
       }
+      const j = await this.getJson("https://api.stock.naver.com/marketindex/exchange/FX_USDKRW");
+      const rate = j === FAILED ? null : parseNum((j?.["exchangeInfo"] as Json | undefined)?.["closePrice"]);
+      if (rate === null || rate <= 0) return { value: this.fx ? quote(this.fx) : null, refreshFailed: true };
+      this.fx = { at: t, rate, source: "naver" };
+      return { value: quote(this.fx), refreshFailed: false };
+    })();
+    this.fxInFlight = pending;
+    try {
+      return await pending;
+    } finally {
+      if (this.fxInFlight === pending) this.fxInFlight = null;
     }
-    const j = await this.getJson("https://api.stock.naver.com/marketindex/exchange/FX_USDKRW");
-    const rate = j === FAILED ? null : parseNum((j?.["exchangeInfo"] as Json | undefined)?.["closePrice"]);
-    if (rate === null || rate <= 0) return this.fx ? quote(this.fx) : null;
-    this.fx = { at: t, rate, source: "naver" };
-    return quote(this.fx);
   }
 
   async get(code: string, market?: string | null): Promise<Fundamentals | null> {
+    return (await this.getEntry(code, market)).value;
+  }
+
+  /** 기존 get과 같은 요청·캐시를 사용하고, 실패 안내에 필요한 수신 시각만 함께 돌려준다. */
+  async getWithStatus(code: string, market?: string | null): Promise<FundamentalsStatus> {
+    const entry = await this.getEntry(code, market);
+    return { value: entry.value, receivedAt: entry.receivedAt === null ? null : seoulIso(new Date(entry.receivedAt)), refreshFailed: entry.refreshFailed };
+  }
+
+  private async getEntry(code: string, market?: string | null): Promise<FundamentalsCache> {
     code = normalizeCode(code);
     const t = this.now().getTime();
-    const hit = this.cache.get(code);
-    if (hit && t - hit.at < hit.ttl) return hit.value;
-    const got = isKrCode(code) ? await this.getKr(code) : await this.getUs(code, market);
-    // 받기 실패는 "값 없음"이 아니다: 직전 값이 있으면 그대로 두고, 짧게만 기억했다가 다시 받는다 (BH-43)
-    const failed = got === FAILED;
-    const value = failed ? (hit?.value ?? null) : got;
-    this.cache.set(code, { at: t, ttl: failed ? this.failTtlMs : this.ttlMs, value });
-    return value;
+    let hit = this.cache.get(code);
+    if (hit && t - hit.at < hit.ttl) {
+      this.remember(code, hit);
+      this.persist(code, hit);
+      return hit;
+    }
+    const running = this.inFlight.get(code);
+    if (running) return running;
+    // 같은 공개 자료의 갱신을 공유해 늦은 실패가 새 정상 값을 덮지 않게 한다.
+    const pending = (async () => {
+      if (!hit && this.cacheStore) {
+        hit = await this.cacheStore.load(code).catch(() => null) ?? undefined;
+        if (hit) {
+          this.persisted.add(hit);
+          this.remember(code, hit);
+          if (t - hit.at < hit.ttl) return hit;
+        }
+      }
+      const got = isKrCode(code) ? await this.getKr(code) : await this.getUs(code, market);
+      // 받기 실패는 "값 없음"이 아니다: 직전 값이 있으면 그대로 두고, 짧게만 기억했다가 다시 받는다 (BH-43)
+      const failed = got === FAILED;
+      const value = failed ? (hit?.value ?? null) : got;
+      const entry = {
+        at: t, ttl: failed ? this.failTtlMs : this.ttlMs, value,
+        receivedAt: failed ? (hit?.receivedAt ?? null) : value === null ? null : this.now().getTime(),
+        refreshFailed: failed,
+      };
+      if (failed && hit && this.persisted.has(hit)) this.persisted.add(entry);
+      if (failed && hit) this.normalEntries.set(entry, this.normalEntries.get(hit) ?? hit);
+      this.remember(code, entry);
+      this.persist(code, entry);
+      return entry;
+    })();
+    this.inFlight.set(code, pending);
+    try {
+      return await pending;
+    } finally {
+      if (this.inFlight.get(code) === pending) this.inFlight.delete(code);
+    }
   }
 
   private async getKr(code: string): Promise<Fetched<Fundamentals>> {
@@ -144,6 +295,8 @@ export class NaverFundamentals {
       if (!j || !infos) continue;
       const f = fromInfos(infos, "naver-world");
       f.name = realText(j["stockName"]) ?? realText(j["stockNameEng"]);
+      const exDividendAt = naverDate(infos.find((it) => it["code"] === "exDividendAt")?.["value"]);
+      if (exDividendAt) f.exDividendAt = exDividendAt;
       // 미국 시총은 "1조 4,944억 USD" 같은 한글 표기라 발행주식수 × 현재가로 대신 계산할 수 있게 원화 시총도 같이 둔다
       const shares = parseNum(j["countOfListedStock"]);
       const price = parseNum(j["closePriceRaw"] ?? j["closePrice"]);
@@ -151,6 +304,16 @@ export class NaverFundamentals {
       return f;
     }
     return failed ? FAILED : null;
+  }
+
+  /**
+   * 미국 종목의 가장 최근 발표 배당락일 (브리핑 3차 5 다가오는 일정 — 토스 배당 요약과 맞춰 보기). get() 과 같은 1시간 캐시.
+   * 'YYYY-MM-DD' = 네이버가 준 날짜, null = 받았는데 배당락일 칸이 없음, undefined = 받지 못함(모름). 한국 종목은 늘 undefined
+   */
+  async exDividendAt(code: string, market?: string | null): Promise<string | null | undefined> {
+    if (isKrCode(normalizeCode(code))) return undefined;
+    const f = await this.get(code, market).catch(() => null);
+    return f ? (f.exDividendAt ?? null) : undefined;
   }
 
   /** 네이버 자동완성으로 티커 → 로이터 코드 (예: IONQ → IONQ.K, BRK.B → BRKb). 못 찾거나 받기에 실패하면 null */
@@ -194,6 +357,13 @@ function fromInfos(infos: Json[], source: string): Fundamentals {
   };
 }
 
+/** 네이버 날짜 글 '2026.11.19.' · '2026.11.19' → '2026-11-19'. 모양이 다르면 null */
+export function naverDate(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const m = /^(\d{4})\.(\d{2})\.(\d{2})\.?$/.exec(v.trim());
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+}
+
 /** 자리표시가 아닌 글자 ("-" · "—" · "N/A" · 공백이면 null) */
 export function realText(v: unknown): string | null {
   if (typeof v !== "string") return null;
@@ -222,6 +392,15 @@ export function applyFundamentals(q: Quote, f: Fundamentals | null): Quote {
     industry: q.industry ?? f.industry,
     ...(fullName ? { fullName } : {}),
   };
+}
+
+/** 화면용 출처는 실제 보강한 칸에만 붙인다. 분석 수집은 기존 applyFundamentals 모양을 유지한다. */
+export function applyFundamentalsBasis(q: Quote, status: FundamentalsStatus): Quote {
+  const fields = (["per", "pbr", "eps", "bps", "high52w", "low52w", "marketCap", "dividendPerShare", "dividendYieldPct"] as const)
+    .filter(key => q[key] == null && status.value?.[key] != null);
+  return { ...applyFundamentals(q, status.value), fundamentalsBasis: {
+    receivedAt: status.receivedAt, refreshFailed: status.refreshFailed, source: status.value?.source ?? null, fields,
+  } };
 }
 
 export { ProviderError };

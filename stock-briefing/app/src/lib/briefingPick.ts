@@ -49,10 +49,19 @@ const codeOf = (p: BriefingPick | null | undefined) => (p?.kind === "stock" ? p.
  */
 let autoId: number | null = null;
 
+/**
+ * 알림으로 고른 브리핑 (브리핑 3차 1, 플래그 notifBack — 펼친 가로 2단에서 알림을 누름. 꺼져 있으면 늘 null).
+ * 알림을 누르면 브리핑 목록들(종목·계좌·시장 요약)을 다시 받는데, 종목 목록이 새 세션으로 먼저 오고 계좌·시장 요약 목록이 늦게 오면
+ * 2단은 '새 세션인데 고른 것이 목록에 없다'고 보고 첫 미확인을 다시 골랐다 → 알림으로 고른 것은 새 세션을 처음 알아챌 때 한 번은 지킨다 (holdNotified)
+ */
+let notified: BriefingPick | null = null;
+
 /** 브리핑을 고른다. 같은 값이면 알리지 않는다 (다시 그리지 않게) */
 export function pickBriefing(pick: BriefingPick | null, opts: { highlight: boolean }): void {
   // 저절로 고른 것이 아닌 다른 브리핑으로 바뀌면(알림·전체 화면으로 연 것 등) 저절로 고른 기록은 버린다
   if (!(pick?.kind === "stock" && pick.id === autoId)) autoId = null;
+  // 알림으로 고른 것과 다른 브리핑을 고르면(사용자가 누름·저절로 고름·새 계좌 브리핑으로 옮김) 알림 기억도 버린다
+  if (notified && !samePick(notified, pick)) notified = null;
   if (samePick(state.pick, pick) && state.highlight === opts.highlight && codeOf(state.pick) === codeOf(pick)) return;
   state = pick ? { pick, highlight: opts.highlight } : EMPTY;
   for (const l of listeners) l();
@@ -77,12 +86,33 @@ export function pickByUser(pick: BriefingPick): number | null {
   return left;
 }
 
+/**
+ * 알림을 눌러 2단 오른쪽 칸에 고른다 (브리핑 3차 1, 플래그 notifBack — NotificationBridge 가 부른다). 목록 줄을 강조하고(highlight),
+ * 목록이 새 세션으로 늦게 바뀌어도 한 번은 지키도록 기억한다
+ */
+export function pickNotified(pick: BriefingPick): void {
+  pickBriefing(pick, { highlight: true });
+  notified = pick;
+}
+
+/**
+ * 2단이 고른 것(sel)을 두고 '새 세션 목록(fresh)인데 고른 것이 없다(gone)'고 볼 때 그래도 지킬지 (true = 지킨다).
+ * 알림으로 고른 것일 때만, 새 세션을 처음 알아챈 한 번만 지킨다. 목록이 따라잡았으면(gone 아님) 기억을 지운다.
+ * 알림으로 고른 것이 없으면(플래그 꺼짐 포함) 늘 false — 2단 규칙이 지금과 같다
+ */
+export function holdNotified(sel: BriefingPick | null, gone: boolean, fresh: boolean): boolean {
+  if (!notified || !samePick(notified, sel)) return false;
+  if (!gone || fresh) notified = null;
+  return gone && fresh;
+}
+
 /** 테스트용: 이 모듈의 기억(고른 것·마지막으로 본 세션·탭 머리를 숨긴 적)을 지운다 (앱을 새로 연 것과 같다) */
 export function forgetPick(): void {
   state = EMPTY;
   seenSession = null;
   headHidden = false;
   autoId = null;
+  notified = null;
   for (const l of listeners) l();
 }
 
