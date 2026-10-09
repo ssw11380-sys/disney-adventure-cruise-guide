@@ -113,6 +113,8 @@ export interface WidgetPayload {
   brief?: WidgetBrief;
   /** 브리핑 위젯 첫 줄 — 가장 최근 시장 요약 (&ms=1 로 물은 새 앱에만, 서버 플래그 marketSummary 가 켜져 있을 때만) */
   ms?: WidgetSummary;
+  /** 새 공시 알림 대상 접수 번호 (3-38, &ms=1 로 물은 앱에만, 서버 플래그 filingAlerts 가 켜져 있고 있을 때만). 백그라운드 알림용 — 위젯은 쓰지 않는다 */
+  filingIds?: string[];
 }
 
 /** 위젯 기능 플래그 (서버 featureService 의 widgetPnlToggle·widgetIndexLine·widgetMarket·widgetPolish·widgetExtended·widgetFoldFit·marketSummary) */

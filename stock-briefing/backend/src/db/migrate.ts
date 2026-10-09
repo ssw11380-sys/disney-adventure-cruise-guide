@@ -413,6 +413,40 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>, dialect: D
       await sql`create index if not exists idx_movement_events_created on movement_events (created_at)`.execute(db);
     },
   },
+  {
+    version: 15, // main 의 가장 큰 번호(14) + 1 (병합 때 다시 맞춤). 새 표만 추가 — 예전 서버로 되돌려도 모르고 지나갈 뿐
+    up: async (db, dialect) => {
+      // SEC 공시 확인 (3-38, 플래그 filingAlerts): CIK 마다 기준 잡기·마지막 성공 — 공용(공개 자료, 누구의 것도 아님)
+      await db.schema
+        .createTable("sec_filing_watch")
+        .ifNotExists()
+        .addColumn("cik", "text", (c) => c.primaryKey())
+        .addColumn("first_ok_at", "text") // null = 아직 기준을 잡지 않음
+        .addColumn("last_try_at", "text")
+        .addColumn("last_ok_at", "text")
+        .addColumn("last_error", "text")
+        .execute();
+      // 받은 공시 (알림 서식만, 90일 보관) — 공용
+      await db.schema
+        .createTable("sec_filings")
+        .ifNotExists()
+        .addColumn("id", "integer", idColumn(dialect))
+        .addColumn("cik", "text", (c) => c.notNull())
+        .addColumn("accession", "text", (c) => c.notNull())
+        .addColumn("form", "text", (c) => c.notNull())
+        .addColumn("items", "text", (c) => c.notNull()) // "2.02,9.01" · ""
+        .addColumn("accepted_at", "text") // ISO UTC · null
+        .addColumn("filing_date", "text", (c) => c.notNull())
+        .addColumn("report_date", "text")
+        .addColumn("primary_doc", "text", (c) => c.notNull())
+        .addColumn("description", "text", (c) => c.notNull())
+        .addColumn("baseline", "integer", (c) => c.notNull()) // 1 = 알리지 않음(기준 잡기·24시간 넘음)
+        .addColumn("first_seen_at", "text", (c) => c.notNull())
+        .execute();
+      await sql`create unique index if not exists uq_sec_filings_cik_acc on sec_filings (cik, accession)`.execute(db);
+      await sql`create index if not exists ix_sec_filings_seen on sec_filings (first_seen_at)`.execute(db);
+    },
+  },
 ];
 
 export async function migrate(db: Kysely<Database>, dialect: Dialect = "sqlite"): Promise<void> {

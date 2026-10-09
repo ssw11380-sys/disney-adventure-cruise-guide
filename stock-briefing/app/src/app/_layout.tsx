@@ -13,6 +13,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import "@/lib/sessionStorage";
 import { AuthBridge } from "@/components/AuthBridge";
 import { InitialPasswordSheet } from "@/components/auth/InitialPasswordSheet";
+import { FilingAlertBridge } from "@/components/FilingAlertBridge";
 import { NotificationBridge, useSplashHold } from "@/components/NotificationBridge";
 import { MovementAlertBridge } from "@/components/MovementAlertBridge";
 import { PriceAlertProvider } from "@/components/PriceAlertProvider";
@@ -173,6 +174,8 @@ function Navigator() {
       <Stack.Screen name="discover/theme/[id]" options={{ title: "테마" }} />
       <Stack.Screen name="portfolio/allocation" options={{ title: "비중" }} />
       <Stack.Screen name="portfolio/themes" options={{ title: "내 종목 테마" }} />
+      {/* 일정·공시 (3-38, 플래그 holdingSchedule·filingAlerts): 제목은 화면이 플래그로 정한다 ('일정·공시' · '새 공시') — 로그인한 뒤에만 */}
+      <Stack.Screen name="schedule" options={{ title: "일정·공시" }} />
       {/* 이동평균선 기간·색 (3-39, 기능 플래그 maCustom — 꺼져 있으면 화면 안에 안내만) */}
       <Stack.Screen name="chart-lines" options={{ title: "이동평균선", presentation: "modal" }} />
       <Stack.Screen name="widget-settings" options={{ title: "위젯 설정", presentation: "modal" }} />
@@ -223,6 +226,8 @@ export default function RootLayout() {
                     <ThemedStatusBar />
                     <NotificationBridgeWithAuth />
                     <MovementAlertBridge />
+                    {/* 3-38 새 공시 알림: 앱이 앞에 있을 때 5분마다 확인 (플래그 filingAlerts — 꺼져 있으면 요청 0) */}
+                    <FilingAlertBridge />
                     <WidgetBridge />
                     <ScreenTracker />
                     <HapticsBridge />

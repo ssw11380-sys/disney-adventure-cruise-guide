@@ -12,7 +12,8 @@ import { ANDROID_CHANNEL, ensureAndroidChannel } from "@/lib/notifications";
 import { inspectLocalDeliveries, LocalDeliveryRecordError } from "@/lib/localNotificationDelivery";
 import { assertSessionIdentity, sessionIdentityVersion } from "@/lib/session";
 import { logWidgetRefresh } from "@/lib/widgetRefreshLog";
-import { lastWidgetState, loadAccountBriefings, loadLatestBriefings, loadNotifyPrefs, loadWidgetData, pendingRetry, readCachedPayload, type WidgetData } from "@/widgets/data";
+import { checkFilingIds, filingWatchDue } from "@/lib/filingNotify";
+import { lastWidgetState, loadAccountBriefings, loadFilingAlerts, loadLatestBriefings, loadNotifyPrefs, loadWidgetData, pendingRetry, readCachedPayload, type WidgetData } from "@/widgets/data";
 import { failureText, quietState } from "@/widgets/model";
 import { payloadMarket, shouldSkipFetch } from "@/widgets/payload";
 import { redrawAllWidgets } from "@/widgets/redraw";
@@ -198,12 +199,15 @@ export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskR
     // 두 시장이 모두 닫혀 있으면 2시간에 한 번만 서버에 묻는다 (휴장 중 위젯 트래픽을 줄이려고, 3-16).
     // 보유 종목의 연장 세션(미국 프리·애프터·주간거래 등, 칩의 ext — widgetExtended)이 열려 있으면 장중처럼 묻는다 (위젯 리뷰 1).
     // 앞선 위젯 갱신(이 작업·위젯 주기·크기 변경·↻)이 실패한 채면 장 상태와 상관없이 묻는다 — '갱신 실패'가 휴장 2시간 동안 남지 않게 (위젯 2차)
+    // 3-38: 알림을 켠 기기이고 새 공시 알림이 켜져 있고 보유 미국 종목이 있으면 SEC 접수 시간(미국 동부 평일 06:00~22:59)에는 건너뛰지 않는다 —
+    // 미국 휴장이지만 SEC 는 받는 때(성금요일 · 금요일 20:00~22:59 동부 등)에도 공시 알림이 2시간씩 늦지 않게 (filingWatchDue — 국내 종목만 가졌으면 지금처럼 건너뜀)
+    const local = (await AsyncStorage.getItem(LOCAL_MODE_KEY).catch(() => null)) === "1";
     const cached = await readCachedPayload();
-    if ((await pendingRetry()) === null && shouldSkipFetch(cached ? { at: cached.at, market: payloadMarket(cached.body) } : null, Date.now(), cached?.body.features?.widgetLeanLive === true)) {
+    const now = Date.now();
+    if ((await pendingRetry()) === null && shouldSkipFetch(cached ? { at: cached.at, market: payloadMarket(cached.body) } : null, now, cached?.body.features?.widgetLeanLive === true) && !(local && (await filingWatchDue(now, cached?.body.stocks)))) {
       await logWidgetRefresh("background", "skipped");
       return BackgroundTask.BackgroundTaskResult.Success;
     }
-    const local = (await AsyncStorage.getItem(LOCAL_MODE_KEY).catch(() => null)) === "1";
     // 조회 전에 마지막으로 그린 상태를 읽어 둔다 (조회가 '로그인 필요'면 적어 둔 것을 지우고 새로 적으므로)
     const before = await lastWidgetState();
     // 지수·환율 위젯이 홈 화면에 있을 때만 판 9개를 함께 묻는다 (같은 요청 한 번, 없으면 응답이 예전과 같다)
@@ -280,6 +284,9 @@ export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskR
       board: data.board ? { at: data.boardAt ?? data.fetchedAt, list: data.board } : null,
     });
     await logWidgetRefresh("background", "ok");
+    // 3-38 새 공시 알림 (서버 플래그 filingAlerts, 로컬 모드): 위젯 응답에 모르는 접수 번호가 있을 때만 규칙·목록 두 요청 → 알림 1건 (없으면 추가 요청 0).
+    // 위젯을 다시 그린 뒤에 한다 — 느린 요청이 위젯 갱신을 늦추지 않게. 이 부분의 오류는 여기서 멈춘다 (위젯 갱신·브리핑 알림에 영향 없음)
+    if (local && data.filingIds?.length) await checkFilingIds(data.filingIds, { prefs: loadNotifyPrefs, alerts: loadFilingAlerts }).catch(() => 0);
     return BackgroundTask.BackgroundTaskResult.Success;
   } catch (error) {
     await logWidgetRefresh("background", "failed", error instanceof LocalDeliveryRecordError ? { error: error.message } : undefined);

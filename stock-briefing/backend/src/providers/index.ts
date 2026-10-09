@@ -32,6 +32,7 @@ import type { ProductFacts } from "../analysis/leveraged.js";
 import type { ScoreSources } from "../services/indicatorScoreService.js";
 import { defaultValueSources, type ValueSources } from "../services/valueScoreService.js";
 import type { HoldingEventSources } from "../services/holdingEvents.js";
+import type { FilingSource } from "../services/filingAlerts.js";
 import { NasdaqScreener } from "./market/nasdaqScreener.js";
 import { defaultKrValueSources, type KrValueSources } from "../services/krValueService.js";
 import { defaultInvestorFlowSources, type InvestorFlowSources } from "../services/investorFlowService.js";
@@ -90,6 +91,11 @@ export interface Providers {
    * 내 종목 테마 분류 출처 (3-35 — 토스 웹 회사 '주요 사업' 테마 + 네이버 업종 번호, 모두 로그인 없음). 없으면(테스트 기본) 서비스·경로를 두지 않는다
    */
   holdingThemes?: MapSources | null;
+  /**
+   * 새 공시 알림 출처 (3-38 — SEC EDGAR 티커→CIK · submissions, 로그인·키 없음). 가치 지표와 같은 EdgarProvider 인스턴스(요청 간격 공유).
+   * 없으면(테스트 기본) 공시 확인 작업을 두지 않는다 — 네트워크 없이
+   */
+  secFilings?: FilingSource | null;
   investorFlow: InvestorFlowProvider | null; // KIS 키 없으면 null
   /**
    * 종목 상세 '수급' 탭 출처 묶음 (3-33 — 토스 웹 공개 자료 → 네이버, 토스 Open API 는 대조만). 없으면(테스트 기본) 경로 404 · 외부 호출 0.
@@ -156,7 +162,8 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
 
   const dart = cfg.DART_API_KEY ? new DartProvider({ apiKey: cfg.DART_API_KEY, db }) : null;
   // 미국 재무·공시(SEC) — 분석 수집과 가치 지표가 같은 인스턴스를 써서 SEC 요청 간격을 함께 지킨다
-  const edgar = new EdgarProvider();
+  // SEC User-Agent: SEC_USER_AGENT(회사 이름 + 연락 메일)가 있으면 그것, 없으면 코드 기본값 (3-38)
+  const edgar = new EdgarProvider(fetch, undefined, { userAgent: cfg.SEC_USER_AGENT });
 
   const backend = resolveLlmBackend(cfg);
   const generator: TextGenerator = backend ? new ClaudeGenerator({ backend }) : new DisabledGenerator();
@@ -176,6 +183,8 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
     financialsUs: edgar,
     // 가치 지표(3-44 2단계): 같은 SEC 인스턴스(요청 간격 공유) + Nasdaq 스크리너
     valueSources: defaultValueSources(edgar, new NasdaqScreener()),
+    // 새 공시 알림(3-38): 같은 SEC 인스턴스 (User-Agent·요청 간격 gate 공유 — 가치 지표 배치와 겹쳐도 초당 10회 아래)
+    secFilings: edgar,
     // 한국 간이 가치(3-44 3단계): 네이버 재무 요약(요청 사이 0.7초) + 업종 구성 종목(발견 탭과 같은 네이버 공개 JSON)
     krValueSources: defaultKrValueSources(new NaverFinanceClient(), new NaverDiscover()),
     // 토스 달력과 휴장일 목록이 다르면 로그로 경고 (시장·날짜마다 한 번)

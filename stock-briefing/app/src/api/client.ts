@@ -42,6 +42,8 @@ import type { AppErrorSummary, Evaluation, WatchItem,
   BriefingStatus,
   ReconcileBadgeBody,
   TossAccountSnapshotBody,
+  FilingAlertItem,
+  HoldingSchedule,
 } from "./types";
 import { authMessage, NOT_JSON, SESSION_INVALID, SESSION_REQUIRED } from "@/lib/connectionError";
 import { assertSessionIdentity, handleSessionInvalid, markAccountsSeen, sessionFor, sessionIdentityVersion, sessionTokenFor, SessionReadError, type AccountUser } from "@/lib/session";
@@ -350,6 +352,10 @@ export function createApi(baseUrl: string, token = "", opts: ApiOptions = {}) {
     tossAccountSnapshot: () => get<TossAccountSnapshotBody>("/api/admin/toss/account-snapshot", 8_000),
     /** 내 종목 테마 (3-35, 플래그 holdingThemes). 꺼진 서버·예전 서버는 404 → 부르는 쪽(useHoldingThemes)이 null 로 본다 */
     holdingThemes: () => get<import("./types").HoldingThemes>("/api/holdings/themes", 20_000),
+    /** '일정·공시' 화면 (3-38, 플래그 holdingSchedule). 꺼져 있거나 예전 서버면 404 */
+    holdingSchedule: () => get<HoldingSchedule>("/api/schedule", 20_000),
+    /** 새 공시 알림 목록 (3-38, 플래그 filingAlerts — 앱이 앞에 있을 때 확인). 꺼져 있으면 404 */
+    filingAlerts: () => get<{ asOf: string; items: FilingAlertItem[] }>("/api/filings/alerts?days=3", 12_000),
   };
 }
 
