@@ -1,11 +1,12 @@
 import { router } from "expo-router";
 import React, { useState } from "react";
-import { Linking, Pressable, StyleSheet, Text, useWindowDimensions, View, type StyleProp, type TextStyle, type ViewStyle } from "react-native";
+import { Pressable, StyleSheet, Text, useWindowDimensions, View, type StyleProp, type TextStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAccountBriefing, useFeature, useFeatures } from "@/api/hooks";
 import type { AccountBriefingWithData, AccountData, AccountEvents, AccountExposure, AccountSchedule } from "@/api/types";
 import { BriefingSplit, type BodyLayout } from "@/components/BriefingBody";
 import { StaleBanner } from "@/components/Freshness";
+import { ScheduleLink } from "@/components/ScheduleLink";
 import { useSettingsGuide } from "@/lib/settingsLink";
 import { MarkdownView } from "@/components/MarkdownView";
 import { Screen } from "@/components/Screen";
@@ -15,13 +16,17 @@ import { sentence, speakAmount, speakProfit, speakRate } from "@/lib/a11y";
 import { briefingTime, contributionSpeech, contributionTable, fxEquationSpeech, localDay, summaryShownLines, summarySpeech, templateNote } from "@/lib/accountBriefing";
 import { EXPOSURE_ABOUT, exposureView } from "@/lib/accountExposure";
 import { QTY_HEAD, QTY_NONE, sinceLastView, sinceNone, WEIGHT_HEAD, WEIGHT_NONE } from "@/lib/accountSinceLast";
-import { eventsView } from "@/lib/holdingEvents";
+import { eventsView, type EventsView } from "@/lib/holdingEvents";
+// 묶음째 줄바꿈하는 줄: 묶음 사이를 글자 크기에 맞춰 넓힌다 (200% 에서 '·퀀티넘'처럼 붙어 보이지 않게) — 100% 4 · 130% 6 · 175% 이상 8
+import { useChunkRow } from "@/lib/useChunkRow";
+import { AccountThemesCard } from "@/components/AccountThemesCard";
 import { usHolidayWhen } from "@/lib/briefingDigest";
 import { mdw } from "@/lib/marketSummary";
 import { accountColumns } from "@/lib/briefingPick";
 import { gated } from "@/lib/features";
 import { formatDateKo, formatIndexValue, formatPct, formatWon, SESSION_LABEL, shownSign } from "@/lib/format";
 import { viewState } from "@/lib/freshness";
+import { openSourceLink } from "@/lib/openSourceLink";
 import { quoteBasisChunks, quoteBasisSpeech } from "@/lib/numberBasis";
 import { changeColor, font, fontCap, space, touch, useTheme } from "@/theme";
 import { foldBriefings as FB, layout as L } from "@/tokens";
@@ -46,6 +51,13 @@ export function AccountBriefingBody({ numId, layout, title }: { numId: number | 
   const events = useFeature("holdingEvents", false);
   // 3-32 (플래그 numberBasis, 앱 fallback 꺼짐): 총 평가 카드 아래 '시세 기준' 한 줄 (저장한 quoteBasis 가 있는 브리핑만). 꺼지면 지금 그대로
   const quoteBasisOn = useFeature("numberBasis", false);
+  // 3-38 (플래그 holdingSchedule, 앱 fallback 꺼짐): '다가오는 일정'(없으면 '오늘 일정') 카드 맨 아래 '일정·공시 모두 보기' 줄. 꺼지면 지금 그대로.
+  // 공시 알림(filingAlerts)이 꺼져 있으면 줄도 없다 — 그 화면이 이 카드와 같은 배당락일 카드뿐이라 (3-38 리뷰 3)
+  const scheduleOn = useFeature("holdingSchedule", false);
+  const scheduleFilings = useFeature("filingAlerts", false);
+  const schedule = scheduleOn && scheduleFilings;
+  // 3-35 (플래그 holdingThemes, 앱 fallback 꺼짐): 저장된 '내 종목 테마' 카드. 꺼지면 지금 그대로
+  const themes = useFeature("holdingThemes", false);
   const flags = useFeatures();
   const q = useAccountBriefing(numId ?? 0, on && numId !== null);
   // 3-24 연결 오류의 '설정 열기'·칸 이름 문구 (플래그 emptyGuide, 꺼져 있으면 null — 지금 그대로)
@@ -84,8 +96,8 @@ export function AccountBriefingBody({ numId, layout, title }: { numId: number | 
   const view = viewState(q);
   if (view === "error") return <Screen disclaimer={paneNote}><ErrorView error={q.error} onRetry={() => void q.refetch()} {...guide} /></Screen>;
   if (view === "loading" || !data) return <Screen disclaimer={paneNote}><CardsSkeleton count={3} /></Screen>;
-  // 2단 오른쪽 칸은 끊김·지연 띠를 탭 위쪽에 한 번만 둔다
-  return <AccountBriefingView b={data} top={layout === "pane" ? null : <StaleBanner query={q} {...guide} />} layout={layout} title={title} trim={trim} since={since} exposure={exposure} events={events} quoteBasisOn={quoteBasisOn} />;
+  // 목록 조회가 성공해도 선택한 계좌 본문만 실패할 수 있으므로 각 본문의 상태를 알린다.
+  return <AccountBriefingView b={data} top={<StaleBanner query={q} {...guide} />} layout={layout} title={title} trim={trim} since={since} exposure={exposure} events={events} quoteBasisOn={quoteBasisOn} schedule={schedule} {...(themes ? { themes: true } : null)} />;
 }
 
 /**
@@ -104,6 +116,8 @@ function AccountBriefingView({
   exposure = false,
   events = false,
   quoteBasisOn,
+  schedule = false,
+  themes = false,
 }: {
   b: AccountBriefingWithData;
   top: React.ReactNode;
@@ -115,9 +129,16 @@ function AccountBriefingView({
   events?: boolean;
   /** 3-32 (플래그 numberBasis): 총 평가 카드·띠 아래 '시세 기준' 줄 */
   quoteBasisOn: boolean;
+  /** 3-38 (플래그 holdingSchedule): '일정·공시 모두 보기' 줄 */
+  schedule?: boolean;
+  /** 3-35 (플래그 holdingThemes): 저장된 '내 종목 테마' 카드 */
+  themes?: boolean;
 }) {
   const t = useTheme();
   const d = b.data;
+  // 3-38: '다가오는 일정' 카드가 있으면 그 끝, 없으면 '오늘 일정' 카드 끝에 한 줄 (꺼지면 어느 카드에도 없음 — 카드 트리가 지금과 같다)
+  const scheduleLink = schedule ? <ScheduleLink /> : null;
+  const upcoming = events && d?.events ? d.events : null;
   const failed = b.status === "failed" || !d;
   const header = (
     <View style={styles.header}>
@@ -169,7 +190,8 @@ function AccountBriefingView({
   );
   const basisLine = d ? (
     <Muted style={styles.basis}>
-      기준: {d.basis} · {formatDateKo(d.asOf, true)} 계산
+      {/* 저장한 숫자·본문은 그대로 두고, 현재 잔고와 같다는 과거 설명만 표시할 때 바로잡는다. */}
+      기준: {d.basis.replaceAll("앱 잔고 화면과 같은 기준", "작성 당시 종목 시세 기준 추정")} · {formatDateKo(d.asOf, true)} 계산
     </Muted>
   ) : null;
   // 브리핑 3차 4 (플래그 accountExposure): 비중 두 줄이 있으면 맨 아래 기준 줄 밑에 '비중'·'미국 상장'의 뜻 한 줄 (첫 화면 밖 — 총 평가 카드를 늘리지 않게). 꺼지면 지금 그대로
@@ -184,7 +206,7 @@ function AccountBriefingView({
     );
 
   if (layout === "split" && !failed && d) {
-    return <AccountSplit d={d} top={top} head={title?.(b)} header={header} summary={summary} narrative={narrative} basis={basis} trim={trim} since={since} exposure={exposure} events={events} quoteBasisOn={quoteBasisOn} />;
+    return <AccountSplit d={d} top={top} head={title?.(b)} header={header} summary={summary} narrative={narrative} basis={basis} trim={trim} since={since} exposure={exposure} events={events} quoteBasisOn={quoteBasisOn} scheduleLink={scheduleLink} {...(themes ? { themes: true } : null)} />;
   }
 
   // stack(지금 폰 화면)·pane(2단 오른쪽 칸)·실패: 한 줄로 쌓기
@@ -202,10 +224,12 @@ function AccountBriefingView({
           <ContributionCard d={d} wide={layout === "pane"} trim={trim} />
           {/* 기여 표 아래 — 오늘 무엇이 계좌를 움직였는지(기여 표)가 첫 화면에서 밀려나지 않게 */}
           {since ? <SinceLastCard d={d} /> : null}
+          {/* 3-35: '지난 오전 브리핑과 비교' 아래 · '오늘 일정' 위 */}
+          {themes && d.holdingThemes ? <AccountThemesCard s={d.holdingThemes} asOfClock={d.holdingThemes.asOf.slice(11, 16)} /> : null}
           <ImpactCard d={d} trim={trim} />
-          <ScheduleCard s={d.schedule} asOf={d.asOf} />
+          <ScheduleCard s={d.schedule} asOf={d.asOf} footer={upcoming ? null : scheduleLink} />
           {/* 브리핑 3차 5: '오늘 일정' 바로 아래 */}
-          {events && d.events ? <UpcomingCard e={d.events} /> : null}
+          {upcoming ? <UpcomingCard e={upcoming} footer={scheduleLink} /> : null}
           {narrative}
           {basis}
         </>
@@ -233,6 +257,8 @@ function AccountSplit({
   exposure = false,
   events = false,
   quoteBasisOn,
+  scheduleLink = null,
+  themes = false,
 }: {
   d: AccountData;
   top: React.ReactNode;
@@ -247,6 +273,10 @@ function AccountSplit({
   events?: boolean;
   /** 3-32 (플래그 numberBasis): 총 평가 띠 아래 '시세 기준' 줄 */
   quoteBasisOn: boolean;
+  /** 3-38 (플래그 holdingSchedule): '일정·공시 모두 보기' 줄 (꺼지면 null) */
+  scheduleLink?: React.ReactNode;
+  /** 3-35 (플래그 holdingThemes): 저장된 '내 종목 테마' 카드 — 세 칸은 가운데 칸 기여 표 아래, 두 칸은 왼쪽 칸 비교 카드 아래 */
+  themes?: boolean;
 }) {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -256,12 +286,13 @@ function AccountSplit({
   const cols = accountColumns(width - insets.left - insets.right, { contribW: FB.accountContribW, minW: FB.accountColMinW, divider: L.divider, hysteresis: FB.accountColsHysteresis }, prev);
   if (cols !== prev) setPrev(cols);
   const three = cols === 3;
+  const themesCard = themes && d.holdingThemes ? <AccountThemesCard s={d.holdingThemes} asOfClock={d.holdingThemes.asOf.slice(11, 16)} /> : null;
   const impact = (
     <>
       <ImpactCard d={d} trim={trim} />
-      <ScheduleCard s={d.schedule} asOf={d.asOf} />
+      <ScheduleCard s={d.schedule} asOf={d.asOf} footer={events && d.events ? null : scheduleLink} />
       {/* 브리핑 3차 5: 오른쪽 칸 '오늘 일정' 아래 */}
-      {events && d.events ? <UpcomingCard e={d.events} /> : null}
+      {events && d.events ? <UpcomingCard e={d.events} footer={scheduleLink} /> : null}
     </>
   );
   return (
@@ -279,7 +310,16 @@ function AccountSplit({
               {basis}
             </>
           }
-          middle={<ContributionCard d={d} wide trim={trim} />}
+          middle={
+            themesCard ? (
+              <>
+                <ContributionCard d={d} wide trim={trim} />
+                {themesCard}
+              </>
+            ) : (
+              <ContributionCard d={d} wide trim={trim} />
+            )
+          }
           middleW={FB.accountContribW}
           right={impact}
         />
@@ -292,6 +332,7 @@ function AccountSplit({
               <TotalsBand d={d} exposure={exposure} quoteBasisOn={quoteBasisOn} />
               <ContributionCard d={d} wide trim={trim} />
               {since ? <SinceLastCard d={d} /> : null}
+              {themesCard}
             </>
           }
           right={
@@ -355,7 +396,7 @@ function TotalsCard({ d, exposure = false, quoteBasisOn = false }: { d: AccountD
           <Kpi label="평가손익" value={formatWon(d.totalProfit, { sign: true })} sub={d.totalProfitRate !== null ? formatPct(d.totalProfitRate) : null} tone={d.totalProfit} rate={d.totalProfitRate} />
         </View>
       </View>
-      <Muted>보유 {d.holdings}종목 합계 · 앱 잔고 화면과 같은 기준</Muted>
+      <Muted>보유 {d.holdings}종목 합계 · 작성 당시 종목 시세 기준 추정</Muted>
       {quoteBasisOn ? <QuoteBasisRow d={d} /> : null}
       {d.excluded.length ? <Muted>합계에서 뺀 종목: {d.excluded.map((e) => `${e.name}(${e.reason})`).join(", ")}</Muted> : null}
       {exposure && d.exposure ? <ExposureLines e={d.exposure} /> : null}
@@ -381,7 +422,7 @@ function TotalsBand({ d, exposure = false, quoteBasisOn = false }: { d: AccountD
         <BandKpi label="당일 손익" value={formatWon(d.dayPnl, { sign: true })} sub={d.dayRate !== null ? formatPct(d.dayRate) : null} tone={d.dayPnl} rate={d.dayRate} />
         <BandKpi label="평가손익" value={formatWon(d.totalProfit, { sign: true })} sub={d.totalProfitRate !== null ? formatPct(d.totalProfitRate) : null} tone={d.totalProfit} rate={d.totalProfitRate} />
       </View>
-      <Muted>보유 {d.holdings}종목 합계 · 앱 잔고 화면과 같은 기준</Muted>
+      <Muted>보유 {d.holdings}종목 합계 · 작성 당시 종목 시세 기준 추정</Muted>
       {quoteBasisOn ? <QuoteBasisRow d={d} /> : null}
       {d.excluded.length ? <Muted>합계에서 뺀 종목: {d.excluded.map((e) => `${e.name}(${e.reason})`).join(", ")}</Muted> : null}
       {exposure && d.exposure ? <ExposureLines e={d.exposure} /> : null}
@@ -540,13 +581,6 @@ function SinceRow({ label, fromTo, children }: { label: string; fromTo: string[]
   );
 }
 
-/** 묶음째 줄바꿈하는 줄: 묶음 사이를 글자 크기에 맞춰 넓힌다 (200% 에서 '·퀀티넘'처럼 붙어 보이지 않게) — 100% 4 · 130% 6 · 175% 이상 8 */
-function useChunkRow(): ViewStyle {
-  const { fontScale } = useWindowDimensions();
-  const gap = fontScale >= 1.75 ? space.sm : fontScale >= 1.25 ? space.s : space.xs;
-  return { flexDirection: "row", flexWrap: "wrap", columnGap: gap };
-}
-
 /** 색은 그 글자에 보이는 값으로 — "0원"·"0.00%" 로 보이는 값을 손실·이익 색으로 칠하지 않게 (BH-38) */
 function Kpi({ label, value, sub, tone, rate }: { label: string; value: string; sub: string | null; tone: number; rate: number | null }) {
   const t = useTheme();
@@ -628,7 +662,7 @@ function ContributionCard({ d, wide = false, trim }: { d: AccountData; wide?: bo
       <Muted style={styles.cardFoot}>
         {table.matches ? "줄의 합이 당일 손익과 같습니다(원 단위로 나눔)." : "줄의 합이 당일 손익과 다릅니다. 다시 만들면 바로잡힙니다."}
         {d.fx.appliedRate ? ` 미국 종목은 적용 환율 ${formatIndexValue(d.fx.appliedRate)}원으로 원화 환산.` : ""}
-        {d.krPreviousDay ? (trim ? ` ${mdw(d.date)} 한국 휴장이라 국내 종목은 직전 거래일 등락입니다(앱 잔고 화면과 같은 기준).` : " 오늘 한국은 휴장이라 국내 종목은 직전 거래일 등락입니다(앱 잔고 화면과 같은 기준).") : ""}
+        {d.krPreviousDay ? (trim ? ` ${mdw(d.date)} 한국 휴장이라 국내 종목은 직전 거래일 등락입니다(작성 당시 종목 시세 기준 추정).` : " 오늘 한국은 휴장이라 국내 종목은 직전 거래일 등락입니다(작성 당시 종목 시세 기준 추정).") : ""}
         {d.usPreviousDay ? ` ${usHolidayWhen(d.date, d.usHolidayDate)} 미국은 휴장이라 미국 종목은 직전 거래일 등락입니다(앞 브리핑에 이미 담긴 움직임).` : ""}
       </Muted>
     </Card>
@@ -667,7 +701,7 @@ function ImpactCard({ d, trim }: { d: AccountData; trim: boolean }) {
           </Line>
           <View accessible accessibilityLabel={fxEquationSpeech(fx) ?? undefined}>
             <Muted>
-              미국 보유분 원화 평가 변화 {formatWon(fx.usdHoldingsKrwChange!, { sign: true })} = 가격 효과 {formatWon(fx.priceEffect!, { sign: true })} + 환율 효과 {formatWon(fx.fxEffect!, { sign: true })}. 환율 효과는 원/달러 전일 대비 변동으로 계산하며, 당일 손익(앱 잔고 화면과 같은 기준)에는 넣지 않습니다.
+              미국 보유분 원화 평가 변화 {formatWon(fx.usdHoldingsKrwChange!, { sign: true })} = 가격 효과 {formatWon(fx.priceEffect!, { sign: true })} + 환율 효과 {formatWon(fx.fxEffect!, { sign: true })}. 환율 효과는 원/달러 전일 대비 변동으로 계산하며, 당일 손익(작성 당시 종목 시세 기준 추정)에는 넣지 않습니다.
             </Muted>
           </View>
         </>
@@ -679,7 +713,7 @@ function ImpactCard({ d, trim }: { d: AccountData; trim: boolean }) {
 }
 
 /** 오늘 일정: 한국·미국 장 운영과 브리핑을 만든 때의 장 상태, 보유 국내 종목의 최근 공시 */
-function ScheduleCard({ s, asOf }: { s: AccountSchedule; asOf: string }) {
+function ScheduleCard({ s, asOf, footer = null }: { s: AccountSchedule; asOf: string; footer?: React.ReactNode }) {
   const t = useTheme();
   const at = briefingTime(asOf);
   return (
@@ -693,7 +727,7 @@ function ScheduleCard({ s, asOf }: { s: AccountSchedule; asOf: string }) {
           x.url ? (
             <Pressable
               key={`${x.code}-${x.title}-${x.filedAt}`}
-              onPress={() => void Linking.openURL(x.url!)}
+              onPress={() => void openSourceLink(x.url!)}
               accessibilityRole="link"
               accessibilityLabel={sentence([x.name, "공시", x.title, formatDateKo(x.filedAt), "DART 에서 열기"])}
               style={({ pressed }) => [styles.disclosure, { backgroundColor: pressed ? t.surfaceAlt : "transparent" }]}
@@ -709,6 +743,8 @@ function ScheduleCard({ s, asOf }: { s: AccountSchedule; asOf: string }) {
       ) : (
         <Muted>없음 (종목 브리핑이 받아 둔 공시 기준)</Muted>
       )}
+      {/* 3-38 (플래그 holdingSchedule): '다가오는 일정' 카드가 없을 때만 '일정·공시 모두 보기' */}
+      {footer}
     </Card>
   );
 }
@@ -719,10 +755,24 @@ function ScheduleCard({ s, asOf }: { s: AccountSchedule; asOf: string }) {
  * '10/29(목) 오전 5시 이후 · 마이크로소프트 실적 발표 (예정)'(실적 발표일을 넣었을 때만), 없으면 한 줄, 작은 글(뜻·받지 못한 것·국내 배당), 기준 시각·출처.
  * 누르는 곳 없음. 색 없음(등락이 아님). 좁은 칸·큰 글씨는 ' · ' 묶음째 줄바꿈. 화면 읽기는 제목 묶음·줄마다·기준 한 문장씩
  */
-function UpcomingCard({ e }: { e: AccountEvents }) {
+export function UpcomingCard({
+  e,
+  notes = [],
+  footer = null,
+  adjust,
+}: {
+  e: AccountEvents;
+  notes?: readonly string[];
+  footer?: React.ReactNode;
+  /** 3-38 '일정·공시' 화면: 받지 못한 글을 그 화면에 맞게 ('화면을 다시 열면 다시 받습니다') — 없으면 지금 그대로 */
+  adjust?: (v: EventsView) => EventsView;
+}) {
   const t = useTheme();
   const chunkRow = useChunkRow();
-  const v = eventsView(e);
+  const base = eventsView(e);
+  const view = adjust ? adjust(base) : base;
+  // 3-38 '일정·공시' 화면이 덧붙이는 작은 글 (미국 실적은 공시로 보인다는 글) — 없으면 지금 그대로
+  const v = notes.length ? { ...view, notes: [...view.notes, ...notes] } : view;
   // 묶음 끝 ' ·' 의 공백은 줄바꿈 없는 공백 — '·' 하나만 다음 줄 맨 앞에 남지 않게 (비중 두 줄과 같은 규칙)
   const joined = (parts: string[]) => parts.map((p, i) => (i < parts.length - 1 ? `${p} ·` : p));
   return (
@@ -752,6 +802,8 @@ function UpcomingCard({ e }: { e: AccountEvents }) {
       <View accessible accessibilityLabel={v.basisSpeech}>
         <Muted style={{ fontSize: font.tiny }}>{v.basis}</Muted>
       </View>
+      {/* 3-38 (플래그 holdingSchedule): 기준 줄 바로 아래 '일정·공시 모두 보기' */}
+      {footer}
     </Card>
   );
 }

@@ -181,7 +181,7 @@ describe("꺼짐 (앱 기본 — 플래그 없음 = 꺼짐): 지금 글 그대�
   it("계좌 상세: '무엇이 계좌를 움직였나'·'지수·환율 영향'·'숫자로 만든 기본 설명', 요약·기여 표 설명의 '오늘 한국 휴장'", () => {
     const r = render(<AccountBriefingBody numId={12} layout="stack" />);
     const text = r.text();
-    for (const s of ["무엇이 계좌를 움직였나", "지수·환율 영향", "숫자로 만든 기본 설명", KR_LINE_OLD, " 오늘 한국은 휴장이라 국내 종목은 직전 거래일 등락입니다(앱 잔고 화면과 같은 기준)."]) expect(text, s).toContain(s);
+    for (const s of ["무엇이 계좌를 움직였나", "지수·환율 영향", "숫자로 만든 기본 설명", KR_LINE_OLD, " 오늘 한국은 휴장이라 국내 종목은 직전 거래일 등락입니다(작성 당시 종목 시세 기준 추정)."]) expect(text, s).toContain(s);
     expect(labels(r).find((l) => l.startsWith("요약,"))).toContain("오늘 한국 휴장, 국내 종목은 직전 거래일 등락");
   });
 
@@ -293,10 +293,10 @@ describe("켬: 계좌 상세", () => {
     // 요약 셋째 줄(서버가 저장한 '오늘 한국 휴장 · …')은 브리핑 날짜 줄로 그린다
     expect(text).toContain(KR_LINE_NEW);
     expect(text).not.toContain("오늘 한국");
-    expect(text).toContain(" 9/25(금) 한국 휴장이라 국내 종목은 직전 거래일 등락입니다(앱 잔고 화면과 같은 기준).");
+    expect(text).toContain(" 9/25(금) 한국 휴장이라 국내 종목은 직전 거래일 등락입니다(작성 당시 종목 시세 기준 추정).");
     expect(labels(r).find((l) => l.startsWith("요약,"))).toContain("9월 25일 (금) 한국 휴장, 국내 종목은 직전 거래일 등락");
     // 기준 줄(기준·계산 시각)은 남는다
-    expect(muted(r).some((x) => x.startsWith("기준: 앱 잔고 화면과 같은 기준 · "))).toBe(true);
+    expect(muted(r).some((x) => x.startsWith("기준: 작성 당시 종목 시세 기준 추정 · "))).toBe(true);
   };
 
   it("기본 설명(template): 폰(stack)·2단 오른쪽 칸(pane) — 설명 카드 없음, 배지 '숫자로 만든 요약', 제목 '보유분·지수·환율', 휴장 날짜", () => {

@@ -9,20 +9,22 @@ export const SEEN_KEY = "briefings.notified"; // JSON: number[] (알림 보낸 �
 /** "1" 이면 알림 기준(그때까지의 브리핑)을 이미 적었다. 브리핑이 0건이라 SEEN 이 비어 있어도 처음으로 보지 않게 (N3) */
 export const INIT_KEY = "briefings.notifyInit";
 
-export async function seenIds(): Promise<Set<number>> {
+export async function seenIds(strict = false): Promise<Set<number>> {
   try {
     const raw = await AsyncStorage.getItem(SEEN_KEY);
     return new Set(raw ? (JSON.parse(raw) as number[]) : []);
   } catch {
+    // 발송 경로에서는 읽기 실패를 새 기록으로 해석하면 이미 알린 브리핑이 다시 울린다.
+    if (strict) throw new Error("알림 기록을 읽지 못했습니다. 다음 확인에서 다시 시도합니다.");
     return new Set();
   }
 }
 
-export async function saveSeen(ids: Set<number>): Promise<void> {
+export async function saveSeen(ids: Set<number>, strict = false): Promise<void> {
   try {
     await AsyncStorage.setItem(SEEN_KEY, JSON.stringify([...ids].slice(-200)));
   } catch {
-    /* ignore */
+    if (strict) throw new Error("알림 발송 기록을 저장하지 못했습니다.");
   }
 }
 
@@ -40,9 +42,15 @@ export function withSeen<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /** 알림 기준을 적었는지. 표시가 없던 예전 앱에서 올라온 기기는 본 기록이 있으면 적은 것으로 본다 */
-export async function initialized(seen: Set<number>): Promise<boolean> {
+export async function initialized(seen: Set<number>, strict = false): Promise<boolean> {
   if (seen.size > 0) return true;
-  return (await AsyncStorage.getItem(INIT_KEY).catch(() => null)) === "1";
+  try {
+    return (await AsyncStorage.getItem(INIT_KEY)) === "1";
+  } catch {
+    // 초기화 여부를 모를 때 기준을 다시 잡으면 아직 알리지 않은 보고서가 소모된다.
+    if (strict) throw new Error("알림 기록을 읽지 못했습니다. 다음 확인에서 다시 시도합니다.");
+    return false;
+  }
 }
 
 /**

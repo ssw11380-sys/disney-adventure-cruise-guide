@@ -252,8 +252,8 @@ describe("안내 글 (상태별 · 고정 시계 월 9/28 08:40)", () => {
 
   it("늦음 · 만드는 중 · 빠짐 · 모델 없음", () => {
     const late = statusView(S({ state: "late", late: true, finishedAt: iso("2026-09-28T09:12:00") }), h.now)!;
-    expect([late.title, late.line, late.small?.note]).toEqual(["오전 브리핑이 평소보다 늦게 만들어졌습니다", "예정 08:30 → 09:12 완료", "숫자는 09:12 기준입니다."]);
-    expect(late.speech).toBe("브리핑 안내, 오전 브리핑이 평소보다 늦게 만들어졌습니다, 예정 8시 30분, 9시 12분 완료, 숫자는 9시 12분 기준입니다");
+    expect([late.title, late.line, late.small?.note]).toEqual(["오전 브리핑이 평소보다 늦게 만들어졌습니다", "예정 08:30 → 09:12 완료", "완료 시각은 생성이 끝난 때입니다. 자료 기준 시각은 각 보고서에서 확인해 주세요."]);
+    expect(late.speech).toBe("브리핑 안내, 오전 브리핑이 평소보다 늦게 만들어졌습니다, 예정 8시 30분, 9시 12분 완료, 완료 시각은 생성이 끝난 때입니다. 자료 기준 시각은 각 보고서에서 확인해 주세요.");
     const slow = statusView(S({ state: "slow", total: 17, done: 9, finishedAt: null }), h.now)!;
     expect([slow.title, slow.line, slow.small]).toEqual(["오전 브리핑을 아직 만드는 중입니다", "예정 08:30 · 지금 17종목 중 9종목 끝남", null]);
     const missed = statusView(S({ state: "missed", finishedAt: null, startedAt: null }), h.now)!;

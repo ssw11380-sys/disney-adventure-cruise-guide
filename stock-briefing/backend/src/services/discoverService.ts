@@ -969,6 +969,25 @@ export class DiscoverService {
     });
   }
 
+  /**
+   * 내 종목 테마(3-35)가 발견 탭과 같은 미국 테마북·시세 캐시(30초)를 쓰게 — 계산 코드는 그대로 두고 감싸기만 한다.
+   * 테마북이 없으면(미국 테마 분류 없음) null, 처음 만드는 중이면 UsThemesBuildingError(3초만 기다림), 출처 초기화 시간이면 PreopenError.
+   * fresh: 캐시를 거치지 않고 지금 받은 시세 (장 마감 뒤 거래대금 기록 — 장중에 받아 둔 캐시 값을 느린 출처 때문에 그날 확정 값으로 적지 않게). 캐시는 바꾸지 않는다
+   */
+  async usThemeBookQuotes(opts: { fresh?: boolean } = {}): Promise<{ book: UsThemeBookData; quotes: Map<string, UsQuote>; at: number; day: string; session: DiscoverSession; open: boolean } | null> {
+    if (!this.deps.usThemes) return null;
+    const ss = await this.session("US");
+    const book = await this.deps.usThemes.get(this.deps.bookWaitMs ?? BOOK_WAIT_MS);
+    if (opts.fresh) {
+      const at = this.now.getTime();
+      const q = await this.deps.naver.usQuotes([...new Set(book.themes.flatMap((t) => t.members.map((m) => m.reuters)))]);
+      if (isPreopenQuotes(q)) throw new PreopenError("미국 테마 시세");
+      return { book, quotes: q, at, day: latestTradeDay(q.values()), session: ss.session, open: ss.open };
+    }
+    const { value, at } = await this.usThemeQuotes(book, ss.open);
+    return { book, quotes: value, at, day: latestTradeDay(value.values()), session: ss.session, open: ss.open };
+  }
+
   private async usThemeList(ss: Session, period: ThemePeriod): Promise<ThemeList> {
     const usThemes = this.deps.usThemes!;
     const open = ss.open;

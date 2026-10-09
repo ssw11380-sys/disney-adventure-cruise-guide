@@ -119,6 +119,18 @@ export function stateFromSession(market: MarketKey, now: Date, tradingEnd: strin
   };
 }
 
+/** 네트워크 캐시는 유지하고, 조회 시점에 따라 달라지는 현지 날짜·추정 장 상태만 갱신한다. */
+function statusAt(status: MarketStatus, now: Date): MarketStatus {
+  const current = (market: MarketKey): MarketState => {
+    const state = status[market];
+    if (state.source === "fallback") return fallbackState(market, now);
+    const today = localDate(now, TZ[market]);
+    const isTradingDay = [state.opensAt, state.closesAt, state.lastClose].some((at) => at && localDate(at, TZ[market]) === today);
+    return { ...state, isTradingDay };
+  };
+  return { now: now.toISOString(), KR: current("KR"), US: current("US") };
+}
+
 export class MarketCalendar {
   /** until = TTL 끝 또는 가장 가까운 세션 경계(개장·마감) 중 이른 때 — 경계를 지나면 바로 다시 묻는다 */
   private cache: { until: number; status: MarketStatus } | null = null;
@@ -139,7 +151,7 @@ export class MarketCalendar {
 
   async status(): Promise<MarketStatus> {
     const now = this.now();
-    if (this.cache && now.getTime() < this.cache.until) return { ...this.cache.status, now: now.toISOString() };
+    if (this.cache && now.getTime() < this.cache.until) return statusAt(this.cache.status, now);
     // 캐시가 끝난 직후 동시에 들어온 요청은 한 번만 묻는다
     this.inflight ??= this.load().finally(() => {
       this.inflight = null;

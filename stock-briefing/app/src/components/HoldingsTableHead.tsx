@@ -15,21 +15,27 @@ import { ColDivider } from "./HoldingsTable";
  *  - 머리 높이가 누르는 크기 44(layout.headH)라 정렬 칸은 hitSlop 없이 머리를 채운다. 머리는 위에 고정되고 바로 아래가 종목 줄이라,
  *    아래로 넓히면 줄 윗가장자리를 누를 때 정렬이 바뀐다 (3-22 휴대폰 머리와 같은 까닭) → 아래로는 넓히지 않는다
  *  - 글자는 표 줄과 같은 확대 상한(fontCap.row 140%): 고정 폭 열의 머리가 아래 숫자보다 커지지 않게
+ *  - action: 이름 칸 정렬 버튼 뒤에 둘 것 (3-37 — 계좌 띠에 매매일지 아이콘 자리가 없을 때 보유 표 머리에 44×44 아이콘). 없으면 지금 그대로
  */
 export function TableHeadRow({
   plan,
   title,
   sort,
   sortLabel,
+  sortA11y,
   onSort,
   onOpenSort,
+  action,
 }: {
   plan: ColumnPlan;
   title: string;
   sort: SortKey;
   sortLabel: string;
+  /** 정렬 버튼 화면 읽기 문장 (없으면 '정렬 바꾸기, 지금 등록순' — 3-34 관심 칸 '내 순서'는 휴대폰과 같은 긴 문장을 넘긴다) */
+  sortA11y?: string;
   onSort: (k: SortKey) => void;
   onOpenSort: () => void;
+  action?: React.ReactNode;
 }) {
   const t = useTheme();
   const hasValue = plan.cols.some((c) => c.key === "value");
@@ -46,12 +52,13 @@ export function TableHeadRow({
         >
           {title}
         </Text>
-        <Pressable onPress={onOpenSort} hitSlop={HEAD_SLOP} accessibilityRole="button" accessibilityLabel={`정렬 바꾸기, 지금 ${sortLabel}`} style={styles.sortBtn}>
+        <Pressable onPress={onOpenSort} hitSlop={HEAD_SLOP} accessibilityRole="button" accessibilityLabel={sortA11y ?? `정렬 바꾸기, 지금 ${sortLabel}`} style={styles.sortBtn}>
           <Text style={{ color: t.muted, fontSize: font.small }} numberOfLines={1} maxFontSizeMultiplier={fontCap.row}>
             {sortLabel}
           </Text>
           <Ionicons name="chevron-down" size={font.small} color={t.muted} />
         </Pressable>
+        {action}
       </View>
       {plan.cols.map((c) => {
         const key = COL_SORT[c.key];

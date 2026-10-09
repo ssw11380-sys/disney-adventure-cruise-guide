@@ -13,6 +13,14 @@ import type { FetchFn } from "../market/types.js";
  */
 
 const UA = "stock-briefing/1.0 (personal use; contact: admin@stock-briefing.app)";
+/**
+ * 운영에서 쓸 User-Agent (환경 변수 SEC_USER_AGENT — 'Company Name contact@example.com' 형식, SEC 공정 접근 규칙). 연락 메일 모양(@)이 없거나 비면 undefined → 기본 UA.
+ * 3-38 새 공시 확인 작업이 5분마다 부르므로, 막히면(403) 같은 IP 의 재무·가치 지표 SEC 호출도 멈춘다 — 실제로 받는 메일로 바꿔 두는 편이 안전하다
+ */
+export function secUserAgent(v: string | undefined | null): string | undefined {
+  const s = (v ?? "").trim();
+  return /\S+@\S+\.\S+/.test(s) ? s : undefined;
+}
 const TICKERS_URL = "https://www.sec.gov/files/company_tickers.json";
 /** 연결부터 본문 끝까지 한 요청의 제한 시간 (companyfacts 는 수 MB 라 넉넉히) */
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -188,13 +196,20 @@ export class EdgarProvider implements FinancialsProvider {
   readonly name = "edgar";
   private tickers: { at: number; map: Map<string, { cik: string; title: string }> } | null = null;
   private readonly cache: BoundedCache;
+  /** 요청마다 보내는 User-Agent (SEC_USER_AGENT 가 있으면 그것, 없으면 기본) */
+  private readonly ua: string;
+  /** 동시에 연 분석이 같은 SEC 원본을 중복 다운로드하지 않도록 진행 중 요청만 공유한다. */
+  private tickersPending: Promise<void> | null = null;
+  private readonly submissionsPending = new Map<string, Promise<Submissions>>();
+  private readonly factsPending = new Map<string, Promise<EdgarAnnualFinancials[]>>();
 
   constructor(
     private readonly fetchFn: FetchFn = fetch,
     private readonly now: () => Date = () => new Date(),
-    private readonly opts: { timeoutMs?: number; cacheMax?: number; minGapMs?: number } = {},
+    private readonly opts: { timeoutMs?: number; cacheMax?: number; minGapMs?: number; userAgent?: string | undefined } = {},
   ) {
     this.cache = new BoundedCache(opts.cacheMax ?? CACHE_MAX, Math.max(FACTS_TTL_MS, COMPANY_TTL_MS, DISCLOSURE_TTL_MS));
+    this.ua = secUserAgent(opts.userAgent) ?? UA;
   }
 
   /** 테스트·진단용: 들고 있는 종목별 결과 수 */
@@ -227,7 +242,7 @@ export class EdgarProvider implements FinancialsProvider {
     try {
       let res: Response;
       try {
-        res = await Promise.race([this.fetchFn(url, { headers: { "user-agent": UA, accept: "application/json" }, signal }), expired]);
+        res = await Promise.race([this.fetchFn(url, { headers: { "user-agent": this.ua, accept: "application/json" }, signal }), expired]);
       } catch (e) {
         if (e instanceof ProviderError) throw e;
         throw new ProviderError(this.name, `네트워크 오류: ${url}`, e);
@@ -250,12 +265,17 @@ export class EdgarProvider implements FinancialsProvider {
     if (isKrCode(code)) throw new ProviderError(this.name, `미국 종목만 지원합니다: ${code}`);
     const t = this.now().getTime();
     if (!this.tickers || t - this.tickers.at > 24 * 3_600_000) {
-      const raw = await this.getJson<Record<string, { cik_str: number; ticker: string; title: string }>>(TICKERS_URL);
-      const map = new Map<string, { cik: string; title: string }>();
-      for (const v of Object.values(raw)) map.set(String(v.ticker).toUpperCase(), { cik: String(v.cik_str).padStart(10, "0"), title: v.title });
-      this.tickers = { at: t, map };
+      if (!this.tickersPending) {
+        this.tickersPending = (async () => {
+          const raw = await this.getJson<Record<string, { cik_str: number; ticker: string; title: string }>>(TICKERS_URL);
+          const map = new Map<string, { cik: string; title: string }>();
+          for (const v of Object.values(raw)) map.set(String(v.ticker).toUpperCase(), { cik: String(v.cik_str).padStart(10, "0"), title: v.title });
+          this.tickers = { at: t, map };
+        })().finally(() => { this.tickersPending = null; });
+      }
+      await this.tickersPending;
     }
-    const hit = this.tickers.map.get(code) ?? this.tickers.map.get(code.replace(".", "-")) ?? this.tickers.map.get(code.replace("-", "."));
+    const hit = this.tickers!.map.get(code) ?? this.tickers!.map.get(code.replace(".", "-")) ?? this.tickers!.map.get(code.replace("-", "."));
     if (!hit) throw new NotListedError(this.name, `SEC 에 등록된 티커가 아닙니다: ${code} (ETF·ADR 은 재무제표가 없을 수 있음)`);
     return hit;
   }
@@ -265,9 +285,16 @@ export class EdgarProvider implements FinancialsProvider {
     const key = `submissions:${cik}`;
     const hit = this.cache.get<Submissions>(key, t, ttlMs);
     if (hit) return hit;
-    const s = compactSubmissions(await this.getJson<Json>(`https://data.sec.gov/submissions/CIK${cik}.json`));
-    this.cache.set(key, s, t);
-    return s;
+    let pending = this.submissionsPending.get(cik);
+    if (!pending) {
+      pending = (async () => {
+        const s = compactSubmissions(await this.getJson<Json>(`https://data.sec.gov/submissions/CIK${cik}.json`));
+        this.cache.set(key, s, t);
+        return s;
+      })().finally(() => { this.submissionsPending.delete(cik); });
+      this.submissionsPending.set(cik, pending);
+    }
+    return pending;
   }
 
   async getCompany(stockCode: string): Promise<CompanyProfile> {
@@ -320,8 +347,16 @@ export class EdgarProvider implements FinancialsProvider {
     const key = `facts:${cik}`;
     let rows = this.cache.get<EdgarAnnualFinancials[]>(key, t, FACTS_TTL_MS);
     if (!rows) {
-      rows = extractFinancials(await this.getJson<Json>(`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`));
-      this.cache.set(key, rows, t);
+      let pending = this.factsPending.get(cik);
+      if (!pending) {
+        pending = (async () => {
+          const financials = extractFinancials(await this.getJson<Json>(`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`));
+          this.cache.set(key, financials, t);
+          return financials;
+        })().finally(() => { this.factsPending.delete(cik); });
+        this.factsPending.set(cik, pending);
+      }
+      rows = await pending;
     }
     // 빈 표를 성공으로 주면 분석이 "확인했는데 없음"으로 읽는다 → 실패(데이터 미확인)로 알린다
     if (!rows.length) throw new ProviderError(this.name, `연간 보고서(10-K·20-F·40-F) 재무 수치가 없습니다: ${stockCode}`);
@@ -361,6 +396,14 @@ export class EdgarProvider implements FinancialsProvider {
   /** frames 한 번 (항목 하나·기간 하나의 전 회사 값). 그 기간 값이 없으면(404) 빈 배열 */
   async frameRaw(tag: string, unit: string, period: string): Promise<Json> {
     return this.getJson<Json>(`https://data.sec.gov/api/xbrl/frames/us-gaap/${tag}/${unit}/${period}.json`, { timeoutMs: BULK_TIMEOUT_MS, notFound: { data: [] }, paced: true });
+  }
+
+  /**
+   * 새 공시 알림 (3-38, 플래그 filingAlerts): submissions 원본 한 번 (캐시 없음 — 5분마다 새 공시를 보려고). 가치 지표 배치와 같은 요청 간격(gate)을
+   * 함께 써서 합쳐도 초당 10회를 넘지 않게. 줄 뽑기는 edgarFilings.parseRecentFilings
+   */
+  async submissionsJson(cik: string): Promise<unknown> {
+    return this.getJson<Json>(`https://data.sec.gov/submissions/CIK${cik}.json`, { paced: true });
   }
 }
 

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildKrReference,
   compactKrFacts,
@@ -456,14 +456,44 @@ describe("업종 구성 종목 받기 (NaverDiscover 재사용) · 재무 요약
     expect(await c.finance("999990")).toBeNull();
     await expect(c.finance("AAPL")).rejects.toThrow(/한국 종목만/);
   });
-  it("요청 사이 최소 간격 (기본 0.7초 — 밤 배치가 한 곳에 몰리지 않게)", async () => {
-    const at: number[] = [];
-    const c = new NaverFinanceClient((async () => {
-      at.push(Date.now());
-      return new Response("{}", { status: 200 });
-    }) as typeof fetch, { gapMs: 40 });
-    await c.finance("005930", { summary: false });
-    expect(at[1]! - at[0]!).toBeGreaterThanOrEqual(35);
+  it.each([
+    ["시험 설정 40ms", { gapMs: 40 }, 40],
+    ["기본 설정 700ms", {}, 700],
+  ] as const)("%s: 동시 요청도 간격을 공유하고, 남은 슬롯이 없으면 즉시 시작한다", async (_name, options, gap) => {
+    // 호스트가 첫 예약과 fetch 사이에서 실행을 잠시 멈추면 실제 진입 간격은 예약 간격보다 짧아진다.
+    // 벽시계 허용 오차를 낮추지 않고 가상 시계로 슬롯 직전·정확한 시점과 동시 호출을 검증한다.
+    const start = Date.parse("2026-10-04T11:00:00+09:00");
+    vi.useFakeTimers({ now: start });
+    try {
+      const at: number[] = [], urls: string[] = [];
+      const c = new NaverFinanceClient((async (url: string) => {
+        at.push(Date.now() - start); urls.push(url);
+        return new Response("{}", { status: 200 });
+      }) as typeof fetch, options);
+      const pending = Promise.all([c.finance("005930", { summary: false }), c.finance("000660", { summary: false })]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(at).toEqual([0]);
+      for (let slot = 1; slot < 4; slot++) {
+        await vi.advanceTimersByTimeAsync(gap - 1);
+        expect(at).toHaveLength(slot);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(at).toEqual(Array.from({ length: slot + 1 }, (_, i) => i * gap));
+      }
+      expect(await pending).toEqual([{ annual: {}, quarter: {}, integration: null }, { annual: {}, quarter: {}, integration: null }]);
+      expect(urls.map((url) => url.replace("https://m.stock.naver.com/api/stock/", ""))).toEqual([
+        "005930/finance/annual", "000660/finance/annual", "005930/finance/quarter", "000660/finance/quarter",
+      ]);
+      // 충분히 쉰 뒤 첫 요청에는 추가 간격을 붙이지 않는다.
+      await vi.advanceTimersByTimeAsync(gap * 2);
+      const next = c.finance("035420", { summary: false });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(at).toEqual([0, gap, gap * 2, gap * 3, gap * 5]);
+      await vi.advanceTimersByTimeAsync(gap - 1);
+      expect(at).toHaveLength(5);
+      await vi.advanceTimersByTimeAsync(1);
+      await next;
+      expect(at).toEqual([0, gap, gap * 2, gap * 3, gap * 5, gap * 6]);
+    } finally { vi.useRealTimers(); }
   });
 });
 

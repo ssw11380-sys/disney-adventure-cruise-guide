@@ -1,0 +1,986 @@
+{
+  "about": "관심 종목 그룹·순서 규칙 (3-34): 서버 services/watchGroupService 와 앱 lib/watchGroups 가 같은 답을 내야 한다. op 가 있으면 먼저 적용한 뒤의 순서 (관심 종목만, 그룹 순서대로 · 그룹 없음은 늘 맨 끝). stocks 의 차례 = 서버가 등록순으로 읽은 차례(등록 시각 → 같은 시각이면 넣은 차례 — 플래그를 끈 잔고 순서와 같다). 두 쪽 테스트는 이 차례를 seq 로 넣는다",
+  "cases": [
+    {
+      "name": "아무것도 정하지 않음 = 등록순 (보유 종목은 빠짐)",
+      "groups": [],
+      "stocks": [
+        {
+          "code": "C",
+          "quantity": null,
+          "createdAt": "2026-09-01T09:00:00+09:00",
+          "groupId": null,
+          "position": null
+        },
+        {
+          "code": "A",
+          "quantity": null,
+          "createdAt": "2026-09-02T09:00:00+09:00",
+          "groupId": null,
+          "position": null
+        },
+        {
+          "code": "B",
+          "quantity": null,
+          "createdAt": "2026-09-03T09:00:00+09:00",
+          "groupId": null,
+          "position": null
+        },
+        {
+          "code": "H",
+          "quantity": 5,
+          "createdAt": "2026-09-01T08:00:00+09:00",
+          "groupId": null,
+          "position": null
+        }
+      ],
+      "op": null,
+      "order": [
+        {
+          "groupId": null,
+          "codes": [
+            "C",
+            "A",
+            "B"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "번호가 있는 종목이 먼저, 번호 없는 종목은 뒤에 등록순",
+      "groups": [
+        {
+          "id": 1,
+          "name": "반도체",
+          "position": 0
+        }
+      ],
+      "stocks": [
+        {
+          "code": "A",
+          "quantity": null,
+          "createdAt": "2026-09-01T09:00:00+09:00",
+          "groupId": 1,
+          "position": 1
+        },
+        {
+          "code": "B",
+          "quantity": null,
+          "createdAt": "2026-09-02T09:00:00+09:00",
+          "groupId": 1,
+          "position": null
+        },
+        {
+          "code": "C",
+          "quantity": null,
+          "createdAt": "2026-09-03T09:00:00+09:00",
+          "groupId": 1,
+          "position": 0
+        },
+        {
+          "code": "D",
+          "quantity": null,
+          "createdAt": "2026-09-04T09:00:00+09:00",
+          "groupId": null,
+          "position": null
+        },
+        {
+          "code": "E",
+          "quantity": null,
+          "createdAt": "2026-09-05T09:00:00+09:00",
+          "groupId": null,
+          "position": 0
+        }
+      ],
+      "op": null,
+      "order": [
+        {
+          "groupId": 1,
+          "codes": [
+            "C",
+            "A",
+            "B"
+          ]
+        },
+        {
+          "groupId": null,
+          "codes": [
+            "E",
+            "D"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "같은 번호는 등록 시각 → 같은 시각이면 넣은 차례 (코드 순이 아님)",
+      "groups": [
+        {
+          "id": 1,
+          "name": "반도체",
+          "position": 0
+        }
+      ],
+      "stocks": [
+        {
+          "code": "B",
+          "quantity": null,
+          "createdAt": "2026-09-01T09:00:00+09:00",
+          "groupId": 1,
+          "position": 0
+        },
+        {
+          "code": "A",
+          "quantity": null,
+          "createdAt": "2026-09-01T09:00:00+09:00",
+          "groupId": 1,
+          "position": 0
+        },
+        {
+          "code": "C",
+          "quantity": null,
+          "createdAt": "2026-09-01T08:00:00+09:00",
+          "groupId": 1,
+          "position": 0
+        }
+      ],
+      "op": null,
+      "order": [
+        {
+          "groupId": 1,
+          "codes": [
+            "C",
+            "B",
+            "A"
+          ]
+        },
+        {
+          "groupId": null,
+          "codes": []
+        }
+      ]
+    },
+    {
+      "name": "토스 가져오기 한 번(같은 등록 시각)은 넣은 차례 그대로 — 플래그를 끈 잔고 순서와 같다",
+      "groups": [],
+      "stocks": [
+        {
+          "code": "ZZZ",
+          "quantity": null,
+          "createdAt": "2026-09-10T21:00:00+09:00",
+          "groupId": null,
+          "position": null
+        },
+        {
+          "code": "005930",
+          "quantity": null,
+          "createdAt": "2026-09-10T21:00:00+09:00",
+          "groupId": null,
+          "position": null
+        },
+        {
+          "code": "AAPL",
+          "quantity": null,
+          "createdAt": "2026-09-10T21:00:00+09:00",
+          "groupId": null,
+          "position": null
+        },
+        {
+          "code": "000660",
+          "quantity": 3,
+          "createdAt": "2026-09-10T21:00:00+09:00",
+          "groupId": null,
+          "position": null
+        },
+        {
+          "code": "MSFT",
+          "quantity": null,
+          "createdAt": "2026-09-10T21:00:00+09:00",
+          "groupId": null,
+          "position": null
+        }
+      ],
+      "op": null,
+      "order": [
+        {
+          "groupId": null,
+          "codes": [
+            "ZZZ",
+            "005930",
+            "AAPL",
+            "MSFT"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "같은 시각 종목 사이 옮기기: 번호를 매길 때도 넣은 차례 (맨 앞으로 옮긴 종목 뒤는 그대로)",
+      "groups": [],
+      "stocks": [
+        {
+          "code": "ZZZ",
+          "quantity": null,
+          "createdAt": "2026-09-10T21:00:00+09:00",
+          "groupId": null,
+          "position": null
+        },
+        {
+          "code": "005930",
+          "quantity": null,
+          "createdAt": "2026-09-10T21:00:00+09:00",
+          "groupId": null,
+          "position": null
+        },
+        {
+          "code": "AAPL",
+          "quantity": null,
+          "createdAt": "2026-09-10T21:00:00+09:00",
+          "groupId": null,
+          "position": null
+        },
+        {
+          "code": "000660",
+          "quantity": 3,
+          "createdAt": "2026-09-10T21:00:00+09:00",
+          "groupId": null,
+          "position": null
+        },
+        {
+          "code": "MSFT",
+          "quantity": null,
+          "createdAt": "2026-09-10T21:00:00+09:00",
+          "groupId": null,
+          "position": null
+        }
+      ],
+      "op": {
+        "kind": "move",
+        "code": "MSFT",
+        "groupId": null,
+        "index": 0
+      },
+      "order": [
+        {
+          "groupId": null,
+          "codes": [
+            "MSFT",
+            "ZZZ",
+            "005930",
+            "AAPL"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "없는 그룹 번호는 그룹 없음으로 본다",
+      "groups": [
+        {
+          "id": 2,
+          "name": "배당",
+          "position": 0
+        }
+      ],
+      "stocks": [
+        {
+          "code": "A",
+          "quantity": null,
+          "createdAt": "2026-09-01T09:00:00+09:00",
+          "groupId": 9,
+          "position": 0
+        },
+        {
+          "code": "B",
+          "quantity": null,
+          "createdAt": "2026-09-02T09:00:00+09:00",
+          "groupId": 2,
+          "position": 0
+        },
+        {
+          "code": "C",
+          "quantity": null,
+          "createdAt": "2026-09-03T09:00:00+09:00",
+          "groupId": null,
+          "position": null
+        }
+      ],
+      "op": null,
+      "order": [
+        {
+          "groupId": 2,
+          "codes": [
+            "B"
+          ]
+        },
+        {
+          "groupId": null,
+          "codes": [
+            "A",
+            "C"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "보유 종목은 목록에서 빠지고 수량 0 은 관심",
+      "groups": [
+        {
+          "id": 1,
+          "name": "반도체",
+          "position": 0
+        }
+      ],
+      "stocks": [
+        {
+          "code": "A",
+          "quantity": 10,
+          "createdAt": "2026-09-01T09:00:00+09:00",
+          "groupId": 1,
+          "position": 1
+        },
+        {
+          "code": "B",
+          "quantity": null,
+          "createdAt": "2026-09-02T09:00:00+09:00",
+          "groupId": 1,
+          "position": 0
+        },
+        {
+          "code": "C",
+          "quantity": 0,
+          "createdAt": "2026-09-03T09:00:00+09:00",
+          "groupId": 1,
+          "position": 2
+        }
+      ],
+      "op": null,
+      "order": [
+        {
+          "groupId": 1,
+          "codes": [
+            "B",
+            "C"
+          ]
+        },
+        {
+          "groupId": null,
+          "codes": []
+        }
+      ]
+    },
+    {
+      "name": "그룹 순서: 자리 → 번호, 그룹 없음은 늘 맨 끝",
+      "groups": [
+        {
+          "id": 3,
+          "name": "다",
+          "position": 1
+        },
+        {
+          "id": 1,
+          "name": "가",
+          "position": 2
+        },
+        {
+          "id": 2,
+          "name": "나",
+          "position": 1
+        }
+      ],
+      "stocks": [
+        {
+          "code": "X",
+          "quantity": null,
+          "createdAt": "2026-09-01T09:00:00+09:00",
+          "groupId": null,
+          "position": null
+        }
+      ],
+      "op": null,
+      "order": [
+        {
+          "groupId": 2,
+          "codes": []
+        },
+        {
+          "groupId": 3,
+          "codes": []
+        },
+        {
+          "groupId": 1,
+          "codes": []
+        },
+        {
+          "groupId": null,
+          "codes": [
+            "X"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "보유였다가 다시 관심이 됨: 번호가 겹치면 등록 시각",
+      "groups": [
+        {
+          "id": 1,
+          "name": "반도체",
+          "position": 0
+        }
+      ],
+      "stocks": [
+        {
+          "code": "A",
+          "quantity": null,
+          "createdAt": "2026-09-01T09:00:00+09:00",
+          "groupId": 1,
+          "position": 1
+        },
+        {
+          "code": "B",
+          "quantity": null,
+          "createdAt": "2026-09-02T09:00:00+09:00",
+          "groupId": 1,
+          "position": 0
+        },
+        {
+          "code": "H",
+          "quantity": null,
+          "createdAt": "2026-09-01T08:00:00+09:00",
+          "groupId": 1,
+          "position": 1
+        }
+      ],
+      "op": null,
+      "order": [
+        {
+          "groupId": 1,
+          "codes": [
+            "B",
+            "H",
+            "A"
+          ]
+        },
+        {
+          "groupId": null,
+          "codes": []
+        }
+      ]
+    },
+    {
+      "name": "옮기기: 같은 그룹 맨 앞으로",
+      "groups": [
+        {
+          "id": 1,
+          "name": "반도체",
+          "position": 0
+        }
+      ],
+      "stocks": [
+        {
+          "code": "A",
+          "quantity": null,
+          "createdAt": "2026-09-01T09:00:00+09:00",
+          "groupId": 1,
+          "position": 0
+        },
+        {
+          "code": "B",
+          "quantity": null,
+          "createdAt": "2026-09-02T09:00:00+09:00",
+          "groupId": 1,
+          "position": 1
+        },
+        {
+          "code": "C",
+          "quantity": null,
+          "createdAt": "2026-09-03T09:00:00+09:00",
+          "groupId": 1,
+          "position": 2
+        }
+      ],
+      "op": {
+        "kind": "move",
+        "code": "C",
+        "groupId": 1,
+        "index": 0
+      },
+      "order": [
+        {
+          "groupId": 1,
+          "codes": [
+            "C",
+            "A",
+            "B"
+          ]
+        },
+        {
+          "groupId": null,
+          "codes": []
+        }
+      ]
+    },
+    {
+      "name": "옮기기: 범위를 넘은 자리는 맨 끝",
+      "groups": [
+        {
+          "id": 1,
+          "name": "반도체",
+          "position": 0
+        }
+      ],
+      "stocks": [
+        {
+          "code": "A",
+          "quantity": null,
+          "createdAt": "2026-09-01T09:00:00+09:00",
+          "groupId": 1,
+          "position": 0
+        },
+        {
+          "code": "B",
+          "quantity": null,
+          "createdAt": "2026-09-02T09:00:00+09:00",
+          "groupId": 1,
+          "position": 1
+        },
+        {
+          "code": "C",
+          "quantity": null,
+          "createdAt": "2026-09-03T09:00:00+09:00",
+          "groupId": 1,
+          "position": 2
+        }
+      ],
+      "op": {
+        "kind": "move",
+        "code": "A",
+        "groupId": 1,
+        "index": 99
+      },
+      "order": [
+        {
+          "groupId": 1,
+          "codes": [
+            "B",
+            "C",
+            "A"
+          ]
+        },
+        {
+          "groupId": null,
+          "codes": []
+        }
+      ]
+    },
+    {
+      "name": "옮기기: 다른 그룹의 그 자리로",
+      "groups": [
+        {
+          "id": 1,
+          "name": "반도체",
+          "position": 0
+        },
+        {
+          "id": 2,
+          "name": "배당",
+          "position": 1
+        }
+      ],
+      "stocks": [
+        {
+          "code": "A",
+          "quantity": null,
+          "createdAt": "2026-09-01T09:00:00+09:00",
+          "groupId": 1,
+          "position": 0
+        },
+        {
+          "code": "B",
+          "quantity": null,
+          "createdAt": "2026-09-02T09:00:00+09:00",
+          "groupId": 1,
+          "position": 1
+        },
+        {
+          "code": "C",
+          "quantity": null,
+          "createdAt": "2026-09-03T09:00:00+09:00",
+          "groupId": 2,
+          "position": 0
+        },
+        {
+          "code": "D",
+          "quantity": null,
+          "createdAt": "2026-09-04T09:00:00+09:00",
+          "groupId": 2,
+          "position": 1
+        },
+        {
+          "code": "E",
+          "quantity": null,
+          "createdAt": "2026-09-05T09:00:00+09:00",
+          "groupId": null,
+          "position": null
+        }
+      ],
+      "op": {
+        "kind": "move",
+        "code": "B",
+        "groupId": 2,
+        "index": 1
+      },
+      "order": [
+        {
+          "groupId": 1,
+          "codes": [
+            "A"
+          ]
+        },
+        {
+          "groupId": 2,
+          "codes": [
+            "C",
+            "B",
+            "D"
+          ]
+        },
+        {
+          "groupId": null,
+          "codes": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "옮기기: 그룹 없음 가운데로 (번호 없던 종목도 지금 순서로 번호를 받음)",
+      "groups": [
+        {
+          "id": 1,
+          "name": "반도체",
+          "position": 0
+        }
+      ],
+      "stocks": [
+        {
+          "code": "A",
+          "quantity": null,
+          "createdAt": "2026-09-01T09:00:00+09:00",
+          "groupId": 1,
+          "position": 0
+        },
+        {
+          "code": "B",
+          "quantity": null,
+          "createdAt": "2026-09-02T09:00:00+09:00",
+          "groupId": null,
+          "position": null
+        },
+        {
+          "code": "C",
+          "quantity": null,
+          "createdAt": "2026-09-03T09:00:00+09:00",
+          "groupId": null,
+          "position": null
+        }
+      ],
+      "op": {
+        "kind": "move",
+        "code": "A",
+        "groupId": null,
+        "index": 1
+      },
+      "order": [
+        {
+          "groupId": 1,
+          "codes": []
+        },
+        {
+          "groupId": null,
+          "codes": [
+            "B",
+            "A",
+            "C"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "옮기기: 없는 그룹을 가리키던 종목은 그룹 없음 줄에서 함께 번호를 받음",
+      "groups": [],
+      "stocks": [
+        {
+          "code": "A",
+          "quantity": null,
+          "createdAt": "2026-09-01T09:00:00+09:00",
+          "groupId": 5,
+          "position": null
+        },
+        {
+          "code": "B",
+          "quantity": null,
+          "createdAt": "2026-09-02T09:00:00+09:00",
+          "groupId": null,
+          "position": null
+        },
+        {
+          "code": "C",
+          "quantity": null,
+          "createdAt": "2026-09-03T09:00:00+09:00",
+          "groupId": null,
+          "position": null
+        }
+      ],
+      "op": {
+        "kind": "move",
+        "code": "C",
+        "groupId": null,
+        "index": 0
+      },
+      "order": [
+        {
+          "groupId": null,
+          "codes": [
+            "C",
+            "A",
+            "B"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "옮기기: 같은 그룹의 보유 종목은 끼우지 않음",
+      "groups": [
+        {
+          "id": 1,
+          "name": "반도체",
+          "position": 0
+        }
+      ],
+      "stocks": [
+        {
+          "code": "A",
+          "quantity": null,
+          "createdAt": "2026-09-01T09:00:00+09:00",
+          "groupId": 1,
+          "position": 0
+        },
+        {
+          "code": "H",
+          "quantity": 5,
+          "createdAt": "2026-09-02T09:00:00+09:00",
+          "groupId": 1,
+          "position": 1
+        },
+        {
+          "code": "B",
+          "quantity": null,
+          "createdAt": "2026-09-03T09:00:00+09:00",
+          "groupId": 1,
+          "position": 2
+        }
+      ],
+      "op": {
+        "kind": "move",
+        "code": "B",
+        "groupId": 1,
+        "index": 1
+      },
+      "order": [
+        {
+          "groupId": 1,
+          "codes": [
+            "A",
+            "B"
+          ]
+        },
+        {
+          "groupId": null,
+          "codes": []
+        }
+      ]
+    },
+    {
+      "name": "그룹 지우기: 안의 관심 종목은 그룹 없음 맨 끝에 원래 순서대로",
+      "groups": [
+        {
+          "id": 1,
+          "name": "반도체",
+          "position": 0
+        },
+        {
+          "id": 2,
+          "name": "배당",
+          "position": 1
+        }
+      ],
+      "stocks": [
+        {
+          "code": "A",
+          "quantity": null,
+          "createdAt": "2026-09-01T09:00:00+09:00",
+          "groupId": 1,
+          "position": 1
+        },
+        {
+          "code": "B",
+          "quantity": null,
+          "createdAt": "2026-09-02T09:00:00+09:00",
+          "groupId": 1,
+          "position": 0
+        },
+        {
+          "code": "C",
+          "quantity": null,
+          "createdAt": "2026-09-03T09:00:00+09:00",
+          "groupId": null,
+          "position": null
+        },
+        {
+          "code": "D",
+          "quantity": null,
+          "createdAt": "2026-09-04T09:00:00+09:00",
+          "groupId": null,
+          "position": null
+        },
+        {
+          "code": "E",
+          "quantity": null,
+          "createdAt": "2026-09-05T09:00:00+09:00",
+          "groupId": 2,
+          "position": 0
+        },
+        {
+          "code": "H",
+          "quantity": 3,
+          "createdAt": "2026-09-01T08:00:00+09:00",
+          "groupId": 1,
+          "position": 2
+        }
+      ],
+      "op": {
+        "kind": "delete",
+        "groupId": 1
+      },
+      "order": [
+        {
+          "groupId": 2,
+          "codes": [
+            "E"
+          ]
+        },
+        {
+          "groupId": null,
+          "codes": [
+            "C",
+            "D",
+            "B",
+            "A"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "그룹 지우기: 그룹 없음에 번호가 있던 종목 뒤에 붙음",
+      "groups": [
+        {
+          "id": 1,
+          "name": "반도체",
+          "position": 0
+        }
+      ],
+      "stocks": [
+        {
+          "code": "A",
+          "quantity": null,
+          "createdAt": "2026-09-01T09:00:00+09:00",
+          "groupId": 1,
+          "position": 0
+        },
+        {
+          "code": "B",
+          "quantity": null,
+          "createdAt": "2026-09-02T09:00:00+09:00",
+          "groupId": null,
+          "position": 0
+        },
+        {
+          "code": "C",
+          "quantity": null,
+          "createdAt": "2026-09-03T09:00:00+09:00",
+          "groupId": null,
+          "position": null
+        }
+      ],
+      "op": {
+        "kind": "delete",
+        "groupId": 1
+      },
+      "order": [
+        {
+          "groupId": null,
+          "codes": [
+            "B",
+            "C",
+            "A"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "그룹 순서 바꾸기",
+      "groups": [
+        {
+          "id": 1,
+          "name": "가",
+          "position": 0
+        },
+        {
+          "id": 2,
+          "name": "나",
+          "position": 1
+        },
+        {
+          "id": 3,
+          "name": "다",
+          "position": 2
+        }
+      ],
+      "stocks": [
+        {
+          "code": "A",
+          "quantity": null,
+          "createdAt": "2026-09-01T09:00:00+09:00",
+          "groupId": 3,
+          "position": 0
+        }
+      ],
+      "op": {
+        "kind": "order",
+        "ids": [
+          3,
+          1,
+          2
+        ]
+      },
+      "order": [
+        {
+          "groupId": 3,
+          "codes": [
+            "A"
+          ]
+        },
+        {
+          "groupId": 1,
+          "codes": []
+        },
+        {
+          "groupId": 2,
+          "codes": []
+        },
+        {
+          "groupId": null,
+          "codes": []
+        }
+      ]
+    }
+  ]
+}

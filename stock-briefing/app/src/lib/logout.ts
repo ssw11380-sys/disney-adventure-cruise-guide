@@ -1,5 +1,5 @@
 import { ApiRequestError, type Api } from "@/api/client";
-import { addPendingLogout, clearSession, dropPendingLogout, pendingLogoutsFor, sessionFor } from "./session";
+import { addPendingLogout, clearSession, dropPendingLogout, pendingLogoutsFor, sessionFor, sessionIdentityVersion } from "./session";
 
 /**
  * 직접 로그아웃 (계정 A단계, 설정 > 계정).
@@ -42,9 +42,11 @@ async function within(p: Promise<unknown>, ms: number): Promise<void> {
 }
 
 export async function logout(api: Api, apiUrl: string, all = false): Promise<void> {
+  const identity = sessionIdentityVersion();
   const s = sessionFor(apiUrl);
   if (!s) return;
   if (s.user.isOwner && beforeLogout) await within(beforeLogout(api), 5_000);
+  if (identity !== sessionIdentityVersion()) return;
   if (all)
     await api.logoutAll().catch((e: unknown) => {
       // 로그인 기능이 막 꺼진 서버(비상 모드 — 로그아웃 주소 404): 한 기기 로그아웃과 같은 안내 (검증 6차 — 예전에는 '잠시 뒤 다시 해 주세요'). 아무것도 지우지 않는다
@@ -55,7 +57,8 @@ export async function logout(api: Api, apiUrl: string, all = false): Promise<voi
       if (!s.user.isOwner && e instanceof ApiRequestError && e.status === 404) throw new LogoutUnavailableError();
       return reachedServer(e) ? undefined : addPendingLogout(apiUrl, s.token);
     });
-  await clearSession("logout");
+  // 다른 요청의 인증 만료 뒤 다시 로그인했으면 이전 로그아웃이 새 세션까지 지우지 않는다.
+  if (identity === sessionIdentityVersion()) await clearSession("logout");
 }
 
 /** 로그인 기능이 꺼진 서버(비상 모드)에서 주인 아닌 계정이 로그아웃하려 함 — 세션을 지우지 않았다 */
@@ -73,7 +76,10 @@ function reachedServer(e: unknown): boolean {
 
 /** 알리지 못했던 로그아웃을 다시 알린다 (앱 루트가 켤 때·앞으로 돌아왔을 때). 서버가 답하면(끝남·이미 끝난 세션) 지우고, 닿지 않으면 남긴다 */
 export async function flushPendingLogouts(api: Api, apiUrl: string): Promise<void> {
-  for (const token of await pendingLogoutsFor(apiUrl)) {
+  // 저장소를 못 읽으면 다음 실행·복귀 때 다시 확인한다. 빈 목록으로 덮어쓰거나 서버 요청을 보내지 않는다.
+  const pending = await pendingLogoutsFor(apiUrl).catch(() => null);
+  if (!pending) return;
+  for (const token of pending) {
     try {
       await api.logoutSession(token);
       await dropPendingLogout(token);

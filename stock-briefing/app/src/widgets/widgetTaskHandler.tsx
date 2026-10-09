@@ -1,4 +1,4 @@
-import { requestWidgetUpdate, type WidgetTaskHandlerProps } from "react-native-android-widget";
+import { getWidgetInfo, requestWidgetUpdateById, type WidgetTaskHandlerProps } from "react-native-android-widget";
 import { logWidgetRefresh } from "@/lib/widgetRefreshLog";
 import { loadCachedWidgetData, loadWidgetData, readPnlMode, setPnlMode, togglePnlMode, type WidgetData } from "./data";
 import { fontScaleNow } from "./fontScale";
@@ -7,6 +7,8 @@ import { redrawAllWidgets } from "./redraw";
 import { errorView, renderFor } from "./render";
 import { forgetWidgetSize, type SizeSource } from "./sizeLog";
 import { WIDGET_CLICK, WIDGET_NAMES } from "./widgets";
+import { deleteWidgetPreferences, updateWidgetPreferences, widgetPreferenceScope } from "./preferences";
+import { assertSessionIdentity, sessionIdentityVersion } from "@/lib/session";
 
 /**
  * 위젯 이벤트 처리. 추가/주기 갱신/크기 변경/새로고침 클릭 때 서버에서 데이터를 받아 다시 그린다.
@@ -14,15 +16,18 @@ import { WIDGET_CLICK, WIDGET_NAMES } from "./widgets";
  * 위젯 4종(잔고·브리핑·자산·지수·환율)이 같은 처리를 쓴다 — 지수·환율 위젯의 ↻ 도 "갱신 중"을 먼저 그린다.
  *  - REFRESH(↻): 저장해 둔 값으로 "갱신 중"을 바로 그리고(1초 안), 서버에서 받은 결과로 다시 그린다 (실패하면 "갱신 실패 …")
  *  - PNL_TOGGLE(손익): 누른 위젯이 보여 주던 쪽의 반대로 바꿔 저장하고, 서버를 부르지 않고 저장해 둔 값으로 바로 다시 그린다.
- *    손익 칸 설정은 잔고 위젯 모두가 같이 쓰므로 다른 잔고 위젯도 같은 쪽으로 다시 그린다
+ *    widgetClarity가 켜져 있으면 누른 위젯에만 저장한다. 꺼져 있으면 기존 공통 설정과 다른 잔고 위젯을 함께 바꾼다.
  *  - 앞선 갱신이 실패한 뒤 이번에 서버에서 받았으면(위젯 2차 — data.recovered) 다른 위젯도 같은 값으로 다시 그려 '갱신 실패'를 모두 지운다
  *  - 크기는 widgetInfo 그대로 (renderFor). 폴드 위젯 2차(widgetFoldFit)는 넓은 모습을 위젯 폭 하나로만 정하고(render.tsx), 크기는 진단 기록에만 적는다
  *    (sizeLog.ts — 설정 '화면 정보' 공유 글). 위젯을 지우면 그 기록도 지운다
  */
 export async function widgetTaskHandler(props: WidgetTaskHandlerProps): Promise<void> {
+  const identity = sessionIdentityVersion();
   const { widgetInfo, widgetAction, renderWidget } = props;
+  const safeRender: typeof renderWidget = (rendered) => { assertSessionIdentity(identity); renderWidget(rendered); };
   if (widgetAction === "WIDGET_DELETED") {
     await forgetWidgetSize(widgetInfo.widgetId);
+    await deleteWidgetPreferences(widgetInfo.widgetId).catch(() => undefined);
     return;
   }
   const click = widgetAction === "WIDGET_CLICK" ? props.clickAction : null;
@@ -34,16 +39,30 @@ export async function widgetTaskHandler(props: WidgetTaskHandlerProps): Promise<
   try {
     if (click === WIDGET_CLICK.pnlToggle) {
       const cached = await loadCachedWidgetData();
+      assertSessionIdentity(identity);
+      if (cached.features.clarity === true && cached.features.pnlToggle) {
+        const scope = await widgetPreferenceScope();
+        const fallback = await readPnlMode();
+        assertSessionIdentity(identity);
+        const shown = props.clickActionData?.mode;
+        const next = await updateWidgetPreferences(widgetInfo.widgetId, (prefs) => {
+          const mode = shown === "day" || shown === "cumulative" ? shown : prefs.pnlMode;
+          return { ...prefs, pnlMode: (mode === "day" ? "cumulative" : "day") as PnlMode };
+        }, fallback, scope);
+        const rendered = await renderFor(name, cached, widgetInfo, { fontScale, now: Date.now(), pnlMode: next.pnlMode, by });
+        safeRender(rendered);
+        return;
+      }
       // 플래그가 그사이 꺼졌으면(옛 그림을 누름) 바꾸지 않고 누적으로 다시 그린다
       const pnlMode = cached.features.pnlToggle ? await switchPnl(props.clickActionData) : await readPnlMode();
-      renderWidget(await renderFor(name, cached, widgetInfo, { fontScale, now: Date.now(), pnlMode, by }));
-      if (cached.features.pnlToggle) await redrawHoldings(cached, pnlMode);
+      safeRender(await renderFor(name, cached, widgetInfo, { fontScale, now: Date.now(), pnlMode, by }));
+      if (cached.features.pnlToggle) await redrawHoldings(cached, pnlMode, identity);
       return;
     }
     if (click === WIDGET_CLICK.refresh) {
       try {
         const cached = await loadCachedWidgetData();
-        renderWidget(await renderFor(name, cached, widgetInfo, { fontScale, now: Date.now(), pnlMode: await readPnlMode(), refreshing: true, by }));
+        safeRender(await renderFor(name, cached, widgetInfo, { fontScale, now: Date.now(), pnlMode: await readPnlMode(), refreshing: true, by }));
       } catch {
         /* 저장해 둔 값으로 못 그려도 서버에서 받아 그리는 것은 계속한다 */
       }
@@ -58,7 +77,7 @@ export async function widgetTaskHandler(props: WidgetTaskHandlerProps): Promise<
       reuse: widgetAction !== "WIDGET_CLICK",
     });
     // 손익 칸 설정은 받은 뒤에 읽는다: 받는 동안(최대 12초, "갱신 중") 손익을 눌러 바꾼 것을 옛 값으로 되돌려 그리지 않게
-    renderWidget(await renderFor(name, data, widgetInfo, { fontScale, now: Date.now(), pnlMode: await readPnlMode(), by }));
+    safeRender(await renderFor(name, data, widgetInfo, { fontScale, now: Date.now(), pnlMode: await readPnlMode(), by }));
     // 실패 뒤 첫 성공 (위젯 2차): 다른 위젯에 남은 '갱신 실패 · …'도 방금 받은 값으로 지운다 (서버를 다시 부르지 않음).
     // 저장해 둔 값(loadCachedWidgetData)이 아니라 이 조회의 값으로, 오류 없이 — 함께 돌던 조회가 그사이 실패해 적은 '갱신 실패' 화면이
     // 모든 위젯에 번지지 않게 (그 조회의 실패 표시는 남아 다음 백그라운드 작업이 다시 묻는다). 실패 표시를 이 조회가 지웠을 때만 true 라,
@@ -70,6 +89,7 @@ export async function widgetTaskHandler(props: WidgetTaskHandlerProps): Promise<
     // 로그인 필요·주인 아닌 계정은 실패가 아니라 건너뜀 (검증 5차 — 자동 로그인을 끈 것은 사용자가 고른 정상 상태)
     if (source) await logWidgetRefresh(source, data.error ? (quietState(data.error) ? "skipped" : "failed") : data.asked === false ? "skipped" : "ok", { error: quietState(data.error) ? null : failureText(data.error) });
   } catch (e) {
+    if (identity !== sessionIdentityVersion()) return;
     // 렌더 중 예외가 나면 위젯이 빈 채로 남으므로 오류를 글로 보여 준다
     renderWidget(errorView(e));
   }
@@ -91,13 +111,25 @@ async function switchPnl(data: Record<string, unknown> | undefined): Promise<Pnl
 }
 
 /** 다른 잔고 위젯도 같은 손익 칸으로 (서버를 부르지 않고 같은 저장값으로). 실패해도 누른 위젯은 이미 그렸다 */
-async function redrawHoldings(data: WidgetData, pnlMode: PnlMode): Promise<void> {
+async function redrawHoldings(data: WidgetData, pnlMode: PnlMode, identity: number): Promise<void> {
   try {
+    assertSessionIdentity(identity);
     const fontScale = fontScaleNow();
-    await requestWidgetUpdate({
-      widgetName: WIDGET_NAMES.holdings,
-      renderWidget: (info) => renderFor(WIDGET_NAMES.holdings, data, info, { fontScale, now: Date.now(), pnlMode }),
-    });
+    const infos = await getWidgetInfo(WIDGET_NAMES.holdings);
+    assertSessionIdentity(identity);
+    for (const info of infos) {
+      await requestWidgetUpdateById({
+        widgetName: WIDGET_NAMES.holdings,
+        widgetId: info.widgetId,
+        // ById는 콜백을 기다리므로 계정 변경 오류도 아래 catch에서 회수된다.
+        renderWidget: async (box) => {
+          assertSessionIdentity(identity);
+          const rendered = await renderFor(WIDGET_NAMES.holdings, data, box, { fontScale, now: Date.now(), pnlMode });
+          assertSessionIdentity(identity);
+          return rendered;
+        },
+      });
+    }
   } catch {
     /* 다른 위젯은 다음 갱신 때 같은 값으로 그려진다 */
   }

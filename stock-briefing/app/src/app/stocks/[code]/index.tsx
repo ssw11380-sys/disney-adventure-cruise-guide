@@ -10,6 +10,7 @@ import { CandleChart } from "@/components/CandleChart";
 import { createChartViewMemo } from "@/lib/chartLayout";
 import { CANDLE_COUNT, parseCandlePeriod } from "@/lib/chartPrefs";
 import { FlashPrice } from "@/components/FlashPrice";
+import { FundamentalsBasis } from "@/components/FundamentalsBasis";
 import { ChartNotice, StaleBanner, useFeedState, usePull } from "@/components/Freshness";
 import { DetailSkeleton } from "@/components/Skeleton";
 import { Screen } from "@/components/Screen";
@@ -44,6 +45,11 @@ import { ValueScoreCard } from "@/components/scores/ValueScoreCard";
 import { SCORE_LABELS, valueJumpY } from "@/lib/scoreView";
 import { TossAppButton } from "@/components/TossAppButton";
 import { tossAppTarget } from "@/lib/tossApp";
+import { FlowTab } from "@/components/flow/FlowTab";
+import { detailTabLabels } from "@/lib/flowView";
+import { FLOW_TAB } from "@/lib/flowText";
+import { JournalStockLink, JournalStockPanel, JournalStockRow } from "@/components/journal/JournalEntry";
+import { useJournalOn } from "@/lib/journalFlag";
 
 type Tab = AnalysisKind | "news";
 const TABS: { value: Tab; label: string }[] = [
@@ -157,6 +163,12 @@ export default function StockDetailScreen() {
   // 한국 간이 가치 (3-44 3단계, 서버 되돌리기 스위치 krValueScore — 앱 fallback 꺼짐): 한국 종목의 가치분석 탭 상세 카드·'가치분석 탭에서 지표별 값 보기'.
   // 꺼져 있으면(예전 서버 포함) 한국 종목 가치분석 탭은 2단계 그대로(AI 글만) — 요약 카드는 서버가 준 줄 그대로('지금 계산하지 않음')
   const krValueOn = useFeature("krValueScore", false);
+  // 수급 탭 (3-33, 기능 플래그 flowTab — 앱 fallback 꺼짐): 탭 끝에 '수급'(자리가 모자라면 다른 탭 이름을 줄이되 화면 읽기는 원래 이름),
+  // 윗줄+아랫줄 배치는 아래 전체 폭 칸. 꺼져 있으면 탭 목록·내용이 지금 그대로이고 서버에 묻지 않는다
+  const flowOn = useFeature("flowTab", false);
+  // 매매일지 (3-37, 플래그 tradeJournal · tradeRecords): 휴대폰 '잔고' 칸 맨 아래 '이 종목 매매 기록 ›', 넓은 창 '내 보유' 제목 오른쪽 '매매 기록 ›',
+  // 보유가 없는데 저장된 체결이 있으면 '매매 기록' 작은 칸 (그 판단만 서버에 한 번 묻는다). 꺼져 있으면 모두 없음 — 지금 화면 그대로
+  const journalOn = useJournalOn();
   // 차트의 보이는 구간 (detailPolish 켜짐만): 접고 펼 때 배치가 바뀌어 차트가 다른 자리에서 새로 그려져도 보던 봉 수·위치를 잇는다
   const [chartView] = useState(createChartViewMemo);
   const chartMemo = polish ? { viewMemo: chartView } : {};
@@ -176,7 +188,8 @@ export default function StockDetailScreen() {
   }, [mode]);
   // 차트 기간·탭: 주소 검색어에 있으면 그 값으로 연다 (없으면 지금처럼 일봉 · 기업개요, 넓은 창은 최근 브리핑)
   const [period, setPeriodState] = useState<CandlePeriod>(() => parseCandlePeriod(params.period));
-  const [tabPick, setTabPick] = useState<DetailTab | null>(() => parseDetailTab(params.tab));
+  // tab=flow(수급 탭)도 읽어 두고, 쓸 때(phoneTab·wideTab) 플래그가 꺼져 있으면 기본 탭으로 본다 — 플래그 값이 화면을 연 뒤에 도착해도 이어지게
+  const [tabPick, setTabPick] = useState<DetailTab | null>(() => parseDetailTab(params.tab, true));
   // 요약 카드의 '가치분석 탭에서 지표별 값 보기' (3-44 2단계): 가치분석 탭으로 바꾼 뒤 가치 상세 카드 맨 위로 스크롤하고 지표별 값을 펼친다
   // (탭만 바꾸던 것, 검토 지적). 카드가 자리를 재면(onFocused) 스크롤하고 끝낸다. 탭 내용 칸 위치는 넓은 창만 — 휴대폰은 카드가 스크롤 칸에 바로 놓인다
   const scrollRef = useRef<ScrollView>(null);
@@ -192,7 +205,7 @@ export default function StockDetailScreen() {
     if (v !== "value") setValueFocus(false);
     if (fold.on) router.setParams({ tab: v });
   };
-  const tab = phoneTab(tabPick);
+  const tab = phoneTab(tabPick, flowOn);
   // 넓은 창에서 Stack 머리를 숨긴 적이 있으면, 다시 좁아질 때 머리를 되살린다 (화면 옵션은 합쳐지므로 숨김이 남는다)
   const [hidHeader, setHidHeader] = useState(false);
   if (mode !== "phone" && !hidHeader) setHidHeader(true);
@@ -222,7 +235,7 @@ export default function StockDetailScreen() {
     if (!to || !nav) return;
     // 넘기는 동안 같은 순서를 쓰도록 남기고, 뒤로 가기에 쌓지 않게 바꿔 끼운다 (뒤로 1번이면 잔고). 차트 기간·탭은 이어진다
     rememberNav(nav, to);
-    router.replace({ pathname: "/stocks/[code]", params: { code: to.code, period, tab: wideTab(tabPick), nav: "1" } } as never);
+    router.replace({ pathname: "/stocks/[code]", params: { code: to.code, period, tab: wideTab(tabPick, flowOn), nav: "1" } } as never);
   };
   const onBack = () => (router.canGoBack() ? router.back() : router.dismissTo("/"));
 
@@ -632,8 +645,10 @@ export default function StockDetailScreen() {
               ))}
             </StatGrid>
             {range()}
+            <FundamentalsBasis basis={q.fundamentalsBasis} />
           </View>
         ) : null}
+        {!ev && journalOn ? <JournalStockPanel code={c} /> : null}
 
         {/* 잔고 */}
         {ev ? (
@@ -656,11 +671,14 @@ export default function StockDetailScreen() {
             ) : null}
             {afterCost && baseEval?.afterCost ? <Text style={styles.sub(t.muted)}>평가금액·손익은 매도 시 예상 수수료·세금 차감 후 (토스 기준)</Text> : null}
             {s.memo ? <Text style={styles.sub(t.muted)}>메모 {s.memo}</Text> : null}
+            {journalOn ? <JournalStockRow code={c} /> : null}
           </View>
         ) : null}
 
-        <Segmented options={TABS} value={tab} onChange={setTab} style={{ marginTop: space.xxs }} />
-        {tab === "news" ? (
+        <Segmented options={flowOn ? detailTabLabels("phone", win.width, win.fontScale).options : TABS} value={tab} onChange={setTab} style={{ marginTop: space.xxs }} />
+        {tab === "flow" ? (
+          <FlowTab code={c} us={!isKrCode(c)} width={win.width} />
+        ) : tab === "news" ? (
           <NewsTab code={c} us={isUsMarket(s.market)} />
         ) : (
           // 관심 종목이 되면(unregistered → false) 바로 자동으로 만든다
@@ -739,16 +757,20 @@ export default function StockDetailScreen() {
   const holdNote = afterCost && baseEval?.afterCost ? "매도 비용 차감 · 토스 기준" : null;
   const krwBlock = krwStats.length ? <Text style={[styles.sub(t.muted), { marginTop: space.xs }]}>{krwNote}</Text> : null;
   const memo = s.memo ? <Text style={styles.sub(t.muted)}>메모 {s.memo}</Text> : null;
-  const wTab = wideTab(tabPick);
+  const wTab = wideTab(tabPick, flowOn);
+  // 수급 탭이 놓이는 칸 폭: 좌우 배치는 오른쪽 칸, 그 밖(펼침 세로·윗줄+아랫줄)은 창 폭
+  const flowW = mode === "split" ? sideWidth(win.fontScale) : win.width - insets.left - insets.right;
   const tabBody = (briefMax?: number) =>
     wTab === "briefing" ? (
       <BriefingList query={briefings} max={briefMax} />
+    ) : wTab === "flow" ? (
+      <FlowTab code={c} us={!isKrCode(c)} width={flowW} />
     ) : wTab === "news" ? (
       <NewsTab code={c} us={us} />
     ) : (
       withScores(wTab, <AnalysisTab key={`${c}:${wTab}`} code={c} kind={wTab} requested={!unregistered || !!asked[wTab]} onRequest={requestAi} />, { twoCol: mode === "wide", techLabel: SCORE_LABELS.toTechnicalWide, valueLabel: SCORE_LABELS.toValueWide })
     );
-  const tabs = <Segmented options={WIDE_TABS} value={wTab} onChange={setTab} />;
+  const tabs = <Segmented options={flowOn ? detailTabLabels("wide", mode === "split" ? sideWidth(win.fontScale) : win.width, win.fontScale).options : WIDE_TABS} value={wTab} onChange={setTab} />;
 
   // 오른쪽 칸(좌우 배치) · 윗줄 오른쪽(윗줄+아랫줄 배치): 내 보유 → 시세 → 52주 (한 줄에 칸 2개, 큰 글씨는 1개)
   const sideW = sideWidth(win.fontScale);
@@ -765,10 +787,12 @@ export default function StockDetailScreen() {
     <View style={styles.side}>
       {ev ? (
         <View>
-          <PaneTitle title="내 보유" note={holdNote} />
+          <PaneTitle title="내 보유" note={holdNote} {...(journalOn && !holdNote ? { action: <JournalStockLink code={c} /> } : null)} />
           <PairGrid items={holdStats} cols={sideCols} />
           {krwLast ? null : krwSide}
           {memo}
+          {/* 제목 줄에 숫자 기준 안내가 있으면 그 안내를 자르지 않게 링크는 칸 아래 한 줄로 */}
+          {journalOn && holdNote ? <JournalStockRow code={c} /> : null}
         </View>
       ) : null}
       {q && quoteStats ? (
@@ -776,9 +800,11 @@ export default function StockDetailScreen() {
           <PaneTitle title="시세" {...(tossBtn ? { action: tossBtn } : null)} />
           <PairGrid items={PHONE_ORDER.map((id) => quoteStats[id])} cols={sideCols} />
           {range()}
+          <FundamentalsBasis basis={q.fundamentalsBasis} />
         </View>
       ) : null}
       {ev && krwLast ? <View>{krwSide}</View> : null}
+      {!ev && journalOn ? <JournalStockPanel code={c} /> : null}
     </View>
   );
 
@@ -877,6 +903,15 @@ export default function StockDetailScreen() {
           {vline}
           <NewsColumns code={c} us={us} divider={vline} />
         </View>
+        {/* 수급 (3-33, 플래그 flowTab): 탭이 없는 배치라 아랫줄 다음에 전체 폭 칸. 꺼져 있으면 없음 */}
+        {flowOn ? (
+          <View style={[styles.rowsFlow, { borderTopColor: t.line }]} testID="rows-flow">
+            <View style={[styles.side, { paddingLeft: space.lg + insets.left, paddingRight: space.lg + insets.right, paddingBottom: space.sm }]}>
+              <PaneTitle title={FLOW_TAB.label} />
+            </View>
+            <FlowTab code={c} us={!isKrCode(c)} width={flowW} />
+          </View>
+        ) : null}
       </Screen>
     );
   }
@@ -896,6 +931,7 @@ export default function StockDetailScreen() {
             key: "hold",
             title: "내 보유",
             note: shortNote,
+            ...(journalOn && !shortNote ? { action: <JournalStockLink code={c} /> } : null),
             flex: foldDetail.holdColFlex,
             body: (
               <>
@@ -903,6 +939,8 @@ export default function StockDetailScreen() {
                 {krwCol ? null : krwBlock}
                 {!krwCol && krwStats.length ? <StatList items={krwStats} /> : null}
                 {memo}
+                {/* 제목 줄에 숫자 기준 안내가 있으면 그 안내를 자르지 않게 링크는 칸 아래 한 줄로 */}
+                {journalOn && shortNote ? <JournalStockRow code={c} /> : null}
               </>
             ),
           },
@@ -945,6 +983,7 @@ export default function StockDetailScreen() {
       {columns.length ? (
         <View style={[styles.panel, { backgroundColor: t.surface, borderColor: t.line, paddingLeft: space.lg + insets.left, paddingRight: space.lg + insets.right }]}>
           <StatColumns columns={columns} />
+          <FundamentalsBasis basis={q?.fundamentalsBasis} />
         </View>
       ) : null}
       {tabs}
@@ -977,6 +1016,8 @@ const styles = {
     feedBrief: { minWidth: 0, paddingBottom: space.md, gap: space.xs },
     sideEnd: { paddingBottom: space.md },
     vline: { width: StyleSheet.hairlineWidth, alignSelf: "stretch" },
+    // 윗줄+아랫줄 배치 아래 수급 칸 (3-33, flowTab)
+    rowsFlow: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: space.xs },
     // 3-29 휴대폰 머리 오른쪽 [종][수정]: 종은 누르는 곳 44×44 (hitSlop 없이 칸 자체). 사이는 수정 버튼 hitSlop 왼쪽(space.sm)만큼 — 누르는 곳이 겹치지 않게
     headRight: { flexDirection: "row", alignItems: "center", gap: space.sm },
     headBell: { width: touch.min, minHeight: touch.min, alignItems: "center", justifyContent: "center" },

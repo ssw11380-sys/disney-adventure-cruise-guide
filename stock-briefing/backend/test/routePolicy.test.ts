@@ -11,6 +11,7 @@ import { summaryLines, type MarketSummaryData } from "../src/services/marketSumm
 import type { MarketSummarySources } from "../src/services/marketSummaryService.js";
 import { fakeProviders } from "./helpers.js";
 import { MEMBER_VARIANTS, NAME_CANARY, NAME_MARKS, nameCanaryProviders, OWNER_WARM_URLS, plantRegisteredNames } from "./nameCanary.js";
+import type { FlowTrendRow, FlowTrendSource } from "../src/providers/market/investorFlow.js";
 
 /**
  * 계정 A단계 경로 정책: 새 계정(주인 아님)이 주인의 개인 데이터를 보지도 바꾸지도 못하는지.
@@ -58,6 +59,28 @@ const KNOWN_PERSONAL = new Set([
   "GET /api/trades",
   "GET /api/trade-records",
   "GET /api/scores/:code/history",
+  // main #97~#126 합친 뒤 (2026-10-10): 주인 개인 — 관심종목·5% 구간 알림(watch_items), 관심 그룹, 매매일지, 보유 종목 일정, 새 공시 알림, 내 종목 테마.
+  // 앱(main)도 주인 아닌 계정에게는 이 화면·요청을 숨긴다 (관심 탭·알림 다리·그룹·매매일지). 빈 값도 주지 않는다
+  "GET /api/watchlist",
+  "GET /api/watchlist/settings",
+  "PUT /api/watchlist/settings",
+  "GET /api/watchlist/events",
+  "PUT /api/watchlist/:code",
+  "DELETE /api/watchlist/:code",
+  "GET /api/watch-groups",
+  "POST /api/watch-groups",
+  "PUT /api/watch-groups/order",
+  "POST /api/watch-groups/move",
+  "PATCH /api/watch-groups/:id",
+  "DELETE /api/watch-groups/:id",
+  "GET /api/journal",
+  "GET /api/journal/stock/:code",
+  "PUT /api/journal/notes",
+  "GET /api/journal/returns",
+  "GET /api/journal/tax",
+  "GET /api/schedule",
+  "GET /api/filings/alerts",
+  "GET /api/holdings/themes", // 출처가 있을 때만 등록 (아래 world 는 빈 출처로 등록한다)
   // 관리
   "GET /api/admin/features",
   "PUT /api/admin/features",
@@ -79,6 +102,11 @@ const KNOWN_PERSONAL = new Set([
   "POST /api/admin/trade-records/snapshot",
   "POST /api/admin/trade-records/sync-trades",
   "GET /api/admin/app-errors",
+  "GET /api/admin/toss/account-snapshot", // main #105 토스 원본 계좌 평가
+  "GET /api/admin/investor-flow/check", // main #122 수급 대조 원자료
+  "GET /api/admin/journal/check",
+  "POST /api/admin/journal/fx",
+  "POST /api/admin/holding-themes/rebuild",
 ]);
 
 const CANARY = "OWNER-CANARY-7f3";
@@ -121,6 +149,12 @@ describe("decide (순수 함수)", () => {
   });
 });
 
+/** 수급 탭 가짜 출처 (시장 자료 — 주인 표시 없음). 경로가 실제로 본문을 주게 (출처가 없으면 404) */
+const FLOW_ROWS: FlowTrendRow[] = ["2026-09-23", "2026-09-22", "2026-09-19"].map((date) => ({
+  date, individual: 1, foreign: 2, institution: -3, otherCorp: 0, foreignRatio: 50, foreignHolding: null, foreignLimit: null, close: 100, inMarketTime: false, hasAll: true, updatedAt: `${date}T20:15:40.000+09:00`,
+}));
+const fakeFlow = (name: string): FlowTrendSource => ({ name, trend: async () => FLOW_ROWS });
+
 /** 시장 요약 픽스처 한 건에 주인 보유 표시를 심는다 */
 function summaryWithCanary(): MarketSummaryData {
   const fx = JSON.parse(readFileSync(new URL("../../shared/fixtures/marketSummary.json", import.meta.url), "utf8")) as { cases: Array<{ data: MarketSummaryData }> };
@@ -144,7 +178,14 @@ async function world(): Promise<World> {
     config: loadConfig({ DATABASE_URL: ":memory:" }),
     db,
     // 시장 요약 경로는 출처가 있어야 등록된다 (요약은 직접 넣는다 — 출처는 부르지 않음). 발견 탭 출처는 네트워크 없이 실패
-    providers: fakeProviders({ ...nameCanaryProviders(), marketSummary: {} as MarketSummarySources, discover: new NaverDiscover(async () => Promise.reject(new Error("네트워크 없음"))) }),
+    // main #122 수급 탭·#123 내 종목 테마도 경로가 등록되게 가짜 출처 (네트워크 없음 — 내 종목 테마는 빈 출처)
+    providers: fakeProviders({
+      ...nameCanaryProviders(),
+      marketSummary: {} as MarketSummarySources,
+      discover: new NaverDiscover(async () => Promise.reject(new Error("네트워크 없음"))),
+      investorFlowSources: { tossWeb: fakeFlow("toss-web"), naver: fakeFlow("naver") },
+      holdingThemes: {},
+    }),
     logger: false,
     enableScheduler: false,
     now: () => new Date("2026-09-23T16:30:00+09:00"),
@@ -177,6 +218,12 @@ async function world(): Promise<World> {
     .insertInto("account_snapshots")
     .values({ snapshot_date: "2026-09-23", market: "KR", status: "ok", method: "close", as_of: ts, scheduled_at: ts, source: "toss-openapi", reason: null, holdings_count: 1, total_value_krw: 777.77, data: JSON.stringify({ memo: CANARY }), created_at: ts, updated_at: ts })
     .execute();
+  // main #97~#126 의 주인 개인 표에도 표시를 심는다: 관심종목(watch_items)·5% 구간 알림 기록, 관심 그룹(이름은 10자 안), 거래 메모
+  await db.insertInto("watch_items").values({ code: "000660", name: CANARY, market: "KOSPI", start_price: 777.77, desired_price: 700, alerts: 1, revision: "r1", created_at: ts, updated_at: ts }).execute();
+  await db.insertInto("movement_events").values({ event_key: `watch:${CANARY}`, code: "000660", scope: "watch", payload: JSON.stringify({ title: CANARY, body: CANARY }), created_at: "2026-09-23T07:00:00.000Z" }).execute();
+  const group = await db.insertInto("watch_groups").values({ name: "canary7f3", position: 0, created_at: ts, updated_at: ts }).returning("id").executeTakeFirstOrThrow();
+  await db.updateTable("registered_stocks").set({ watch_group_id: Number(group.id), watch_position: 0 }).where("code", "=", "005930").execute();
+  await db.insertInto("trade_notes").values({ account: 1, order_id: CANARY, note: CANARY, created_at: ts, updated_at: ts }).execute();
   // 등록 표 이름 카나리아: 토스 동기화처럼 이름·시장을 마스터와 다르게 + 등록 표에만 있는 종목·기초자산, 그다음 주인이 공유 캐시(분석·점수)를 채운다
   expect((await app.inject({ method: "POST", url: "/api/stocks", headers: o, payload: { code: "SOXX", quantity: 1, avgPrice: 100 } })).statusCode).toBe(201);
   await plantRegisteredNames(db, "2026-09-23T16:30:00+09:00");
@@ -207,7 +254,7 @@ const urlsOf = (k: string, w: World): string[] => {
   return /:code|:kind/.test(url) ? MEMBER_VARIANTS.map((v) => fill(url, w, v)) : [fill(url, w)];
 };
 
-const TABLES = ["registered_stocks", "price_alerts", "devices", "briefings", "account_briefings", "market_summaries", "account_snapshots", "meta", "users"] as const;
+const TABLES = ["registered_stocks", "price_alerts", "devices", "briefings", "account_briefings", "market_summaries", "account_snapshots", "meta", "users", "watch_items", "movement_events", "watch_groups", "trade_notes", "fx_rates"] as const;
 async function counts(db: Db): Promise<Record<string, number>> {
   const out: Record<string, number> = {};
   for (const t of TABLES) out[t] = Number((await sql<{ n: number }>`select count(*) as n from ${sql.table(t)}`.execute(db)).rows[0]?.n ?? 0);
@@ -282,6 +329,9 @@ describe("경로 정책 — 모든 경로 · 카나리아", () => {
     expect((await w.app.inject({ method: "GET", url: "/api/market-summaries", headers: o })).body).toContain(CANARY_NAME);
     expect((await w.app.inject({ method: "GET", url: `/api/briefings/${w.ids.briefing}`, headers: o })).body).toContain(CANARY);
     expect((await w.app.inject({ method: "GET", url: "/api/devices", headers: o })).body).toContain("canary7f3");
+    // main #97~#126 의 개인 표 (관심종목·관심 그룹)
+    expect((await w.app.inject({ method: "GET", url: "/api/watchlist", headers: o })).body).toContain(CANARY);
+    expect((await w.app.inject({ method: "GET", url: "/api/watch-groups", headers: o })).body).toContain("canary7f3");
   });
 
   it("주인 아닌 계정: 모든 GET 본문에 주인 표시가 하나도 없다", async () => {

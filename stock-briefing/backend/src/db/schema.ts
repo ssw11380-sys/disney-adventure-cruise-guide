@@ -20,6 +20,10 @@ export interface RegisteredStockTable {
   memo: string | null;
   created_at: ColumnType<string, string, never>;
   updated_at: string;
+  /** 관심 종목 그룹 (3-34, 플래그 watchGroups). null = 그룹 없음. 넣기(insert)에서 빼도 되는 칸 — 토스 동기화·등록 코드는 쓰지 않는다 */
+  watch_group_id: ColumnType<number | null, number | null | undefined, number | null>;
+  /** 그 그룹 안 자리 0,1,2… null = 아직 정하지 않음 (정한 종목들 뒤에 등록순) */
+  watch_position: ColumnType<number | null, number | null | undefined, number | null>;
 }
 
 export interface QuoteCacheTable {
@@ -243,6 +247,101 @@ export interface ValueReferenceTable {
   created_at: string;
 }
 
+export interface GenerationJobTable {
+  job_key: string;
+  run_id: string;
+  owner: string;
+  signature: string;
+  status: string;
+  started_at: string;
+  updated_at: string;
+  lease_until: string;
+  checkpoint: string;
+  result: string | null;
+  error: string | null;
+}
+
+export interface GenerationRequestTable {
+  request_key: string;
+  job_key: string;
+  run_id: string;
+  status: string;
+  result: string | null;
+  updated_at: string;
+}
+
+export interface FundamentalsCacheTable {
+  code: string;
+  payload: string;
+  fetched_at: string;
+}
+
+/**
+ * SEC 공시 확인 (3-38, 플래그 filingAlerts): CIK 마다 1줄 — 공용 (SEC 공개 자료, 여러 사람이 같은 CIK 를 가져도 한 번만 받는다).
+ * first_ok_at 이 없는 CIK 의 첫 확인은 기준 잡기(그때 받은 줄은 알리지 않음). 백업에 넣지 않는다 (다시 받을 수 있음)
+ */
+export interface SecFilingWatchTable {
+  cik: string; // 10자리
+  first_ok_at: string | null; // ISO UTC — 처음으로 받은 때 (기준을 잡은 때)
+  last_try_at: string | null;
+  last_ok_at: string | null;
+  last_error: string | null; // 마지막 시도가 실패했으면 이유 (성공하면 null)
+}
+
+/** 받은 SEC 공시 (알림 서식 8-K·10-Q·10-K·6-K·20-F·40-F 와 정정만, 제출일 90일 보관) — 공용. (cik, accession) 마다 1줄 */
+export interface SecFilingTable {
+  id: Generated<number>;
+  cik: string;
+  accession: string; // "0001193125-26-323632"
+  form: string; // "8-K" · "8-K/A" …
+  items: string; // "2.02,9.01" · ""
+  accepted_at: string | null; // SEC 접수 시각 ISO UTC "2026-07-29T20:04:53Z"
+  filing_date: string; // YYYY-MM-DD (SEC 제출일)
+  report_date: string | null;
+  primary_doc: string;
+  description: string;
+  baseline: number; // 1 = 알리지 않음 (기준 잡기 · 접수 24시간 넘음)
+  first_seen_at: string; // 서버가 처음 본 때 ISO UTC
+}
+
+/**
+ * 거래 메모 (3-37, 플래그 tradeJournal): 주문 하나 = 메모 하나. 체결 표와 따로 둬 토스 동기화(upsert)가 덮어쓰지 않게.
+ * 사람이 쓴 값이라 백업에 넣는다. AI 브리핑·프롬프트에는 넣지 않는다. (로그인 B단계에서 user_id 를 더한다)
+ */
+export interface TradeNoteTable {
+  id: Generated<number>;
+  account: number; // 토스 계좌 순번 (trade_executions.account 와 같음)
+  order_id: string;
+  note: string; // 1~200자, 제어 문자 지움. 빈 글이면 행을 지운다
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * 환율 기록 (3-37): 세법 기준환율(날짜별)과 토스 과거 환율(분별). 다시 받을 수 있지만 지난 값은 바뀌지 않아 받은 대로 두고 백업에 넣는다(복구 뒤 같은 세액)
+ */
+export interface FxRateTable {
+  id: Generated<number>;
+  kind: string; // 'krw-std'(매매기준율, at = YYYY-MM-DD) | 'toss-usdkrw'(토스 과거 환율, at = 분 단위 한국 시간 ISO)
+  at: string;
+  rate: number;
+  source: string; // 'smbs' | 'naver-hana' | 'toss'
+  fetched_at: string;
+}
+
+/**
+ * 관심 종목 그룹 (3-34, 플래그 watchGroups): 그룹 하나 = 1줄. 이름 겹침은 색인이 아니라 서비스 규칙(대소문자·빈칸 무시)으로 막는다 —
+ * 나중에 사용자별(user_id)로 바꿀 때 색인을 다시 만들지 않게. 종목의 그룹·자리는 registered_stocks 의 두 칸.
+ * 관심 탭의 별도 관심종목(watch_items — 관심 시작·구매희망 가격, 플래그 watchlistSteps)과는 따로다: 이 그룹은 잔고 탭 '관심' 칸(수량 없는 등록 종목)만 묶는다
+ */
+export interface WatchGroupTable {
+  id: Generated<number>;
+  name: string; // 보이는 이름 (정리한 뒤 1~10자)
+  position: number; // 칩·목록 순서 0,1,2… (서버가 빈틈 없이 다시 매긴다)
+  created_at: string;
+  updated_at: string;
+}
+
 /** 계정 (계정 A단계, 플래그 accounts) */
 export interface UserTable {
   id: Generated<number>;
@@ -270,6 +369,16 @@ export interface SessionTable {
 }
 
 export interface Database {
+  watch_items: { code: string; name: string; market: string; start_price: number; desired_price: number; alerts: number; revision: string; created_at: string; updated_at: string };
+  movement_marks: { mark_key: string; up: number; down: number; created_at: string };
+  movement_events: { event_key: string; code: string; scope: string; payload: string; created_at: string };
+  generation_jobs: GenerationJobTable;
+  generation_requests: GenerationRequestTable;
+  fundamentals_cache: FundamentalsCacheTable;
+  sec_filing_watch: SecFilingWatchTable;
+  sec_filings: SecFilingTable;
+  trade_notes: TradeNoteTable;
+  fx_rates: FxRateTable;
   value_fundamentals: ValueFundamentalsTable;
   value_references: ValueReferenceTable;
   listed_stocks: ListedStockTable;
@@ -287,6 +396,7 @@ export interface Database {
   trade_executions: TradeExecutionTable;
   indicator_scores: IndicatorScoreTable;
   price_alerts: PriceAlertTable;
+  watch_groups: WatchGroupTable;
   users: UserTable;
   sessions: SessionTable;
 }

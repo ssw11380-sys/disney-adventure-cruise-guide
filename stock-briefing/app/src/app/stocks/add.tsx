@@ -1,7 +1,7 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { router } from "expo-router";
 import React, { useEffect, useState } from "react";
-import { Alert, FlatList, Platform, Pressable, StyleSheet, Text, TextInput, ToastAndroid, View } from "react-native";
+import { Alert, FlatList, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, ToastAndroid, View } from "react-native";
 import { ApiRequestError } from "@/api/client";
 import { useRegisteredCodes, useSearch, useStockMutations } from "@/api/hooks";
 import type { ListedStock } from "@/api/types";
@@ -13,6 +13,7 @@ import { useAccountView } from "@/lib/account";
 import { holdingInput, NO_AVG_NOTE } from "@/lib/holdingForm";
 import { useRecentSearches, type RecentStock } from "@/lib/recentSearch";
 import { useSettingsGuide } from "@/lib/settingsLink";
+import { useSearchKeyboardInset } from "@/lib/useSearchKeyboardInset";
 import { changeColor, font, radius, slopFor, space, useTheme } from "@/theme";
 
 /**
@@ -21,6 +22,7 @@ import { changeColor, font, radius, slopFor, space, useTheme } from "@/theme";
  */
 export default function AddStockScreen() {
   const t = useTheme();
+  const { viewportRef, keyboardInset, onViewportLayout } = useSearchKeyboardInset();
   const [q, setQ] = useState("");
   const [debounced, setDebounced] = useState("");
   const [selected, setSelected] = useState<ListedStock | null>(null);
@@ -45,6 +47,9 @@ export default function AddStockScreen() {
   // 입력이 멈추기 전(150ms)에도 "결과 없음"을 띄우지 않게
   const typing = q.trim() !== debounced.trim();
   const pending = search.pending || typing;
+  const retrySearch = () => {
+    if (!typing && q.trim() && search.isError && !search.isFetching) void search.refetch();
+  };
 
   const open = (s: RecentStock) => {
     recent.add(s);
@@ -100,6 +105,7 @@ export default function AddStockScreen() {
 
   return (
     // 결과 줄은 다른 목록(잔고·발견)과 같은 공용 줄이라 화면 가장자리까지 (3-21). 검색칸·안내만 안쪽 여백
+    <View ref={viewportRef} onLayout={onViewportLayout} collapsable={false} style={{ flex: 1, paddingBottom: keyboardInset, backgroundColor: t.bg }}>
     <Screen scroll={false} contentStyle={{ paddingVertical: space.lg, gap: space.md }}>
       <View style={[styles.search, { borderColor: t.line, backgroundColor: t.surface, marginHorizontal: space.lg }]}>
         <Ionicons name="search" size={18} color={t.muted} />
@@ -109,25 +115,29 @@ export default function AddStockScreen() {
             setQ(v);
             select(null);
           }}
-          placeholder="종목명·코드·미국 티커 (예: SK하이닉스, 000660, AAPL)"
+          placeholder="종목명·코드·티커"
           placeholderTextColor={t.muted}
           autoFocus
           autoCorrect={false}
           accessibilityLabel="종목 검색"
+          accessibilityHint="예: SK하이닉스, 000660, AAPL"
+          numberOfLines={1}
           style={[styles.input, { color: t.ink }]}
           returnKeyType="search"
+          onSubmitEditing={retrySearch}
         />
         {q ? (
-          <Pressable onPress={() => setQ("")} accessibilityRole="button" accessibilityLabel="검색어 지우기" hitSlop={slopFor(ICON, space.xs)}>
+          <Pressable onPress={() => { setQ(""); select(null); }} accessibilityRole="button" accessibilityLabel="검색어 지우기" hitSlop={slopFor(ICON, space.xs)}>
             <Ionicons name="close-circle" size={ICON} color={t.muted} />
           </Pressable>
         ) : null}
       </View>
 
       {selected ? (
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: space.lg, paddingBottom: space.lg }} keyboardShouldPersistTaps="handled">
         <Card>
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-            <View>
+            <View style={{ flex: 1, minWidth: 0, paddingRight: space.sm }}>
               <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700" }}>{selected.name}</Text>
               <Muted>
                 {selected.code} · {selected.market}
@@ -160,6 +170,7 @@ export default function AddStockScreen() {
           </View>
           <Button title="등록" accessibilityLabel={`${selected.name} 등록`} onPress={submit} loading={register.isPending} />
         </Card>
+        </ScrollView>
       ) : q.trim().length === 0 ? (
         recent.items.length ? (
           <FlatList
@@ -184,12 +195,14 @@ export default function AddStockScreen() {
           <Muted style={{ paddingHorizontal: space.lg }}>한국·미국 종목을 한글 이름(테슬라, 애플), 티커(TSLA, AAPL), 6자리 코드로 검색합니다. 토스증권 검색을 쓰므로 토스에서 보이는 이름 그대로 치면 됩니다.</Muted>
         )
       ) : search.isError ? (
-        <ConnectionLine
-          error={search.error}
-          {...guideProps}
-          style={{ paddingHorizontal: space.lg }}
-          fallback={<Text style={{ color: t.danger, paddingHorizontal: space.lg }}>{search.error instanceof Error ? search.error.message : "검색 실패"}</Text>}
-        />
+        <View style={{ paddingHorizontal: space.lg, gap: space.md, alignItems: "flex-start" }}>
+          <ConnectionLine
+            error={search.error}
+            {...guideProps}
+            fallback={<Text style={{ color: t.danger }}>{search.error instanceof Error ? search.error.message : "검색 실패"}</Text>}
+          />
+          <Button title="다시 검색" accessibilityLabel="다시 검색" variant="secondary" compact onPress={retrySearch} disabled={typing} loading={search.isFetching} />
+        </View>
       ) : (
         <FlatList
           data={search.data?.results ?? []}
@@ -211,6 +224,7 @@ export default function AddStockScreen() {
         />
       )}
     </Screen>
+    </View>
   );
 }
 

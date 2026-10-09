@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ListedStock } from "@/api/types";
 
 /** 최근 검색해 연 종목 (3-18): 최대 10개, 기기에 저장해 재시작 뒤에도 남는다 */
@@ -15,12 +15,23 @@ export function pushRecent(list: RecentStock[], item: RecentStock, max = RECENT_
 
 export function useRecentSearches(): { items: RecentStock[]; add: (s: RecentStock) => void; clear: () => void } {
   const [items, setItems] = useState<RecentStock[]>([]);
+  // 저장은 React의 updater 실행 시점이 아니라 사용자 행동 순서대로 발행한다.
+  const current = useRef<RecentStock[]>([]);
+  // 느린 초기 읽기가 그 사이의 검색·지우기를 되돌리지 않게 사용자 행동을 따로 기억한다.
+  const added = useRef<RecentStock[]>([]);
+  const cleared = useRef(false);
   useEffect(() => {
     let alive = true;
     AsyncStorage.getItem(KEY)
       .then((raw) => {
         const v = raw ? (JSON.parse(raw) as unknown) : [];
-        if (alive && Array.isArray(v)) setItems(v.filter((x): x is RecentStock => !!x && typeof (x as RecentStock).code === "string").slice(0, RECENT_MAX));
+        if (!alive || cleared.current || !Array.isArray(v)) return;
+        const stored = v.filter((x): x is RecentStock => !!x && typeof (x as RecentStock).code === "string");
+        const next = [...added.current, ...stored.filter((x) => !added.current.some((s) => s.code === x.code))].slice(0, RECENT_MAX);
+        current.current = next;
+        setItems(next);
+        // 새 검색은 앞에, 기존 이력은 뒤에 보존한다. 화면·검색 요청은 저장소 읽기를 기다리지 않는다.
+        if (added.current.length) AsyncStorage.setItem(KEY, JSON.stringify(next)).catch(() => undefined);
       })
       .catch(() => undefined);
     return () => {
@@ -28,13 +39,16 @@ export function useRecentSearches(): { items: RecentStock[]; add: (s: RecentStoc
     };
   }, []);
   const add = useCallback((s: RecentStock) => {
-    setItems((prev) => {
-      const next = pushRecent(prev, s);
-      AsyncStorage.setItem(KEY, JSON.stringify(next)).catch(() => undefined);
-      return next;
-    });
+    added.current = pushRecent(added.current, s);
+    const next = pushRecent(current.current, s);
+    current.current = next;
+    setItems(next);
+    AsyncStorage.setItem(KEY, JSON.stringify(next)).catch(() => undefined);
   }, []);
   const clear = useCallback(() => {
+    cleared.current = true;
+    added.current = [];
+    current.current = [];
     setItems([]);
     AsyncStorage.removeItem(KEY).catch(() => undefined);
   }, []);

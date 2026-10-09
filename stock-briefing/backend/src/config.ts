@@ -18,6 +18,11 @@ const schema = z.object({
   TOSS_SYNC_MINUTES: z.coerce.number().int().min(0).max(1440).default(10),
 
   DART_API_KEY: z.string().default(""),
+  /**
+   * SEC EDGAR 에 보내는 User-Agent (선택, 비밀값 아님): '회사·서비스 이름 + 실제로 받는 연락 메일' — 예 "Gazua Stock App you@example.com".
+   * 비었거나 메일 모양이 없으면 코드 기본값. 3-38 새 공시 확인(5분마다)이 SEC 규칙으로 막히지 않게 운영에서는 넣어 두는 편이 안전하다
+   */
+  SEC_USER_AGENT: z.string().default(""),
   NAVER_CLIENT_ID: z.string().default(""),
   NAVER_CLIENT_SECRET: z.string().default(""),
 

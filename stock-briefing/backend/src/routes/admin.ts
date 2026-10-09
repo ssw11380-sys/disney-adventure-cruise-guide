@@ -7,6 +7,13 @@ import type { FeatureService } from "../services/featureService.js";
 import type { ReconcileService, ReconcileStatus } from "../services/reconcileService.js";
 import type { StockService } from "../services/stockService.js";
 import type { HoldingsAutoSync, TossSyncService } from "../services/tossSyncService.js";
+import type { TossAccountSnapshot } from "../services/tossAccountSnapshot.js";
+
+export interface TossAccountSnapshotBody {
+  on: boolean;
+  snapshot: TossAccountSnapshot | null;
+  sync: { enabled: boolean; intervalMin: number; idleIntervalMin: number; lastRunAt: string | null; nextRunAt: string | null; lastError: string | null } | null;
+}
 
 export interface AdminDeps {
   service: StockService;
@@ -33,6 +40,14 @@ export interface ReconcileBadgeBody {
 export function tossStatus(deps: AdminDeps["toss"], ip: string | null) {
   if (!deps) return { configured: false, outboundIp: ip, client: null, realtime: null, sync: null };
   return { configured: true, outboundIp: ip, client: deps.provider.client.status, realtime: deps.live?.status() ?? null, sync: deps.autoSync.status() };
+}
+
+/** 관리 화면과 위젯이 같은 저장본·동기화 상태를 읽는다. 외부 조회나 가져오기를 실행하지 않는다. */
+export async function readTossAccountSnapshot(toss: AdminDeps["toss"], features: AdminDeps["features"]): Promise<TossAccountSnapshotBody> {
+  if (!toss || !features || !(await features.enabled("tossAccountSnapshot"))) return { on: false, snapshot: null, sync: null };
+  const state = await toss.sync.accountSnapshots.load().catch(() => ({ snapshot: null, lastError: "저장된 토스 계좌 평가를 읽지 못했습니다." }));
+  const s = toss.autoSync.status();
+  return { on: true, snapshot: state.snapshot, sync: { enabled: s.enabled, intervalMin: s.intervalMin, idleIntervalMin: s.idleIntervalMin, lastRunAt: s.lastRunAt, nextRunAt: s.nextRunAt, lastError: state.lastError ?? s.lastError } };
 }
 
 /** 운영용 엔드포인트. API_TOKEN 이 있으면 /api/* 전체에 적용된다. */
@@ -75,6 +90,9 @@ export const adminRoutes: FastifyPluginAsync<AdminDeps> = async (app, { service,
       sync: { enabled: s.enabled, intervalMin: s.intervalMin, idleIntervalMin: s.idleIntervalMin, lastRunAt: s.lastRunAt, nextRunAt: s.nextRunAt },
     };
   });
+
+  /** 저장된 전체 계좌 주식 평가만 읽는다. 조회가 동기화나 외부 요청을 일으키지 않는다. */
+  app.get("/toss/account-snapshot", async (): Promise<TossAccountSnapshotBody> => readTossAccountSnapshot(toss, features));
 
   /** 토스증권 계좌의 보유 종목을 등록 종목으로 가져온다 (수량·평단 동기화) */
   app.post("/toss/import-holdings", async (_req, reply) => {

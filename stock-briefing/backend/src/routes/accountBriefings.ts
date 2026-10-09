@@ -18,7 +18,7 @@ const runBody = z.object({ session: z.enum(["morning", "afternoon"]), force: z.b
  */
 export const accountBriefingRoutes: FastifyPluginAsync<{
   service: AccountBriefingService;
-  busy: () => boolean;
+  busy: () => boolean | Promise<boolean>;
   now: () => Date;
   /** 세션의 브리핑 시각 "HH:MM" (알림 설정). 모르면 null — 시각 검사를 건너뛴다 */
   sessionTime?: (session: AccountSession) => Promise<string | null>;
@@ -36,7 +36,7 @@ export const accountBriefingRoutes: FastifyPluginAsync<{
   app.post("/run", async (req, reply) => {
     const body = runBody.parse(req.body ?? {});
     if (!(await service.enabled())) return reply.code(409).send({ error: "DISABLED", message: "계좌 브리핑 기능이 꺼져 있습니다" });
-    if (busy()) return reply.code(409).send({ error: "BUSY", message: "브리핑이 이미 실행 중입니다" });
+    if (await busy()) return reply.code(409).send({ error: "BUSY", message: "브리핑이 이미 실행 중입니다" });
     const at = sessionTime ? await sessionTime(body.session).catch(() => null) : null;
     if (at && seoulIso(now()).slice(11, 16) < at) {
       const label = body.session === "morning" ? "오전" : "오후";

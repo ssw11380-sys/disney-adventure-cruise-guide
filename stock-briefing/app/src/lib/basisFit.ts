@@ -189,3 +189,15 @@ export function bandBasisFit(o: { width: number; pad: number; fontScale: number;
   const offOneLine = sum / SLACK <= room * OFF_ONE_LINE_TOL;
   return { dotOnly, noWrap: offOneLine && sum * MIN_FIT + mark <= room };
 }
+
+/**
+ * 넓은 창 계좌 띠에 매매일지 아이콘(44×44, 3-37 — 기능 플래그 tradeJournal)을 비중 뒤에 더해도 칸 묶음이 한 줄에 드는지.
+ * 여유(SLACK) 없이 어림하고, 숫자 기준 점(mark)이 있으면 그 칸도 뺀다. 거짓이면 그 띠에는 아이콘을 두지 않는다 — 띠 줄 수가 켜기 전과 같게
+ * (끄고도 줄바꿈하는 띠·점 때문에 이미 칸 글자를 줄이는 띠는 늘 거짓). 한 줄 띠는 칸이 줄바꿈하지 않아 부르지 않는다(늘 둔다)
+ */
+export function bandJournalFits(o: { width: number; pad: number; fontScale: number; cells: readonly BandCellText[]; action: boolean; mark: "dot" | "text" | null }): boolean {
+  const markW = o.mark === "dot" ? DOT_MARK_W : o.mark === "text" ? markTextWidth(o.fontScale) : 0;
+  const room = o.width - o.pad * 2 - (o.action ? bandActionWidth(o.fontScale) : 0) - markW - touch.min;
+  const sum = o.cells.reduce((a, c) => a + bandCellWidth(c, o.fontScale), 0);
+  return sum <= room;
+}

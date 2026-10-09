@@ -23,10 +23,11 @@ import { seoulIso } from "../lib/time.js";
  * Postgres JSON 백업에 넣는 표 (다시 받을 수 있는 캐시 — 종목 마스터·현재가·DART 코드 — 는 뺌).
  * 매매 기록(3-36)의 일별 스냅샷·체결은 지난 날을 다시 받을 수 없어 꼭 넣는다 (새 표가 없는 예전 백업도 그대로 되살아난다).
  * 지표 점수 기록(3-44)도 넣는다 — 그날 계산한 값(한국·ETF 는 나중에 같은 입력을 되살릴 수 없음). 가격 알림 조건(3-29)도 사용자가 만든 값이라 넣는다.
- * 가치 지표(3-44 2단계)의 SEC 재무·주간 비교 기준도 넣는다 — 다시 받을 수 있지만 되살린 서버가 SEC·Nasdaq 을 다시 받기 전까지 점수를 이어 보이게
+ * 가치 지표(3-44 2단계)의 SEC 재무·주간 비교 기준도 넣는다 — 다시 받을 수 있지만 되살린 서버가 SEC·Nasdaq 을 다시 받기 전까지 점수를 이어 보이게.
+ * 관심 종목 그룹(3-34)도 사용자가 만든 값이라 넣는다 (종목의 그룹·자리는 registered_stocks 의 칸이라 select * 로 저절로 들어간다)
  * 계정(users → sessions 순서, FK)도 넣는다 — 되살린 뒤 주인 비밀번호가 1111 로 돌아가지 않고 로그인이 유지되게 (비밀번호는 해시, 세션은 sha256 만)
  */
-export const BACKUP_TABLES = ["registered_stocks", "meta", "briefings", "analyses", "devices", "app_errors", "account_briefings", "market_summaries", "account_snapshots", "trade_executions", "indicator_scores", "price_alerts", "value_fundamentals", "value_references", "users", "sessions"] as const;
+export const BACKUP_TABLES = ["registered_stocks", "meta", "briefings", "analyses", "devices", "app_errors", "account_briefings", "market_summaries", "account_snapshots", "trade_executions", "indicator_scores", "price_alerts", "value_fundamentals", "value_references", "generation_jobs", "generation_requests", "fundamentals_cache", "watch_items", "movement_marks", "movement_events", "trade_notes", "fx_rates", "users", "sessions", "watch_groups"] as const;
 const MAGIC = Buffer.from("SBBK2\n");
 /** 헤더: MAGIC(6) + 종류(1) + salt(16) + iv(12), 끝에 인증 태그(16) */
 const HEADER = MAGIC.length + 1 + 16 + 12;

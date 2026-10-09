@@ -1,14 +1,21 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import React, { useState } from "react";
+import React from "react";
 import { Alert, Linking, Pressable, Share, Text, View } from "react-native";
-import { useApi, useFeature, useTossStatus } from "@/api/hooks";
+import { useFeature, useTossStatus } from "@/api/hooks";
 import { gated } from "@/lib/features";
 import type { TossOpenApiStatus } from "@/api/types";
-import { useSettings } from "@/lib/settings";
-import { formatDateKo, formatPrice } from "@/lib/format";
+import { formatDateKo } from "@/lib/format";
+import { useTossImportFlow } from "@/lib/useTossImportFlow";
 import { reconcileLabel } from "@/lib/freshness";
 import { font, slopFor, space, useTheme } from "@/theme";
 import { Badge, Button, Card, Muted, Row, SectionTitle } from "./ui";
+
+async function openTossWts(): Promise<void> {
+  try {
+    await Linking.openURL("https://tossinvest.com");
+  } catch {
+    Alert.alert("토스증권 WTS를 열지 못했습니다", "브라우저 연결을 확인한 뒤 다시 눌러 주세요.");
+  }
+}
 
 /**
  * 설정 > 토스증권 연동 카드.
@@ -17,27 +24,10 @@ import { Badge, Button, Card, Muted, Row, SectionTitle } from "./ui";
  */
 export function TossOpenApiCard() {
   const t = useTheme();
-  const api = useApi();
-  const qc = useQueryClient();
-  const { apiUrl } = useSettings();
+  const importHoldings = useTossImportFlow();
   const status = useTossStatus();
   // 이미 나간 기능(3-13)이라 서버 값을 못 받았으면 켜진 것으로
   const reconcileOn = useFeature("tossReconcile", true);
-  const [lastImport, setLastImport] = useState<string | null>(null);
-  const importHoldings = useMutation({
-    mutationFn: api.importTossHoldings,
-    onSuccess: (r) => {
-      void qc.invalidateQueries({ queryKey: [apiUrl, "stocks"] });
-      void qc.invalidateQueries({ queryKey: [apiUrl, "briefings"] });
-      const lines = r.holdings.map((h) => `${h.name} ${h.quantity}주 · 평단 ${formatPrice(h.avgPrice, h.currency)}`);
-      const removed = r.removed ?? [];
-      if (removed.length) lines.push(`전량 매도 → 관심 종목: ${removed.join(", ")}`);
-      setLastImport(`${r.accounts}개 계좌에서 ${r.holdings.length}종목 (새로 ${r.added.length}, 갱신 ${r.updated.length}${removed.length ? `, 매도 ${removed.length}` : ""})`);
-      void status.refetch();
-      Alert.alert("보유 종목 가져오기 완료", lines.length ? lines.join("\n") : "보유 중인 주식이 없습니다.");
-    },
-    onError: (e) => Alert.alert("가져오기 실패", e instanceof Error ? e.message : String(e)),
-  });
 
   const s = status.data;
   // 대조 기능이 꺼져 있으면 서버가 준 대조 값도 쓰지 않는다 (3-15)
@@ -84,7 +74,7 @@ export function TossOpenApiCard() {
           <Row label="서버 공인 IP" value={<Text selectable style={{ color: t.ink, fontSize: font.small, fontVariant: ["tabular-nums"] }}>{ip ?? "확인 불가"}</Text>} />
           {ip ? <Button title="IP 보내기/복사" variant="secondary" icon="share-outline" onPress={() => void copyIp()} /> : null}
           <Text style={{ color: t.ink, fontSize: font.small }}>3. 발급받은 두 값을 서버 설정에 넣고 서버를 다시 시작합니다 (서버 관리자 작업)</Text>
-          <Pressable onPress={() => void Linking.openURL("https://tossinvest.com")} accessibilityRole="link" accessibilityLabel="토스증권 WTS 열기" hitSlop={slopFor(font.small + space.xs)}>
+          <Pressable onPress={() => void openTossWts()} accessibilityRole="link" accessibilityLabel="토스증권 WTS 열기" hitSlop={slopFor(font.small + space.xs)}>
             <Text style={{ color: t.accent, fontSize: font.small }}>토스증권 WTS 열기</Text>
           </Pressable>
         </View>
@@ -97,12 +87,12 @@ export function TossOpenApiCard() {
           <Row label="자동 동기화" value={syncLabel(s.sync)} />
           {s.sync?.lastError ? <Text style={{ color: t.danger, fontSize: font.small }}>자동 동기화 실패: {s.sync.lastError}</Text> : null}
           {rec ? (
-            <Row label="토스 대조" value={<Text style={{ color: rec?.alert ? t.warn : t.ink, fontSize: font.small, fontVariant: ["tabular-nums"] }}>{reconcileLabel(rec, (iso) => formatDateKo(iso, true))}</Text>} />
+            <Row label="시세·계좌 대조" value={<Text style={{ color: rec?.alert ? t.warn : t.ink, fontSize: font.small, fontVariant: ["tabular-nums"] }}>{reconcileLabel(rec, (iso) => formatDateKo(iso, true))}</Text>} />
           ) : null}
           {rec?.alert && (rec.qtyStreak ?? 0) >= 3 ? (
             <Text style={{ color: t.warn, fontSize: font.small }}>보유 수량이 토스와 다른 종목이 {rec.qtyStreak}회 연속 있습니다({rec.last?.qtyMismatch?.join(", ")}). 아래 &quot;지금 계좌 동기화&quot;로 다시 맞춰 보세요.</Text>
           ) : rec?.alert ? (
-            <Text style={{ color: t.warn, fontSize: font.small }}>앱 평가금이 토스 계좌와 {rec.streakOver}회 연속 0.1% 넘게 다릅니다. 앱 시세 출처·시각이 토스와 달라서일 수 있습니다.</Text>
+            <Text style={{ color: t.warn, fontSize: font.small }}>종목 시세 추정액이 토스 계좌와 {rec.streakOver}회 연속 0.1% 넘게 다릅니다. 종목 시세의 출처·시각이 토스 계좌 평가 기준과 달라서일 수 있습니다.</Text>
           ) : null}
           {rec?.week.n ? <Muted>최근 7일 {rec.week.n}회 중 {rec.week.withinPct}%가 0.1% 이내</Muted> : null}
           {s.client?.ipBlocked ? (
@@ -113,8 +103,8 @@ export function TossOpenApiCard() {
           ) : null}
           {s.client?.lastError && !s.client.ipBlocked ? <Text style={{ color: t.danger, fontSize: font.small }}>{s.client.lastError}</Text> : null}
           {s.realtime?.lastError ? <Muted>실시간: {s.realtime.lastError}</Muted> : null}
-          <Button title="지금 계좌 동기화" icon="sync" onPress={() => importHoldings.mutate()} loading={importHoldings.isPending} />
-          {lastImport ? <Muted>{lastImport}</Muted> : null}
+          <Button title="지금 계좌 동기화" icon="sync" onPress={() => void importHoldings.run()} loading={importHoldings.pending} />
+          {importHoldings.lastImport ? <Muted>{importHoldings.lastImport}</Muted> : null}
         </View>
       )}
       <Button title="상태 새로고침" variant="secondary" compact icon="refresh" onPress={() => void status.refetch()} loading={status.isFetching} />

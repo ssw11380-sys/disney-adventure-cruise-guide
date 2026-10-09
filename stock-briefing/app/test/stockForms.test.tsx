@@ -2,7 +2,7 @@ import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Evaluation, ListedStock, RegisteredStock } from "@/api/types";
 import type { RecentStock } from "@/lib/recentSearch";
-import { render, type HostNode } from "./miniRender";
+import { cleanupRenders, render, type HostNode } from "./miniRender";
 
 /**
  * 종목 등록·보유 수정 화면의 입력 초안 (PF-06·07).
@@ -24,6 +24,12 @@ const h = vi.hoisted(() => ({
   alert: vi.fn(),
   /** 서버 플래그 accounts (계정 A단계) */
   accounts: false,
+  tossSnapshotOn: false,
+  keyboard: {} as Record<string, (e: { endCoordinates: { screenY: number; height: number } }) => void>,
+  keyboardMetrics: undefined as { screenY: number; height: number } | undefined,
+  viewport: { y: 105, height: 585 },
+  holdMeasure: false,
+  measurements: [] as ((x: number, y: number, width: number, height: number) => void)[],
 }));
 
 vi.mock("react-native", async () => {
@@ -45,10 +51,24 @@ vi.mock("react-native", async () => {
       ListFooterComponent ?? null,
     );
   return {
-    View: "View",
+    View: ({ ref, ...props }: { ref?: { current: unknown } } & Record<string, unknown>) => {
+      if (ref) ref.current = { measureInWindow: (done: (x: number, y: number, width: number, height: number) => void) => {
+        if (h.holdMeasure) h.measurements.push(done);
+        else done(0, h.viewport.y, 933, h.viewport.height);
+      } };
+      return R.createElement("View", props);
+    },
     Text: "Text",
     TextInput: "TextInput",
     Pressable: "Pressable",
+    ScrollView: "ScrollView",
+    Keyboard: {
+      metrics: () => h.keyboardMetrics,
+      addListener: (event: string, callback: typeof h.keyboard[string]) => {
+        h.keyboard[event] = callback;
+        return { remove: () => { if (h.keyboard[event] === callback) delete h.keyboard[event]; } };
+      },
+    },
     FlatList,
     StyleSheet: { create: <T,>(s: T) => s, hairlineWidth: 1 },
     Alert: { alert: h.alert },
@@ -77,7 +97,7 @@ vi.mock("@/components/StockLine", async () => {
 vi.mock("@/api/hooks", () => ({
   useApi: () => ({ setKrwCost: h.setKrwCost }),
   // 계정 A단계: 검색 화면이 주인 아닌 계정인지 본다 (플래그 accounts — 여기서는 꺼짐 = 지금 화면 그대로)
-  useFeature: (key: string, fallback = false) => (key === "accounts" ? h.accounts : fallback),
+  useFeature: (key: string, fallback = false) => (key === "accounts" ? h.accounts : key === "tossAccountSnapshot" ? h.tossSnapshotOn : fallback),
   useStock: (code: string) => {
     h.stockCodes.push(code);
     return { data: code ? h.stock : undefined, isError: false, error: null, refetch: vi.fn() };
@@ -116,14 +136,21 @@ const APPLE: ListedStock = { code: "AAPL", name: "애플", market: "NASDAQ", isi
 const TESLA: RecentStock = { code: "TSLA", name: "테슬라", market: "NASDAQ" };
 
 beforeEach(() => {
+  cleanupRenders();
   vi.useFakeTimers();
+  h.keyboardMetrics = undefined;
+  h.viewport = { y: 105, height: 585 };
+  h.holdMeasure = false;
+  h.measurements = [];
   h.catalog = [SAMSUNG, APPLE];
   h.recent = [TESLA];
   for (const f of [h.register, h.update, h.remove, h.setKrwCost, h.back, h.alert]) f.mockReset();
 });
 afterEach(() => {
+  cleanupRenders();
   vi.useRealTimers();
   h.accounts = false;
+  h.tossSnapshotOn = false;
   resetSessionForTests();
 });
 
@@ -195,6 +222,91 @@ describe("PF-06: 종목 등록 양식 — 다른 종목을 고르면 수량·평
     press(r, "애플 등록");
     expect(value(r, "보유 수량")).toBe("");
     expect(value(r, "평균 단가")).toBe("");
+  });
+
+  it("검색어 지우기도 선택 중인 등록 양식과 수량·평단을 함께 비운다", () => {
+    const r = open();
+    search(r, "삼성");
+    press(r, "삼성전자 등록");
+    fill(r, "10", "70000");
+    press(r, "검색어 지우기");
+    expect(value(r, "종목 검색")).toBe("");
+    expect(r.has("보유 수량")).toBe(false);
+    expect(h.register).not.toHaveBeenCalled();
+    r.act(() => vi.advanceTimersByTime(150));
+    press(r, "테슬라 등록");
+    expect(value(r, "보유 수량")).toBe("");
+    expect(value(r, "평균 단가")).toBe("");
+  });
+
+  it("등록 양식은 키보드로 화면이 줄어도 스크롤 경로와 입력 중 등록 동작을 가진다", () => {
+    const r = open();
+    search(r, "삼성");
+    press(r, "삼성전자 등록");
+    fill(r, "10", "70000");
+    const form = r.all().find((n) => n.type === "ScrollView");
+    expect(form).toBeDefined();
+    expect(form?.props.keyboardShouldPersistTaps).toBe("handled");
+    // 네이티브 높이·키보드 겹침은 여기서 증명하지 않는다. 제출이 스크롤 영역 안에 있는지만 확인한다.
+    expect(JSON.stringify(form?.children)).toContain("삼성전자 등록");
+    press(r, "삼성전자 등록");
+    expect(h.register.mock.calls[0][0]).toEqual({ code: "005930", quantity: 10, avgPrice: 70000 });
+  });
+
+  it("창 높이가 줄지 않는 키보드는 실제 겹친 높이만 비워 등록 양식의 스크롤 끝이 키보드 위에 닿는다", () => {
+    const r = open();
+    search(r, "삼성"); press(r, "삼성전자 등록");
+    expect(h.keyboard.keyboardDidShow).toBeTypeOf("function");
+    r.act(() => h.keyboard.keyboardDidShow({ endCoordinates: { screenY: 400, height: 290 } }));
+    const frame = r.all().find((n) => n.type === "View" && n.props.onLayout)!;
+    expect(frame.props.style).toMatchObject({ paddingBottom: 290 });
+    expect(h.viewport.y + h.viewport.height - 290).toBe(400);
+    expect(r.has("보유 수량")).toBe(true);
+    expect(r.has("삼성전자 등록")).toBe(true);
+    r.act(() => h.keyboard.keyboardDidHide({ endCoordinates: { screenY: 690, height: 0 } }));
+    expect(r.all().find((n) => n.type === "View" && n.props.onLayout)!.props.style).toMatchObject({ paddingBottom: 0 });
+  });
+
+  it("이미 키보드 위로 줄어든 창은 같은 높이를 다시 차감하지 않는다", () => {
+    h.viewport = { y: 105, height: 295 };
+    const r = open();
+    expect(h.keyboard.keyboardDidShow).toBeTypeOf("function");
+    r.act(() => h.keyboard.keyboardDidShow({ endCoordinates: { screenY: 400, height: 290 } }));
+    expect(r.all().find((n) => n.type === "View" && n.props.onLayout)!.props.style).toMatchObject({ paddingBottom: 0 });
+  });
+
+  it("닫힌 키보드의 늦은 화면 측정은 여백을 되살리지 않는다", () => {
+    const r = open(); h.holdMeasure = true;
+    expect(h.keyboard.keyboardDidShow).toBeTypeOf("function");
+    r.act(() => h.keyboard.keyboardDidShow({ endCoordinates: { screenY: 400, height: 290 } }));
+    expect(h.measurements).toHaveLength(1);
+    r.act(() => h.keyboard.keyboardDidHide({ endCoordinates: { screenY: 690, height: 0 } }));
+    r.act(() => h.measurements[0](0, 105, 933, 585));
+    expect(r.all().find((n) => n.type === "View" && n.props.onLayout)!.props.style).toMatchObject({ paddingBottom: 0 });
+  });
+
+  it("키보드 크기를 연속으로 바꾸면 늦게 끝난 이전 측정이 새 여백을 덮지 않는다", () => {
+    const r = open(); h.holdMeasure = true;
+    r.act(() => h.keyboard.keyboardDidShow({ endCoordinates: { screenY: 400, height: 290 } }));
+    r.act(() => h.keyboard.keyboardDidShow({ endCoordinates: { screenY: 500, height: 190 } }));
+    expect(h.measurements).toHaveLength(2);
+    r.act(() => h.measurements[1](0, 105, 933, 585));
+    r.act(() => h.measurements[0](0, 105, 933, 585));
+    expect(r.all().find((n) => n.type === "View" && n.props.onLayout)!.props.style).toMatchObject({ paddingBottom: 190 });
+  });
+
+  it("이미 열린 키보드로 진입하거나 창이 뒤늦게 줄어들어도 현재 실제 좌표로 다시 맞춘다", () => {
+    h.keyboardMetrics = { screenY: 400, height: 290 };
+    const r = open();
+    const frame = () => r.all().find((n) => n.type === "View" && n.props.onLayout)!;
+    expect(frame()).toBeDefined();
+    r.act(() => (frame().props.onLayout as () => void)());
+    expect(frame().props.style).toMatchObject({ paddingBottom: 290 });
+    h.viewport = { y: 105, height: 295 };
+    r.act(() => (frame().props.onLayout as () => void)());
+    expect(frame().props.style).toMatchObject({ paddingBottom: 0 });
+    r.unmount();
+    expect(Object.keys(h.keyboard)).toHaveLength(0);
   });
 
   it("최근 검색에서 등록해도 비운다", () => {
@@ -393,6 +505,15 @@ describe("PF-07: 보유 수정 — 같은 종목의 서버 값이 바뀌어도 �
       const [title, body] = await saveKrw(usHeld({ tossSynced: false }), { applied: ["TSLA"], skipped: [] });
       expect(title).toBe("저장됨");
       expect(body).toBe("원화 손익이 토스 앱과 같은 기준으로 계산됩니다.");
+    });
+
+    it("계좌 기준 손익은 다음 동기화 때 반영되므로 원화 원가 저장의 즉시 적용 범위를 알린다", async () => {
+      h.tossSnapshotOn = true;
+      const [title, body] = await saveKrw(usHeld({ tossSynced: false }), { applied: ["TSLA"], skipped: [] });
+      expect(title).toBe("저장됨");
+      expect(body).toContain("실시간 평가에 반영했습니다");
+      expect(body).toContain("토스 계좌 손익에는 다음 계좌 동기화 뒤 반영됩니다");
+      expect(body).not.toContain("같은 기준으로 계산됩니다");
     });
 
     it("다른 이유로 못 했으면 지금처럼 저장 실패와 이유", async () => {

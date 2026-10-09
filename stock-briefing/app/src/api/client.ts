@@ -1,4 +1,4 @@
-import type { AppErrorSummary, Evaluation,
+import type { AppErrorSummary, Evaluation, WatchItem,
   AccountBriefing,
   AccountBriefingWithData,
   DiscoverMarket,
@@ -10,6 +10,7 @@ import type { AppErrorSummary, Evaluation,
   ThemePeriod,
   Analysis,
   AnalysisKind,
+  AnalysisState,
   Briefing,
   BriefingSession,
   BriefingWithData,
@@ -32,6 +33,7 @@ import type { AppErrorSummary, Evaluation,
   TossOpenApiStatus,
   FeatureFlags,
   IndicatorScores,
+  InvestorFlow,
   PriceAlertKind,
   PriceAlertRule,
   VolumeStatus,
@@ -39,9 +41,19 @@ import type { AppErrorSummary, Evaluation,
   AuthMe,
   BriefingStatus,
   ReconcileBadgeBody,
+  TossAccountSnapshotBody,
+  FilingAlertItem,
+  HoldingSchedule,
+  JournalResponse,
+  JournalStockResponse,
+  JournalReturns,
+  JournalTax,
+  ReturnsMarket,
+  ReturnsPreset,
 } from "./types";
 import { authMessage, NOT_JSON, SESSION_INVALID, SESSION_REQUIRED } from "@/lib/connectionError";
-import { handleSessionInvalid, markAccountsSeen, sessionTokenFor, type AccountUser } from "@/lib/session";
+import { assertSessionIdentity, handleSessionInvalid, markAccountsSeen, sessionFor, sessionIdentityVersion, sessionTokenFor, SessionReadError, type AccountUser } from "@/lib/session";
+import type { WatchLayout } from "@/lib/watchGroups";
 
 import { condDrop, condGet, condHeaders, condKey, condNote, condPut, isDelta, rebuild } from "./condCache";
 
@@ -67,25 +79,44 @@ export class ApiRequestError extends Error {
  * 계정 A단계: 이 서버 주소의 로그인 세션이 있으면 X-Session-Token 을 붙인다 (로그인·가입 요청은 withSession=false)
  */
 async function exchange(baseUrl: string, token: string, path: string, init: RequestInit, timeoutMs: number, withSession = true): Promise<{ res: Response; text: string; session: string | null }> {
-  const session = withSession ? await sessionTokenFor(baseUrl) : null;
+  const identity = sessionIdentityVersion();
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  let readingSession = withSession;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // 로그인 정보 읽기부터 본문 끝까지 같은 예산을 쓴다. 기한 뒤 늦은 읽기·본문도 성공으로 넘기지 않는다.
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new ApiRequestError(0, readingSession ? "SESSION_STORAGE" : "TIMEOUT", readingSession ? "저장된 로그인 정보를 읽는 시간이 초과됐습니다. 다시 시도해 주세요." : "서버 응답이 없습니다 (시간 초과)", path, baseUrl);
+      ctrl.abort();
+      reject(error);
+    }, timeoutMs);
+  });
   try {
-    const res = await fetch(`${baseUrl}${path}`, {
-      ...init,
-      headers: {
-        accept: "application/json",
-        ...(init.body ? { "content-type": "application/json" } : {}),
-        ...(token ? { authorization: `Bearer ${token}` } : {}),
-        ...(session ? { "x-session-token": session } : {}),
-        ...(init.headers ?? {}),
-      },
-      signal: ctrl.signal,
-    });
-    // 헤더만 오고 본문이 멈추는 경우도 제한 시간에 끊는다: 타이머는 본문을 다 읽은 뒤에 푼다 (NET-01)
-    const text = res.status === 204 || res.status === 304 ? "" : await res.text();
-    return { res, text, session };
+    return await Promise.race([(async () => {
+      const session = withSession ? await sessionTokenFor(baseUrl, ctrl.signal) : null;
+      if (ctrl.signal.aborted) throw new SessionReadError();
+      if (withSession && session !== (sessionFor(baseUrl)?.token ?? null)) throw new SessionReadError("SESSION_CHANGED", "로그인 정보가 바뀌었습니다. 다시 시도해 주세요.");
+      readingSession = false;
+      const res = await fetch(`${baseUrl}${path}`, {
+        ...init,
+        headers: {
+          accept: "application/json",
+          ...(init.body ? { "content-type": "application/json" } : {}),
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
+          ...(session ? { "x-session-token": session } : {}),
+          ...(init.headers ?? {}),
+        },
+        signal: ctrl.signal,
+      });
+      // 헤더만 오고 본문이 멈추는 경우도 제한 시간에 끊는다: 본문을 다 읽은 뒤 타이머를 푼다 (NET-01)
+      const text = res.status === 204 || res.status === 304 ? "" : await res.text();
+      // 캐시를 비운 뒤 도착한 옛 성공도 버린다. 조회 취소와 별개로 mutation·조건부 본문이 다시 저장되는 것을 막는다.
+      if (withSession) assertSessionIdentity(identity);
+      return { res, text, session };
+    })(), expired]);
   } catch (e) {
+    if (e instanceof ApiRequestError) throw e;
+    if (e instanceof SessionReadError) throw new ApiRequestError(0, e.code, e.message, path, baseUrl);
     const aborted = ctrl.signal.aborted || (e as Error).name === "AbortError";
     throw new ApiRequestError(0, aborted ? "TIMEOUT" : "NETWORK", aborted ? "서버 응답이 없습니다 (시간 초과)" : `서버에 연결할 수 없습니다: ${baseUrl}`, path, baseUrl);
   } finally {
@@ -213,6 +244,12 @@ export function createApi(baseUrl: string, token = "", opts: ApiOptions = {}) {
 
   return {
     baseUrl,
+    watchlist: () => get<{ items: WatchItem[] }>("/api/watchlist", 20_000),
+    saveWatch: (code: string, body: { startPrice: number; desiredPrice: number; alerts: boolean }) => send<{ ok: boolean }>("PUT", `/api/watchlist/${encodeURIComponent(code)}`, body),
+    removeWatch: (code: string) => send<void>("DELETE", `/api/watchlist/${encodeURIComponent(code)}`),
+    movementEvents: () => get<{ events: import("@/lib/movementNotifications").MovementEvent[] }>("/api/watchlist/events", 12_000),
+    movementSettings: () => get<{ holdings: boolean }>("/api/watchlist/settings"),
+    setMovementSettings: (holdings: boolean) => send<{ holdings: boolean }>("PUT", "/api/watchlist/settings", { holdings }),
     // ── 계정 (A단계, 플래그 accounts). 예전 서버·플래그 꺼짐은 404 → 부르는 쪽이 로그인 없이 지금처럼 (fail-open)
     login: (body: { loginId: string; password: string; remember: boolean; deviceName?: string | null }) => sendNoSession<AuthResult>("POST", "/api/auth/login", body, 20_000),
     signup: (body: { loginId: string; password: string; passwordConfirm: string; email: string; remember: boolean; deviceName?: string | null }) =>
@@ -245,11 +282,16 @@ export function createApi(baseUrl: string, token = "", opts: ApiOptions = {}) {
     removeStock: (code: string) => send<void>("DELETE", stockPath(code)),
     getQuote: (code: string, fresh = false) => get<Quote>(`${stockPath(code)}/quote${fresh ? "?fresh=1" : ""}`),
     getCandles: (code: string, period: CandlePeriod, count: number) => get<CandleSeries>(`${stockPath(code)}/candles?period=${period}&count=${count}`),
-    getAnalysis: (code: string, kind: AnalysisKind, refresh = false) =>
-      get<Analysis>(`${stockPath(code)}/analysis/${kind}${refresh ? "?refresh=1" : ""}`, 180_000),
+    getAnalysis: (code: string, kind: AnalysisKind, refresh = false, requestId?: string) => {
+      const query = [refresh ? "refresh=1" : "", requestId ? `requestId=${encodeURIComponent(requestId)}` : ""].filter(Boolean).join("&");
+      return get<Analysis>(`${stockPath(code)}/analysis/${kind}${query ? `?${query}` : ""}`, 180_000);
+    },
+    analysisState: (code: string, kind: AnalysisKind, requestId?: string) => get<AnalysisState>(`${stockPath(code)}/analysis/${kind}/state${requestId ? `?requestId=${encodeURIComponent(requestId)}` : ""}`, 10_000),
     getStockNews: (code: string) => get<StockNews>(`${stockPath(code)}/news`),
     /** 지표 점수 (3-44, 플래그 indicatorScores). 플래그가 꺼져 있거나 예전 서버·모르는 종목이면 404 → 부르는 쪽이 "없음"으로 본다 */
     indicatorScores: (code: string) => get<IndicatorScores>(`/api/scores/${encodeURIComponent(code)}`, 20_000),
+    /** 수급 탭 (3-33, 플래그 flowTab). 꺼져 있거나 예전 서버면 404 → 부르는 쪽이 "없음"으로 본다 */
+    investorFlow: (code: string) => get<InvestorFlow>(`/api/investor-flow/${encodeURIComponent(code)}`, 20_000),
 
     latestBriefings: () => get<LatestBriefing[]>("/api/briefings/latest"),
     listBriefings: (filter: { code?: string; date?: string; session?: BriefingSession; limit?: number } = {}) => {
@@ -314,6 +356,40 @@ export function createApi(baseUrl: string, token = "", opts: ApiOptions = {}) {
     priceAlertVolume: (codes: string[]) => get<{ items: VolumeStatus[] }>(`/api/price-alerts/volume?codes=${codes.map(encodeURIComponent).join(",")}`, 45_000),
     /** 잔고 '숫자 기준' 배지 (3-32, 플래그 numberBasis). 예전 서버는 404 → 부르는 쪽(reconcileBadgeQuery)이 꺼짐으로 본다 */
     reconcileBadge: () => get<ReconcileBadgeBody>("/api/admin/toss/reconcile/badge", 8_000),
+    tossAccountSnapshot: () => get<TossAccountSnapshotBody>("/api/admin/toss/account-snapshot", 8_000),
+    /** 내 종목 테마 (3-35, 플래그 holdingThemes). 꺼진 서버·예전 서버는 404 → 부르는 쪽(useHoldingThemes)이 null 로 본다 */
+    holdingThemes: () => get<import("./types").HoldingThemes>("/api/holdings/themes", 20_000),
+    /** '일정·공시' 화면 (3-38, 플래그 holdingSchedule). 꺼져 있거나 예전 서버면 404 */
+    holdingSchedule: () => get<HoldingSchedule>("/api/schedule", 20_000),
+    /** 새 공시 알림 목록 (3-38, 플래그 filingAlerts — 앱이 앞에 있을 때 확인). 꺼져 있으면 404 */
+    filingAlerts: () => get<{ asOf: string; items: FilingAlertItem[] }>("/api/filings/alerts?days=3", 12_000),
+    /**
+     * 매매일지 (3-37, 플래그 tradeJournal). 새 경로라 예전 서버는 404 → 부르는 쪽(훅)이 꺼짐으로 본다.
+     * 서버가 플래그를 끄면 { enabled: false } 빈 값, 메모 쓰기는 409
+     */
+    journal: (q: { from: string; to: string; code?: string | null }) => {
+      const p = new URLSearchParams({ from: q.from, to: q.to });
+      if (q.code) p.set("code", q.code);
+      return get<JournalResponse>(`/api/journal?${p.toString()}`, 20_000);
+    },
+    journalStock: (code: string) => get<JournalStockResponse>(`/api/journal/stock/${encodeURIComponent(code)}`, 15_000),
+    journalReturns: (q: { preset: ReturnsPreset; market: ReturnsMarket; from?: string; to?: string }) => {
+      const p = new URLSearchParams({ preset: q.preset, market: q.market });
+      if (q.preset === "custom" && q.from && q.to) {
+        p.set("from", q.from);
+        p.set("to", q.to);
+      }
+      return get<JournalReturns>(`/api/journal/returns?${p.toString()}`, 20_000);
+    },
+    journalTax: (year?: number) => get<JournalTax>(`/api/journal/tax${year ? `?year=${year}` : ""}`, 20_000),
+    saveTradeNote: (body: { account: number; orderId: string; note: string }) => send<{ account: number; orderId: string; note: string | null; updatedAt: string }>("PUT", "/api/journal/notes", body, 15_000),
+    /** 관심 종목 그룹·순서 (3-34, 플래그 watchGroups). 모든 응답이 배치 전체. 예전 서버는 404 → 부르는 쪽(WatchGroupsProvider)이 꺼짐으로 본다 */
+    watchGroups: () => get<WatchLayout>("/api/watch-groups", 10_000),
+    createWatchGroup: (name: string) => send<WatchLayout>("POST", "/api/watch-groups", { name }, 15_000),
+    renameWatchGroup: (id: number, name: string) => send<WatchLayout>("PATCH", `/api/watch-groups/${id}`, { name }, 15_000),
+    deleteWatchGroup: (id: number) => send<WatchLayout>("DELETE", `/api/watch-groups/${id}`, undefined, 15_000),
+    orderWatchGroups: (ids: number[]) => send<WatchLayout>("PUT", "/api/watch-groups/order", { ids }, 15_000),
+    moveWatchStock: (body: { code: string; groupId: number | null; index: number }) => send<WatchLayout>("POST", "/api/watch-groups/move", body, 15_000),
   };
 }
 

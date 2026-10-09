@@ -116,6 +116,18 @@ const shown = (r: ReturnType<typeof render>) => {
 };
 
 describe("설정: 주인 아닌 계정", () => {
+  it("토스 계좌 구분이 켜지면 원본과 추정 평가를 안내하고 꺼지면 기존 설명을 보존한다", () => {
+    h.flags = { ...ALL_FLAGS, tossAccountSnapshot: true };
+    const r = render(<SettingsScreen />);
+    expect(r.text()).toContain("앱 표시 환율로 환산한 참고 금액입니다.");
+    expect(r.text()).toContain("토스 계좌는 차감 후 제공값, 실시간 평가는 비용 정보가 있는 종목의 예상 비용을 반영합니다.");
+    expect(r.text()).not.toContain("토스 앱과 같은 평가금액·손익");
+    h.flags.tossAccountSnapshot = false;
+    r.rerender();
+    expect(r.text()).toContain("토스증권 적용 환율 기준");
+    expect(r.text()).toContain("토스 앱과 같은 평가금액·손익 (토스 연동 종목)");
+  });
+
   it("주인만 쓰는 줄이 없고 알림 설정을 묻지 않는다 — 화면·해외 원화·차트 줄·계정 칸·서버 칸은 그대로", async () => {
     h.flags = ALL_FLAGS;
     await session.saveSession({ apiUrl: "https://prod.test", token: "gzs1_m", remember: true, user: MEMBER });

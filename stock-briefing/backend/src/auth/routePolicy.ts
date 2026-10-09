@@ -23,9 +23,11 @@ export const SHARED_ROUTES: ReadonlySet<string> = new Set([
   "GET /api/stocks/:code", // 가림: 등록 여부와 상관없이 미리 보기 모양
   "GET /api/stocks/:code/quote", // 가림: 캐시의 받은 시각·ttl 지난 스냅샷·주인 앱의 3초 갱신 가격을 쓰지 않음 (검증 7차)
   "GET /api/stocks/:code/candles", // 가림: 새 값 시간(분봉 20초·일봉 60초) 안의 봉만 캐시에서 (검증 7차)
-  "GET /api/stocks/:code/analysis/:kind", // refresh 무시 + 사용자별 하루 한도, 글은 공개 이름으로 만든 것만 (검증 8차)
+  "GET /api/stocks/:code/analysis/:kind", // refresh·요청 추적 무시 + 사용자별 하루 한도, 글은 공개 이름으로 만든 것만 (검증 8차), 시세 시각 가림 (main #97 합친 뒤)
+  "GET /api/stocks/:code/analysis/:kind/state", // main #97(분석 대기 복구): 가림 — 주인 아닌 계정에게는 저장 글·진행 여부·요청 기록 없이 늘 같은 모양
   "GET /api/stocks/:code/news", // 가림: 등록 표를 보지 않음
   "GET /api/scores/:code", // 가림: 계산 시각·재무 받은 시각을 요청 시각 값으로 + 하루 한도, 계산은 공개 이름·시장으로 (검증 8차)
+  "GET /api/investor-flow/:code", // main #122 수급 탭 (시장 자료): 가림 — 받은 시각·대조 기록 없이, 옛 캐시(stale)는 주지 않는다
   "GET /api/market-summaries", // 가림: 내 종목 비교를 뺌
   "GET /api/market-summaries/latest",
   "GET /api/market-summaries/:id",
@@ -42,7 +44,9 @@ export const SANITIZED_ROUTES: ReadonlySet<string> = new Set([
   "GET /api/stocks/:code/candles",
   "GET /api/stocks/:code/news",
   "GET /api/stocks/:code/analysis/:kind",
+  "GET /api/stocks/:code/analysis/:kind/state",
   "GET /api/scores/:code",
+  "GET /api/investor-flow/:code",
   "GET /api/market-summaries",
   "GET /api/market-summaries/latest",
   "GET /api/market-summaries/:id",
@@ -150,8 +154,32 @@ export function ownerView(req: FastifyRequest): boolean {
  * 주인 아닌 계정에게 주는 응답에서 공유 캐시의 시각·상태를 요청 시각 값으로 (검증 4차 M2 — 캐시에 이미 있었는지·언제 만들었는지로
  * 주인이 연 종목·주인 등록 종목(장 마감 뒤 미리 계산)이 드러나지 않게). 주인 보기면 그대로
  */
-export function memberAnalysisView<T extends { id: number; createdAt: string; cached: boolean }>(a: T, nowIso: string): T {
-  return { ...a, id: 0, createdAt: nowIso, cached: false };
+export function memberAnalysisView<T extends { id: number; createdAt: string; cached: boolean; missing?: string[]; verification?: { quoteAsOf: string | null } }>(a: T, nowIso: string): T {
+  return {
+    ...a,
+    id: 0,
+    createdAt: nowIso,
+    cached: false,
+    // main #98·#103 합친 뒤: 재무 보강을 못 받았을 때의 '(…수신 자료 사용)' 시각은 종목마다 공유 캐시를 받은 때라 날짜를 뺀다
+    ...(a.missing ? { missing: a.missing.map(memberMissingText) } : {}),
+    // 보고서에 쓴 시세 시각(공유 캐시 글을 만든 때와 거의 같다)은 '제공되지 않음'으로 — 앱도 그렇게 보여 준다
+    ...(a.verification ? { verification: { ...a.verification, quoteAsOf: null } } : {}),
+  };
+}
+
+/** 분석 '빠진 자료' 한 줄에서 재무 보강 수신 시각을 뺀다 (환율은 모든 종목이 같은 값이라 그대로) */
+export function memberMissingText(line: string): string {
+  return line.replace(/^재무 보강 갱신 실패\(.+ 수신 자료 사용\)$/, "재무 보강 갱신 실패(이전 수신 자료 사용)");
+}
+
+/**
+ * 주인 아닌 계정의 수급 탭 (main #122 합친 뒤 — 검증 4차 M2 와 같은 규칙): 받은 시각은 요청 시각, 토스 Open API 대조 기록(대조한 때·개수 — 그 종목을
+ * 누가 12시간 안에 열었는지 드러남)은 없음. 새로 받지 못해 옛 캐시(stale)만 있으면 처음 보는 종목처럼 502 (호출하는 쪽이 던진다)
+ */
+export function memberFlowView<T extends { supported: boolean; fetchedAt?: string; asOf?: string; check?: unknown }>(b: T, nowIso: string): T {
+  if (!b.supported) return b;
+  // asOf 가 받은 시각인 자료(네이버 · 고친 시각이 없는 토스 웹 줄)는 그것도 요청 시각으로. 토스 웹이 줄을 고친 시각은 시장 자료라 그대로
+  return { ...b, fetchedAt: nowIso, ...(b.asOf !== undefined && b.asOf === b.fetchedAt ? { asOf: nowIso } : {}), check: null };
 }
 
 /** 주인 아닌 계정에게 주는 '지난 값' 안내 (재무를 받은 날짜 없이 — 날짜는 주인 등록 종목만 매일 다시 받으므로 캐시 상태가 드러난다, 검증 5차) */

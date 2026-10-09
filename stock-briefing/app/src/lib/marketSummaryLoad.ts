@@ -37,7 +37,7 @@ export async function loadMarketSummaries(timeoutMs = 12_000): Promise<MarketSum
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     // 계정 A단계: 기기에 저장한 로그인 세션(자동 로그인 켬)만 — 메모리에만 있는 세션(자동 로그인 끔)이면 묻지 않는다 (검증 4차 M1, widgets/data 가 저장소를 끼운다)
-    const b = await backgroundSessionFor(apiUrl).catch((): { kind: "none" } => ({ kind: "none" }));
+    const b = await backgroundSessionFor(apiUrl, ctrl.signal);
     if (b.kind === "memory") return null;
     const session: Record<string, string> = b.kind === "stored" ? { "x-session-token": b.token } : {};
     const res = await fetch(`${apiUrl}/api/market-summaries?limit=4`, { headers: { accept: "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...session }, signal: ctrl.signal });

@@ -2,6 +2,7 @@ import { Expo, type ExpoPushMessage, type ExpoPushTicket } from "expo-server-sdk
 
 /** 앱으로 보내는 알림 한 건 */
 export interface PushMessage {
+  channelId?: string;
   title: string;
   body: string;
   data?: Record<string, unknown>;
@@ -43,7 +44,7 @@ export class ExpoPushSender implements PushSender {
       body: message.body,
       data: message.data ?? {},
       sound: "default",
-      channelId: ANDROID_CHANNEL,
+      channelId: message.channelId ?? ANDROID_CHANNEL,
       priority: "high",
     }));
     const results: PushSendResult["results"] = tokens

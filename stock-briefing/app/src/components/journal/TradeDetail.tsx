@@ -1,0 +1,238 @@
+import React, { useEffect, useRef, useState } from "react";
+import { Keyboard, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View, type StyleProp, type ViewStyle } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useSaveTradeNote } from "@/api/hooks";
+import type { JournalItem } from "@/api/types";
+import { Button } from "@/components/ui";
+import { afterBuyText, calcRows, clampNote, detailRows, JOURNAL, NOTE_MAX, noteLength, noteResultText, noteUnchanged, type DetailRow } from "@/lib/journal";
+import { changeColor, font, radius, space, useTheme } from "@/theme";
+
+/**
+ * 거래 상세 (3-37): 체결 · 수량 · 평균 체결가 · 금액 · 주문 상태, 매도는 '실현손익 계산'(판매 금액 − 평균 구매가 × 수량 = 실현손익 · 수수료·세금 · 원화로는)과
+ * 계산 방법·출발한 기록, 매수는 '이 매수 뒤 평균 구매가'. 아래 메모(200자, 서버에 저장 — 저장 뒤 '메모를 저장했어요.' 3초, 실패하면 입력 그대로 두고 안내).
+ * 휴대폰은 아래에서 올라오는 창(TradeDetailSheet), 폴드 가로 2단은 오른쪽 칸(TradeDetailPane), 폴드 세로는 가운데 창(최대 560dp).
+ * 둘 다 메모 자판이 열리면 메모 칸·[저장]이 자판 위에 보이게 한다 (edge-to-edge 라 창이 자판만큼 저절로 줄지 않음 — useKeyboardHeight)
+ * 메모 [지우기]는 입력 칸만 비운다 — 저장한 메모는 비운 채 [저장]을 눌러야 지워진다 (한 번 누름으로 되돌릴 수 없이 지우지 않게).
+ * [저장]은 입력이 저장한 메모와 다를 때만 켜지고(줄바꿈·앞뒤 빈칸은 서버처럼 정리해 비교), '메모를 지웠어요.'는 저장한 메모가 있었을 때만
+ */
+export function TradeDetailBody({ item, onClose }: { item: JournalItem; onClose?: () => void }) {
+  const t = useTheme();
+  const sell = item.side === "SELL";
+  const calc = sell ? calcRows(item) : null;
+  const after = sell ? null : afterBuyText(item);
+  return (
+    <View style={styles.body}>
+      <Text style={{ color: t.ink, fontSize: font.title, fontWeight: "800" }} accessibilityRole="header">
+        {`${item.name} ${sell ? "매도" : "매수"}`}
+      </Text>
+      <Rows rows={detailRows(item)} />
+      {calc ? (
+        <View style={styles.section}>
+          <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700" }} accessibilityRole="header">
+            실현손익 계산
+          </Text>
+          <Rows rows={calc.rows} />
+          {calc.notes.map((n) => (
+            <Text key={n} style={{ color: t.muted, fontSize: font.small }}>
+              {n}
+            </Text>
+          ))}
+        </View>
+      ) : null}
+      {after ? <Text style={{ color: t.sub, fontSize: font.body }}>{after}</Text> : null}
+      {item.orderId ? <NoteEditor item={item} /> : null}
+      {onClose ? <Button title={JOURNAL.close} variant="secondary" onPress={onClose} /> : null}
+    </View>
+  );
+}
+
+function Rows({ rows }: { rows: DetailRow[] }) {
+  const t = useTheme();
+  return (
+    <View>
+      {rows.map((r) => (
+        <View key={r.label} style={[styles.kv, { borderBottomColor: t.line }]} accessible accessibilityLabel={r.speech ?? `${r.label} ${r.value}`}>
+          <Text style={[styles.kvLabel, { color: t.muted }]}>{r.label}</Text>
+          <Text style={[styles.kvValue, { color: r.sign !== undefined ? changeColor(t, r.sign) : t.ink }]}>{r.value}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/** 메모 입력: 200자에서 멈춘다. 저장 결과는 화면 읽기가 바로 읽는 알림 영역 */
+function NoteEditor({ item }: { item: JournalItem }) {
+  const t = useTheme();
+  const save = useSaveTradeNote();
+  const [text, setText] = useState(item.note ?? "");
+  // 서버에 저장된 메모 (저장이 끝나면 목록을 다시 받기 전에도 바로 바뀐다 — [저장] 켜짐·지웠어요 판단)
+  const [saved, setSaved] = useState<string | null>(item.note ?? null);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 다른 거래를 고르면 그 거래의 메모로 다시 시작한다
+  const [forKey, setForKey] = useState(item.key);
+  if (forKey !== item.key) {
+    setForKey(item.key);
+    setText(item.note ?? "");
+    setSaved(item.note ?? null);
+    setMsg(null);
+  }
+  useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current);
+  }, []);
+  const submit = (value: string) => {
+    if (!item.orderId || save.isPending) return;
+    save.mutate(
+      { account: item.account, orderId: item.orderId, note: value },
+      {
+        onSuccess: (r) => {
+          const done = noteResultText(saved, r.note);
+          setText(r.note ?? "");
+          setSaved(r.note);
+          setMsg(done ? { ok: true, text: done } : null);
+          if (timer.current) clearTimeout(timer.current);
+          if (done) timer.current = setTimeout(() => setMsg(null), 3_000);
+        },
+        // 실패하면 입력은 그대로 둔다
+        onError: () => setMsg({ ok: false, text: JOURNAL.noteFailed }),
+      },
+    );
+  };
+  return (
+    <View style={styles.section}>
+      <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700" }} accessibilityRole="header">
+        {JOURNAL.noteTitle}
+      </Text>
+      <TextInput
+        value={text}
+        onChangeText={(v) => setText(clampNote(v))}
+        placeholder={JOURNAL.notePlaceholder}
+        multiline
+        textAlignVertical="top"
+        placeholderTextColor={t.muted}
+        accessibilityLabel={JOURNAL.noteA11y}
+        style={[styles.input, { color: t.ink, borderColor: t.lineStrong, backgroundColor: t.surfaceAlt }]}
+        testID="note-input"
+      />
+      <View style={styles.noteBar}>
+        <Text style={{ color: t.muted, fontSize: font.small, flex: 1 }}>{`${noteLength(text)}/${NOTE_MAX}`}</Text>
+        <Button
+          title={JOURNAL.noteClear}
+          compact
+          variant="secondary"
+          accessibilityLabel={JOURNAL.noteClearA11y}
+          disabled={save.isPending || !text}
+          onPress={() => {
+            setText("");
+            setMsg(null);
+          }}
+        />
+        <Button title={JOURNAL.noteSave} compact accessibilityLabel="메모 저장" loading={save.isPending} disabled={!save.isPending && noteUnchanged(text, saved)} onPress={() => submit(text)} />
+      </View>
+      {!text && saved && !msg ? <Text style={{ color: t.muted, fontSize: font.small }}>{JOURNAL.noteEmptyHint}</Text> : null}
+      {msg ? (
+        <Text style={{ color: msg.ok ? t.accent : t.warn, fontSize: font.small }} accessibilityRole="alert" accessibilityLiveRegion="polite">
+          {msg.text}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+/** 자판 높이 (0 = 닫힘). 부른 화면이 떠 있는 동안만 구독한다 */
+export function useKeyboardHeight(): number {
+  const [kb, setKb] = useState(0);
+  useEffect(() => {
+    const show = Keyboard.addListener("keyboardDidShow", (e) => setKb(e.endCoordinates.height));
+    const hide = Keyboard.addListener("keyboardDidHide", () => setKb(0));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+  return kb;
+}
+
+/**
+ * 폴드 가로 2단의 오른쪽 칸 거래 상세. 메모 자판이 열리면 자판 높이만큼 아래 여백을 더하고 끝(메모 칸·[저장])까지 내린다 —
+ * 휴대폰 아래 창처럼 자판이 메모 칸을 가리지 않게. 메모 칸이 여러 줄로 늘어도 끝을 따라간다
+ */
+export function TradeDetailPane({ item, contentStyle }: { item: JournalItem; contentStyle?: StyleProp<ViewStyle> }) {
+  const kb = useKeyboardHeight();
+  const up = kb > 0;
+  const scroll = useRef<ScrollView | null>(null);
+  useEffect(() => {
+    if (up) scroll.current?.scrollToEnd({ animated: true });
+  }, [up, kb]);
+  return (
+    <ScrollView
+      ref={scroll}
+      testID="trade-detail-pane"
+      keyboardShouldPersistTaps="handled"
+      contentContainerStyle={[contentStyle, up ? { paddingBottom: kb + space.xl } : null]}
+      onContentSizeChange={() => {
+        if (up) scroll.current?.scrollToEnd({ animated: false });
+      }}
+    >
+      <TradeDetailBody item={item} />
+    </ScrollView>
+  );
+}
+
+/**
+ * 휴대폰: 아래에서 올라오는 창 · 넓은 세로 창: 가운데 창 (최대 560dp).
+ * 메모 자판이 열리면 창을 위쪽에 붙이고 높이를 자판 위까지로 줄인 뒤 끝(메모 칸·[저장])까지 내린다 — edge-to-edge 라 창이
+ * 자판만큼 줄어드는 동작에 기대지 않는다 (가격 알림 시트 PriceAlertSheet 와 같은 방식)
+ */
+export function TradeDetailSheet({ item, onClose }: { item: JournalItem; onClose: () => void }) {
+  const t = useTheme();
+  const insets = useSafeAreaInsets();
+  const win = useWindowDimensions();
+  const wide = win.width >= 560 + space.xl * 2;
+  // 자판 높이 (0 = 닫힘). 창이 열려 있는 동안만 구독한다
+  const kb = useKeyboardHeight();
+  const scroll = useRef<ScrollView | null>(null);
+  const up = kb > 0;
+  const maxH = up ? win.height - kb - insets.top - space.md * 2 : win.height * 0.85;
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      <View style={[styles.backdrop, { justifyContent: up ? "flex-start" : wide ? "center" : "flex-end", paddingTop: up ? insets.top + space.md : 0 }]}>
+        <Pressable style={[StyleSheet.absoluteFill, { backgroundColor: t.scrim }]} onPress={onClose} accessibilityRole="button" accessibilityLabel={`거래 상세 ${JOURNAL.close}`} />
+        <View
+          style={[
+            styles.sheet,
+            wide || up ? styles.sheetFloat : styles.sheetBottom,
+            { backgroundColor: t.surface, borderColor: t.lineStrong, maxHeight: maxH, paddingBottom: wide || up ? space.lg : insets.bottom + space.lg },
+          ]}
+          testID="trade-detail-sheet"
+        >
+          <ScrollView
+            ref={scroll}
+            keyboardShouldPersistTaps="handled"
+            // 자판 때문에 창이 줄면(메모 칸을 누른 뒤) 메모 칸·[저장]이 보이게 끝으로
+            onLayout={() => {
+              if (up) scroll.current?.scrollToEnd({ animated: false });
+            }}
+          >
+            <TradeDetailBody item={item} onClose={onClose} />
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+const styles = StyleSheet.create({
+  body: { gap: space.md, padding: space.lg },
+  section: { gap: space.xs },
+  kv: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", columnGap: space.md, rowGap: space.xxs, paddingVertical: space.s, borderBottomWidth: StyleSheet.hairlineWidth },
+  kvLabel: { fontSize: font.small, flexShrink: 1 },
+  kvValue: { fontSize: font.small, fontWeight: "700", fontVariant: ["tabular-nums"], marginLeft: "auto", textAlign: "right" },
+  // 여러 줄 (200자가 한 줄로 밀리지 않게) — 최소 44, 네 줄쯤까지 늘어난다
+  input: { minHeight: 44, maxHeight: 120, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, paddingHorizontal: space.sm, paddingVertical: space.s, fontSize: font.body },
+  noteBar: { flexDirection: "row", alignItems: "center", gap: space.sm },
+  backdrop: { flex: 1, alignItems: "center" },
+  sheet: { width: "100%", maxWidth: 560, borderWidth: StyleSheet.hairlineWidth, overflow: "hidden" },
+  sheetBottom: { borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg },
+  sheetFloat: { borderRadius: radius.lg },
+});

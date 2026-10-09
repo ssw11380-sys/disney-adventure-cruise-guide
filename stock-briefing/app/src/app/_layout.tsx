@@ -13,9 +13,12 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import "@/lib/sessionStorage";
 import { AuthBridge } from "@/components/AuthBridge";
 import { InitialPasswordSheet } from "@/components/auth/InitialPasswordSheet";
+import { FilingAlertBridge } from "@/components/FilingAlertBridge";
 import { NotificationBridge, useSplashHold } from "@/components/NotificationBridge";
+import { MovementAlertBridge } from "@/components/MovementAlertBridge";
 import { PriceAlertProvider } from "@/components/PriceAlertProvider";
 import { ConnectionWordingBridge, FirstRunGate, GuideMarksProvider, HapticsBridge, UxFlagsProvider } from "@/components/UxBridge";
+import { WatchGroupsProvider } from "@/components/WatchGroupsProvider";
 import { WidgetBridge } from "@/components/WidgetBridge";
 import { ensureBackgroundTaskRegistered } from "@/lib/backgroundBriefings";
 import { installErrorHandlers, setCurrentScreen } from "@/lib/errorReport";
@@ -26,8 +29,7 @@ import { useAuthGate } from "@/lib/authGate";
 import { setBeforeLogout, setPushRebind } from "@/lib/logout";
 import { detachPush, postPriceAlert, rebindPush } from "@/lib/notifications";
 import { onAccountChange, persistsPersonal } from "@/lib/session";
-import { clearWidgetAccountData, signedOutWidgetData } from "@/widgets/data";
-import { redrawAllWidgets } from "@/widgets/redraw";
+import { resetWidgetsForAccountChange } from "@/widgets/redraw";
 import { installPriceAlertNotifier } from "@/lib/priceAlerts";
 import { PERSIST_BUSTER, PERSIST_MAX_AGE_MS, queryPersister, shouldPersist } from "@/lib/queryPersist";
 import { SettingsProvider, useSettings } from "@/lib/settings";
@@ -46,7 +48,7 @@ setBeforeLogout((api) => detachPush(api));
 setPushRebind((api) => rebindPush(api));
 // 계정이 바뀌면(로그아웃·세션 끊김·다른 사람 로그인) 위젯이 적어 둔 앞 사람의 잔고·브리핑을 지우고 '로그인 필요' 빈 위젯으로 다시 그린다.
 // 새 계정의 잔고를 받으면 WidgetBridge 가 다시 채운다 (react-query 캐시 비우기는 AuthBridge 가 같은 자리에서)
-onAccountChange(() => void clearWidgetAccountData().then(() => redrawAllWidgets(signedOutWidgetData())));
+onAccountChange(resetWidgetsForAccountChange);
 
 // 저장된 설정(라이트/다크)과 마지막 잔고를 읽을 때까지 스플래시를 둔다 → 라이트 모드에서 어두운 첫 화면이 번쩍이지 않게.
 // 읽기가 늦어도 1.5초 뒤에는 연다
@@ -172,10 +174,18 @@ function Navigator() {
       <Stack.Screen name="market/[code]" options={{ title: "지수" }} />
       <Stack.Screen name="discover/theme/[id]" options={{ title: "테마" }} />
       <Stack.Screen name="portfolio/allocation" options={{ title: "비중" }} />
+      <Stack.Screen name="portfolio/themes" options={{ title: "내 종목 테마" }} />
+      {/* 일정·공시 (3-38, 플래그 holdingSchedule·filingAlerts): 제목은 화면이 플래그로 정한다 ('일정·공시' · '새 공시') — 로그인한 뒤에만 */}
+      <Stack.Screen name="schedule" options={{ title: "일정·공시" }} />
+      {/* 매매일지 (3-37, 기능 플래그 tradeJournal — 꺼져 있으면 화면 안에 안내만) */}
+      <Stack.Screen name="journal/index" options={{ title: "매매일지" }} />
       {/* 이동평균선 기간·색 (3-39, 기능 플래그 maCustom — 꺼져 있으면 화면 안에 안내만) */}
       <Stack.Screen name="chart-lines" options={{ title: "이동평균선", presentation: "modal" }} />
+      <Stack.Screen name="widget-settings" options={{ title: "위젯 설정", presentation: "modal" }} />
       {/* 첫 실행 안내 (3-24, 플래그 firstRun): 머리 없이 한 화면, 뒤로 가기·'시작하기'로 닫힌다 */}
       <Stack.Screen name="welcome" options={{ headerShown: false, presentation: "fullScreenModal", animation: "fade" }} />
+      {/* 관심 그룹·순서 (3-34, 기능 플래그 watchGroups — 꺼져 있으면 화면 안에 안내만) */}
+      <Stack.Screen name="watch-groups" options={{ title: "관심 그룹·순서" }} />
       {/* 비밀번호 바꾸기 (설정 > 계정) */}
       <Stack.Screen name="account/password" options={{ title: "비밀번호 바꾸기" }} />
       </Stack.Protected>
@@ -220,11 +230,17 @@ export default function RootLayout() {
                   <PriceAlertProvider>
                     <ThemedStatusBar />
                     <NotificationBridgeWithAuth />
+                    <MovementAlertBridge />
+                    {/* 3-38 새 공시 알림: 앱이 앞에 있을 때 5분마다 확인 (플래그 filingAlerts — 꺼져 있으면 요청 0) */}
+                    <FilingAlertBridge />
                     <WidgetBridge />
                     <ScreenTracker />
                     <HapticsBridge />
                     <ConnectionWordingBridge />
-                    <Navigator />
+                    {/* 관심 종목 그룹·순서 (3-34, 플래그 watchGroups): 서버 배치·기기 보기 상태. 꺼져 있으면 부르지 않고 꺼짐만 내려 준다 */}
+                    <WatchGroupsProvider>
+                      <Navigator />
+                    </WatchGroupsProvider>
                     <FirstRunAfterLogin />
                     <InitialPasswordSheet />
                   </PriceAlertProvider>

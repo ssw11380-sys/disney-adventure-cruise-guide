@@ -2687,8 +2687,8 @@
         "now": "2026-09-25T00:59:27.000Z",
         "KR": {
           "market": "KR",
-          "isTradingDay": true,
-          "isOpen": true,
+          "isTradingDay": false,
+          "isOpen": false,
           "opensAt": null,
           "closesAt": null,
           "source": "fallback"
@@ -2716,11 +2716,11 @@
           },
           "session": {
             "market": "KR",
-            "phase": "regular",
-            "label": "한국 정규장",
-            "open": true,
+            "phase": "holiday",
+            "label": "한국 휴장",
+            "open": false,
             "eligible": null,
-            "until": "2026-09-25T06:20:00.000Z"
+            "until": "2026-09-27T23:00:00.000Z"
           }
         },
         {
@@ -2765,27 +2765,27 @@
         }
       ],
       "chip": {
-        "label": "한국 장중",
-        "open": true,
-        "kr": true,
+        "label": "미국 주간거래",
+        "open": false,
+        "kr": false,
         "us": false,
-        "nextChangeAt": null
+        "nextChangeAt": "2026-09-25T08:00:00.000Z"
       },
-      "head": "한국 정규장 · 미국 주간거래",
+      "head": "미국 주간거래 · 한국 휴장",
       "polished": {
-        "label": "한국 장중",
-        "open": true,
-        "kr": true,
+        "label": "미국 주간거래",
+        "open": false,
+        "kr": false,
         "us": false,
         "nextChangeAt": "2026-09-25T08:00:00.000Z",
         "markets": [
           {
-            "market": "KR",
-            "label": "한국 장중"
-          },
-          {
             "market": "US",
             "label": "미국 주간거래"
+          },
+          {
+            "market": "KR",
+            "label": "한국 휴장"
           }
         ]
       }

@@ -22,7 +22,8 @@ jobs:
     timeout-minutes: 10
     services:
       postgres:
-        image: postgres:16
+        # Docker Hub 익명 받기 횟수 제한(toomanyrequests)으로 CI 가 서지 않아, 같은 공식 postgres:16 을 AWS 공개 미러에서 받는다 (2026-10-10)
+        image: public.ecr.aws/docker/library/postgres:16
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: stockbriefing_test
@@ -64,11 +65,19 @@ jobs:
       TZ: Asia/Seoul
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: stock-briefing/app/package-lock.json
+      - name: 배포 버전 증가 검사
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          node --test ../scripts/check-release-version.test.mjs
+          node ../scripts/check-release-version.mjs
       - run: npm ci --no-audit --no-fund
       - run: npm run typecheck
       - run: npm run lint

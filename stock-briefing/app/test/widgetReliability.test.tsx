@@ -1,6 +1,8 @@
 import React from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { holding, quote } from "./helpers";
+import { installSessionStorage, resetSessionForTests } from "@/lib/session";
 
 /**
  * 위젯 리뷰 5·6번과 1·2번의 연결 부분을 라이브러리의 실제 트리 빌더로 그려 본다 (고치기 전에 실패하는 재현 테스트).
@@ -25,7 +27,11 @@ vi.mock("react-native-android-widget", async () => {
     FlexWidget: flex.FlexWidget,
     TextWidget: text.TextWidget,
     ListWidget: list.ListWidget,
-    getWidgetInfo: async (name: string) => (shared.widgets[name] ?? []).map((b) => ({ widgetName: name, widgetId: 1, ...b })),
+    getWidgetInfo: async (name: string) => (shared.widgets[name] ?? []).map((b, index) => ({ widgetName: name, widgetId: index + 1, ...b })),
+    requestWidgetUpdateById: async ({ widgetName, widgetId, renderWidget }: { widgetName: string; widgetId: number; renderWidget: (i: unknown) => unknown }) => {
+      const box = shared.widgets[widgetName]?.[widgetId - 1];
+      if (box) shared.updates.push({ widgetName, rendered: await renderWidget({ widgetName, widgetId, ...box, screenInfo: {} }) });
+    },
     requestWidgetUpdate: async ({ widgetName, renderWidget }: { widgetName: string; renderWidget: (i: unknown) => unknown }) => {
       for (const box of shared.widgets[widgetName] ?? []) {
         shared.updates.push({ widgetName, rendered: await renderWidget({ widgetName, widgetId: 1, ...box, screenInfo: {} }) });
@@ -75,7 +81,7 @@ const words = (t: Tree) => nodes(t).filter((n) => n.type === "TextWidget").map((
 const dark = (r: unknown) => words(build((r as { dark: React.JSX.Element }).dark));
 
 const API = "https://server.test";
-const WIDGET_URL = `${API}/api/widget?indices=1&sessions=1&ui=2&ms=1`;
+const WIDGET_URL = `${API}/api/widget?indices=1&sessions=1&ui=2&ms=1&account=1`;
 const WIDE = { width: 420, height: 260 };
 /** 2026-09-24(목) KST 시각 */
 const T = (hm: string) => Date.parse(`2026-09-24T${hm}:00+09:00`);
@@ -120,10 +126,43 @@ const APP_CHIP = { ...KR_OPEN, nextChangeAt: "2026-09-24T11:00:00.001Z" };
 
 beforeEach(() => {
   store.clear();
+  // 앞 사례의 session_required 판정도 디스크와 함께 초기화한다 (뒤 무계정 서버 사례에 남기지 않게).
+  resetSessionForTests();
+  installSessionStorage(AsyncStorage);
   shared.widgets = {};
   shared.updates = [];
   vi.useFakeTimers();
   vi.setSystemTime(T("10:00"));
+});
+
+describe("빠른 갱신 플래그의 실제 조회 경로", () => {
+  it("휴장 백그라운드 실행도 새로 조회하고 플래그를 끄면 예전 생략을 유지한다", async () => {
+    const now = Date.parse("2026-10-10T13:00:00+09:00");
+    vi.setSystemTime(now);
+    const features = { widgetLeanLive: true };
+    const body = payload({ market: { label: "휴장", open: false, nextChangeAt: "2026-10-12T09:00:00+09:00" }, features });
+    const urls = serve(body);
+    await loadWidgetData({ stocks: true, briefings: true });
+    vi.setSystemTime(now + 15 * 60_000);
+    await runBriefingCheck();
+    expect(urls.filter(u => u === WIDGET_URL)).toHaveLength(2);
+    features.widgetLeanLive = false;
+    await loadWidgetData({ stocks: true, briefings: true });
+    const count = urls.filter(u => u === WIDGET_URL).length;
+    vi.setSystemTime(now + 30 * 60_000);
+    await runBriefingCheck();
+    expect(urls.filter(u => u === WIDGET_URL)).toHaveLength(count);
+  });
+  it("주기·크기 변경 조회는 1분 전후에 실제 서버 호출 여부가 달라진다", async () => {
+    const urls = serve(payload({ features: { widgetLeanLive: true } }));
+    await loadWidgetData({ stocks: true, briefings: true });
+    await vi.advanceTimersByTimeAsync(59_999);
+    await loadWidgetData({ stocks: true, briefings: true, reuse: true });
+    expect(urls.filter(u => u === WIDGET_URL)).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await loadWidgetData({ stocks: true, briefings: true, reuse: true });
+    expect(urls.filter(u => u === WIDGET_URL)).toHaveLength(2);
+  });
 });
 
 describe("리뷰 5: 앱에서 방금 본 숫자가 위젯에서 되돌아가지 않는다", () => {

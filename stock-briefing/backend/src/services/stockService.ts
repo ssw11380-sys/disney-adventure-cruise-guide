@@ -7,6 +7,7 @@ import { keepTossCalendar, realtimeOf, sessionAt, toQuoteSession, tradedInSessio
 import { wsCovered } from "./priceStream.js";
 import type { MarketStatus } from "../providers/market/calendar.js";
 import type { Db } from "../db/index.js";
+import { sameTimeOrder } from "../db/order.js";
 import type { CandlePeriod, CandleSeries, ListedStock, Quote, RegisteredStock, SessionPhase } from "../domain/types.js";
 import { CODE_RE, isKrCode, normalizeCode } from "../lib/codes.js";
 import { mapLimit } from "../lib/concurrency.js";
@@ -15,7 +16,7 @@ import { ConflictError, NotFoundError, ProviderError, TossLockedError, within } 
 import { seoulIso } from "../lib/time.js";
 import { toMarket } from "../providers/market/kisMaster.js";
 import type { MasterProvider, QuoteProvider, StockSearchProvider } from "../providers/market/types.js";
-import { applyFundamentals, type NaverFundamentals } from "../providers/market/fundamentals.js";
+import { applyFundamentalsBasis, type NaverFundamentals } from "../providers/market/fundamentals.js";
 import type { LiveTick, LiveTicks, QuickPriceSource, StockSessionFacts } from "../providers/market/tossRealtime.js";
 
 export interface StockServiceDeps {
@@ -40,6 +41,8 @@ export interface StockServiceDeps {
   now?: () => Date;
   /** 현재가 캐시 유효 시간(ms). 장중 새로고침 남발 방지용. */
   quoteCacheTtlMs?: number;
+  /** 별도 관심목록은 잔고에 넣지 않고 실시간 구독에만 합친다. */
+  extraLiveCodes?: () => Promise<string[]>;
 }
 
 export interface RegisterInput {
@@ -445,21 +448,23 @@ export class StockService {
     if (exists) throw new ConflictError(`이미 등록된 종목입니다: ${input.code}`);
     const listed = await this.resolveListed(input.code);
     const ts = seoulIso(this.now());
-    await this.deps.db
-      .insertInto("registered_stocks")
-      .values({
-        code: listed.code,
-        name: listed.name,
-        market: listed.market,
-        quantity: input.quantity ?? null,
-        avg_price: input.avgPrice ?? null,
-        memo: input.memo ?? null,
-        created_at: ts,
-        updated_at: ts,
-      })
-      .execute();
-    // 동기화에서 뺐던 종목을 다시 등록하면 다시 토스 계좌에서 맞춘다 (등록이 된 뒤에)
-    await this.setExcluded(listed.code, false);
+    // 등록과 제외 해제를 함께 저장한다. 한쪽만 실패해 재등록도 동기화도 막히는 상태를 남기지 않는다.
+    await this.deps.db.transaction().execute(async (trx) => {
+      await trx
+        .insertInto("registered_stocks")
+        .values({
+          code: listed.code,
+          name: listed.name,
+          market: listed.market,
+          quantity: input.quantity ?? null,
+          avg_price: input.avgPrice ?? null,
+          memo: input.memo ?? null,
+          created_at: ts,
+          updated_at: ts,
+        })
+        .execute();
+      await this.setExcluded(listed.code, false, trx);
+    });
     // 잠금 밖에서 지웠다가 다시 등록한 종목도 직접 넣은 수량·평단으로 평가 (잠긴 종목은 다음 동기화가 토스 값으로 맞춘다)
     if (!(await this.tossSynced()).has(listed.code)) await forgetTossDetail(this.deps.db, listed.code);
     void this.refreshQuotes([listed.code]); // 등록 직후 잔고 화면이 시세를 기다리지 않게 바로 받기 시작
@@ -467,11 +472,20 @@ export class StockService {
     return (await this.get(listed.code))!;
   }
 
-  /** 등록 종목 전체를 실시간 구독 목록으로 넘긴다 (기동 시, 등록/삭제/가져오기 후) */
+  private liveSync: Promise<void> = Promise.resolve();
+
+  /** 등록 종목을 먼저 두어 공급자 구독 상한에 닿아도 보유 시세를 우선한다. */
+  async streamCodes(): Promise<string[]> {
+    const [registered, extra] = await Promise.all([this.list(), this.deps.extraLiveCodes?.() ?? []]);
+    return [...new Set([...registered.map(s => s.code), ...extra])];
+  }
+
+  /** 동시 추가·삭제가 겹쳐도 오래된 구독 목록이 나중에 덮어쓰지 않는다. */
   async syncLive(): Promise<void> {
     if (!this.deps.live) return;
-    const codes = (await this.list()).map((s) => s.code);
-    this.deps.live.setCodes(codes);
+    const run = this.liveSync.then(async () => this.deps.live!.setCodes(await this.streamCodes()));
+    this.liveSync = run.catch(() => undefined);
+    return run;
   }
 
   update(code: string, input: UpdateInput): Promise<RegisteredStock> {
@@ -510,9 +524,12 @@ export class StockService {
   private async removeNow(code: string): Promise<{ tossExcluded: boolean }> {
     // 동기화가 오래 멈췄거나 자동 동기화가 꺼져 잠그지 않아도 마지막 토스 스냅샷에 있던 종목이면 뺀다 (다음 동기화가 지운 종목을 다시 넣지 않게)
     const synced = (await this.tossSynced(true)).has(code);
-    const r = await this.deps.db.deleteFrom("registered_stocks").where("code", "=", code).executeTakeFirst();
-    if (Number(r.numDeletedRows) === 0) throw new NotFoundError(`등록되지 않은 종목입니다: ${code}`);
-    if (synced) await this.setExcluded(code, true);
+    // 제외 저장이 실패하면 삭제도 취소해 사용자가 안전하게 다시 시도할 수 있게 한다.
+    await this.deps.db.transaction().execute(async (trx) => {
+      const r = await trx.deleteFrom("registered_stocks").where("code", "=", code).executeTakeFirst();
+      if (Number(r.numDeletedRows) === 0) throw new NotFoundError(`등록되지 않은 종목입니다: ${code}`);
+      if (synced) await this.setExcluded(code, true, trx);
+    });
     await this.syncLive();
     return { tossExcluded: synced };
   }
@@ -523,7 +540,8 @@ export class StockService {
   }
 
   async list(): Promise<RegisteredStock[]> {
-    const rows = await this.deps.db.selectFrom("registered_stocks").selectAll().orderBy("created_at", "asc").execute();
+    // 같은 등록 시각(토스 가져오기 한 번)은 넣은 차례 — 관심 그룹 순서(3-34)와 같은 차례 (db/order.ts)
+    const rows = await this.deps.db.selectFrom("registered_stocks").selectAll().orderBy("created_at", "asc").orderBy(sameTimeOrder(this.deps.db)).execute();
     return rows.map(toRegistered);
   }
 
@@ -574,14 +592,14 @@ export class StockService {
     return this.syncedFrom(v(SNAPSHOT_KEY), v(EXCLUDED_KEY), v(TOSS_DETAIL_KEY), evenIfStale);
   }
 
-  private async setExcluded(code: string, on: boolean): Promise<void> {
-    const row = await this.deps.db.selectFrom("meta").select("value").where("key", "=", EXCLUDED_KEY).executeTakeFirst();
+  private async setExcluded(code: string, on: boolean, db: Db = this.deps.db): Promise<void> {
+    const row = await db.selectFrom("meta").select("value").where("key", "=", EXCLUDED_KEY).executeTakeFirst();
     const set = new Set(parseCodes(row?.value));
     if (on === set.has(code)) return;
     if (on) set.add(code);
     else set.delete(code);
     const value = JSON.stringify([...set].sort());
-    await this.deps.db.insertInto("meta").values({ key: EXCLUDED_KEY, value }).onConflict((oc) => oc.column("key").doUpdateSet({ value })).execute();
+    await db.insertInto("meta").values({ key: EXCLUDED_KEY, value }).onConflict((oc) => oc.column("key").doUpdateSet({ value })).execute();
   }
 
   /**
@@ -668,6 +686,17 @@ export class StockService {
 
   // ── 시세 ────────────────────────────────────────────────────────
 
+  /** 관심·알림의 여러 종목도 실시간 보강을 한 번에 묶고 기존 시세 캐시를 공유한다. */
+  async quotesFor(codes: string[]): Promise<Map<string, Quote>> {
+    const unique = [...new Set(codes)];
+    if (!unique.length) return new Map();
+    const quick = await this.quickNow(unique);
+    const rows = await mapLimit(unique, 4, async code => {
+      try { return [code, await this.getQuote(code, { quick })] as const; } catch { return null; }
+    });
+    return new Map(rows.filter((r): r is readonly [string, Quote] => r !== null));
+  }
+
   /**
    * 한 종목 현재가 (상세 화면·/quote). 캐시가 ttl 안이면 그대로, 오래됐으면 마지막 값으로 답하고 뒤에서 새로 받는다.
    * 캐시가 없거나 fresh 면 새로 받을 때까지 기다린다. 새로 받지 못하면 마지막 값(stale), 그것도 없으면 던진다
@@ -713,7 +742,9 @@ export class StockService {
   private sharedQuote(code: string, q: Quote): Quote {
     if (q.stale) throw new ProviderError(this.deps.quotes.name, this.quoteErrors.get(code) ?? `${code} 시세 없음`);
     const { live: _live, stale: _stale, ...rest } = q;
-    return { ...rest, asOf: seoulIso(this.now()) };
+    // 재무 보강을 받은 시각(main #103 — 재무 캐시)도 뺀다: 주인 등록 종목은 시세를 받을 때마다 재무 캐시가 데워져 받은 시각으로 갈린다.
+    // 처음 보는 종목도 늘 같은 '수신 시각 미확인'이 되게 늘 null
+    return { ...rest, asOf: seoulIso(this.now()), ...(rest.fundamentalsBasis ? { fundamentalsBasis: { ...rest.fundamentalsBasis, receivedAt: null } } : {}) };
   }
 
   /** 현재가를 새로 받은 뒤(최대 8초) 잔고 목록 — 토스 대조처럼 지금 값이 필요할 때 */
@@ -1085,10 +1116,10 @@ export class StockService {
     if (!f) return quote;
     const needFundamentals = quote.per === null || quote.pbr === null || quote.dividendYieldPct === undefined;
     const [fund, fx] = await Promise.all([
-      needFundamentals ? f.get(quote.code, market).catch(() => null) : Promise.resolve(null),
+      needFundamentals ? f.getWithStatus(quote.code, market).catch(() => ({ value: null, receivedAt: null, refreshFailed: true })) : Promise.resolve(null),
       quote.currency === "USD" ? f.usdKrw().catch(() => null) : Promise.resolve(null),
     ]);
-    let out = applyFundamentals(quote, fund);
+    let out = fund ? applyFundamentalsBasis(quote, fund) : quote;
     if (quote.currency === "USD") {
       const rate = fx ?? (quote.priceKrw && quote.price ? Math.round((quote.priceKrw / quote.price) * 100) / 100 : null);
       // 원화 환산은 함께 보여 주는 환율(fxRate)로 — 공급자가 준 값(공식 API 매매기준율 등)과 섞이면 같은 화면에서 숫자가 어긋난다

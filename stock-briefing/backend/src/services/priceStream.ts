@@ -77,6 +77,8 @@ export interface PriceStreamDeps {
    */
   webOff?: (codes: string[]) => Promise<Set<string>>;
   closedPollMs?: number;
+  /** 인증된 앱의 첫 접속·마지막 이탈. 조회는 별도 작업으로 시작하고 스트림을 기다리게 하지 않는다. */
+  onActiveChange?: (active: boolean) => void;
   log?: ChainLogger;
 }
 
@@ -108,6 +110,7 @@ export class PriceStream {
   }
 
   attach(socket: StreamSocket, access?: StreamAccess): void {
+    if (this.clients.has(socket)) return;
     this.clients.add(socket);
     if (access) this.access.set(socket, access);
     const drop = () => this.detach(socket);
@@ -121,7 +124,10 @@ export class PriceStream {
         /* 모르는 메시지는 무시 */
       }
     });
-    if (this.clients.size === 1) this.startTimers();
+    if (this.clients.size === 1) {
+      this.startTimers();
+      this.deps.onActiveChange?.(true);
+    }
     void this.sendSnapshot(socket);
   }
 
@@ -142,7 +148,10 @@ export class PriceStream {
   private detach(socket: StreamSocket): void {
     this.access.delete(socket);
     if (!this.clients.delete(socket)) return;
-    if (this.clients.size === 0) this.stopTimers();
+    if (this.clients.size === 0) {
+      this.stopTimers();
+      this.deps.onActiveChange?.(false);
+    }
   }
 
   /** 세션이 끝난 연결을 닫는다 (먼저 목록에서 빼서 닫는 동안 더 보내지 않는다) */
@@ -198,6 +207,7 @@ export class PriceStream {
         /* ignore */
       }
     }
+    if (this.clients.size > 0) this.deps.onActiveChange?.(false);
     this.clients.clear();
     this.access.clear();
   }
@@ -268,7 +278,7 @@ export class PriceStream {
    * 앱에 알림만 보낸다 (예: 잔고가 바뀌었으니 다시 받아 가라).
    * reconcile: 토스 대조 기록이 새로 생겼다 → 앱이 '숫자 기준' 배지를 다시 받는다 (3-32, 플래그 numberBasis 일 때만 보냄). 예전 앱은 모르는 종류라 무시한다
    */
-  notify(type: "holdings" | "reconcile"): void {
+  notify(type: "holdings" | "reconcile" | "account"): void {
     this.broadcast(JSON.stringify({ type, at: Date.now() }));
   }
 
