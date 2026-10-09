@@ -19,11 +19,13 @@ const h = vi.hoisted(() => ({
   announce: vi.fn(),
   view: { selected: "all", collapsed: [] } as { selected: unknown; collapsed: unknown[] },
   setView: vi.fn(),
+  member: false,
 }));
 vi.mock("react-native", () => ({ Alert: { alert: h.alert }, AccessibilityInfo: { announceForAccessibility: h.announce } }));
 vi.mock("@/api/hooks", () => ({ useApi: () => h.api, useFeature: (k: string, f = false) => h.flags[k] ?? f }));
 vi.mock("@/lib/settings", () => ({ useSettings: () => ({ apiUrl: "http://x", watchView: h.view, setWatchView: h.setView, sort: "created", afterCost: false }) }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: async () => null, setItem: async () => undefined, removeItem: async () => undefined } }));
+vi.mock("@/lib/account", () => ({ useAccountView: () => ({ on: h.member, session: null, member: h.member }) }));
 
 const { WatchGroupsProvider } = await import("@/components/WatchGroupsProvider");
 const { useWatchGroups, WatchOpQueue, WATCH_GROUPS_OFF } = await import("@/lib/watchGroupsQuery");
@@ -61,6 +63,7 @@ let client: QueryClient;
 beforeEach(() => {
   cleanupRenders();
   h.flags = { watchGroups: true };
+  h.member = false;
   h.api = { watchGroups: vi.fn(async () => LAYOUT), moveWatchStock: vi.fn(), createWatchGroup: vi.fn(), renameWatchGroup: vi.fn(), deleteWatchGroup: vi.fn(), orderWatchGroups: vi.fn() };
   h.alert.mockReset();
   h.announce.mockReset();
@@ -91,6 +94,14 @@ const cache = () => client.getQueryData<Layout>(["http://x", "watchGroups"]);
 describe("제공자: 꺼짐 · 켬 · 예전 서버", () => {
   it("꺼짐: 서버를 부르지 않고 꺼짐 값", async () => {
     h.flags = {};
+    const seen = mount();
+    await settle();
+    expect(seen.value).toBe(WATCH_GROUPS_OFF);
+    expect(h.api.watchGroups).not.toHaveBeenCalled();
+  });
+
+  it("주인 아닌 계정(계정 A단계)은 플래그가 켜져 있어도 꺼짐 — 서버를 부르지 않음 (관심 탭과 같은 규칙)", async () => {
+    h.member = true;
     const seen = mount();
     await settle();
     expect(seen.value).toBe(WATCH_GROUPS_OFF);

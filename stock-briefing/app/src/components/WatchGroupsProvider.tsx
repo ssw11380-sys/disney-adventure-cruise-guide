@@ -4,6 +4,7 @@ import { AccessibilityInfo, Alert } from "react-native";
 import { ApiRequestError } from "@/api/client";
 import { useApi, useFeature } from "@/api/hooks";
 import type { RegisteredWithQuote } from "@/api/types";
+import { useAccountView } from "@/lib/account";
 import { useSettings } from "@/lib/settings";
 import { applyToLayout, cleanGroupName, dropItems, normalizeView, rowStamps, saveFailText, stockSetChange, WATCH_OFF, type WatchLayout, type WatchOp } from "@/lib/watchGroups";
 import { WatchGroupsContext, WatchOpQueue, WATCH_GROUPS_OFF, type NameSave, type WatchGroupsState, type WatchOps, type WatchStatus } from "@/lib/watchGroupsQuery";
@@ -14,7 +15,8 @@ const bare = (l: WatchLayout): WatchLayout => ({ on: l.on, groups: l.groups, ite
 
 /**
  * 관심 종목 그룹·순서 (3-34, 기능 플래그 watchGroups) 제공자 — 루트 레이아웃이 화면 전체를 감싼다.
- *  - 플래그가 꺼져 있으면 서버를 부르지 않고(쿼리 enabled: false) 아래에 꺼짐(WATCH_GROUPS_OFF)을 내려 준다 → 잔고·메뉴·밀기·화면 읽기 동작이 지금 그대로
+ *  - 플래그가 꺼져 있으면 서버를 부르지 않고(쿼리 enabled: false) 아래에 꺼짐(WATCH_GROUPS_OFF)을 내려 준다 → 잔고·메뉴·밀기·화면 읽기 동작이 지금 그대로.
+ *    계정 A단계의 주인 아닌 계정(개인 종목이 없음)도 꺼짐으로 본다 — 관심 탭(watchlistSteps)과 같은 규칙
  *  - 켜져 있으면 /api/watch-groups 배치를 받는다 (60초 동안 새것으로 보고, 앱으로 돌아올 때 다시 · 기기 캐시에 저장해 켤 때 바로 — lib/queryPersist).
  *    예전 서버의 404 는 꺼짐, 배치의 on:false(이 계정은 쓸 수 없음 등)도 꺼짐처럼
  *  - 조작은 lib/watchGroupsQuery 의 저장 차례로: 누르는 즉시 캐시를 바꾸고(lib/watchGroups applyToLayout — 서버와 같은 규칙) 차례로 보낸 뒤 마지막 응답으로 맞춘다.
@@ -25,7 +27,8 @@ const bare = (l: WatchLayout): WatchLayout => ({ on: l.on, groups: l.groups, ite
  *  - 고른 칩·접은 그룹은 기기 설정(settings.watchView). 서버에서 받은 배치로 정리한 값(지운 그룹 → '전체')이 저장값과 다르면 한 번 다시 저장한다
  */
 export function WatchGroupsProvider({ children }: { children: React.ReactNode }) {
-  const flag = useFeature("watchGroups", false);
+  const { member } = useAccountView();
+  const flag = useFeature("watchGroups", false) && !member;
   const api = useApi();
   const qc = useQueryClient();
   const { apiUrl, watchView, setWatchView } = useSettings();
