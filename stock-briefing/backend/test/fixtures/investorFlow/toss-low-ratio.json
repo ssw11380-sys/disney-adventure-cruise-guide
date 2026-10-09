@@ -1,0 +1,71 @@
+{
+ "A040300": {
+  "result": {
+   "body": [
+    {
+     "baseDate": "2026-09-28",
+     "netIndividualsBuyVolume": -3216,
+     "netForeignerBuyVolume": 3384,
+     "netInstitutionBuyVolume": 0,
+     "netOtherCorporationBuyVolume": 0,
+     "foreignerHoldingVolume": 77605,
+     "foreignerLimitVolume": 4767698,
+     "foreignerRatio": 0.16,
+     "base": 2190,
+     "close": 2260,
+     "inMarketTime": false,
+     "hasIndividual": true,
+     "hasInstitution": true,
+     "hasForeigner": true,
+     "updatedAt": "2026-09-28T20:17:58.000+09:00"
+    }
+   ]
+  }
+ },
+ "A036630": {
+  "result": {
+   "body": [
+    {
+     "baseDate": "2026-09-28",
+     "netIndividualsBuyVolume": 135,
+     "netForeignerBuyVolume": -135,
+     "netInstitutionBuyVolume": 0,
+     "netOtherCorporationBuyVolume": 0,
+     "foreignerHoldingVolume": 45150,
+     "foreignerLimitVolume": 6860000,
+     "foreignerRatio": 0.32,
+     "base": 7770,
+     "close": 7830,
+     "inMarketTime": false,
+     "hasIndividual": true,
+     "hasInstitution": true,
+     "hasForeigner": true,
+     "updatedAt": "2026-09-28T20:17:52.000+09:00"
+    }
+   ]
+  }
+ },
+ "A091810": {
+  "result": {
+   "body": [
+    {
+     "baseDate": "2026-09-28",
+     "netIndividualsBuyVolume": -27945,
+     "netForeignerBuyVolume": 28950,
+     "netInstitutionBuyVolume": -5,
+     "netOtherCorporationBuyVolume": -1000,
+     "foreignerHoldingVolume": 447865,
+     "foreignerLimitVolume": 51042835,
+     "foreignerRatio": 0.44,
+     "base": 2585,
+     "close": 2655,
+     "inMarketTime": false,
+     "hasIndividual": true,
+     "hasInstitution": true,
+     "hasForeigner": true,
+     "updatedAt": "2026-09-28T20:18:47.000+09:00"
+    }
+   ]
+  }
+ }
+}

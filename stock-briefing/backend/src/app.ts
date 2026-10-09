@@ -64,6 +64,8 @@ import { BriefingStatusService } from "./services/briefingStatus.js";
 import { priceAlertRoutes } from "./routes/priceAlerts.js";
 import { watchlistRoutes } from "./routes/watchlist.js";
 import { WatchlistService } from "./services/watchlistService.js";
+import { InvestorFlowService } from "./services/investorFlowService.js";
+import { investorFlowAdminRoutes, investorFlowRoutes } from "./routes/investorFlow.js";
 
 export interface BuildAppOptions {
   config: AppConfig;
@@ -587,6 +589,10 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
   await app.register(tradeRecordRoutes, { prefix: "/api", service: tradeRecords, now });
   await app.register(tradeRecordAdminRoutes, { prefix: "/api/admin/trade-records", service: tradeRecords });
   await app.register(scoreRoutes, { prefix: "/api/scores", service: indicatorScores });
+  // 수급 탭 (3-33, 플래그 flowTab): 공용 경로(시장 자료) + 관리 경로(토스 Open API 대조 원자료). 출처 묶음이 없으면(테스트 기본) 404
+  const investorFlow = new InvestorFlowService({ features, sources: opts.providers.investorFlowSources ?? null, now, log });
+  await app.register(investorFlowRoutes, { prefix: "/api/investor-flow", service: investorFlow });
+  await app.register(investorFlowAdminRoutes, { prefix: "/api/admin/investor-flow", service: investorFlow });
   await app.register(appErrorRoutes, { prefix: "/api/app-errors", service: appErrors });
   await app.register(appErrorAdminRoutes, { prefix: "/api/admin/app-errors", service: appErrors });
   // running: 종목 브리핑과 이어지는 계좌 브리핑·시장 요약을 만드는 동안 (앱 백그라운드 알림이 기다렸다가 한 번에 알리게)

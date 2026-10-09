@@ -587,6 +587,28 @@ export function useIndicatorScores(code: string, enabled: boolean) {
   });
 }
 
+/**
+ * 수급 탭 (3-33, 플래그 flowTab — 탭을 연 한국 종목만 enabled). 서버가 장 시간 10분·그 밖 60분 캐시하므로 5분 동안 새로 묻지 않는다.
+ * 404(플래그 꺼짐·예전 서버)는 오류가 아니라 없음(null)
+ */
+export function useInvestorFlow(code: string, enabled: boolean) {
+  const api = useApi();
+  return useQuery({
+    queryKey: useKey("investorFlow", code),
+    queryFn: async () => {
+      try {
+        return await api.investorFlow(code);
+      } catch (e) {
+        if (e instanceof ApiRequestError && e.status === 404) return null;
+        throw e;
+      }
+    },
+    enabled: enabled && !!code,
+    staleTime: 5 * 60_000,
+    retry: 0,
+  });
+}
+
 export function useStockNews(code: string, enabled = true) {
   const api = useApi();
   return useQuery({ queryKey: useKey("news", code), queryFn: () => api.getStockNews(code), enabled, staleTime: 5 * 60_000 });

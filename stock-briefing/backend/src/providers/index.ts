@@ -34,6 +34,7 @@ import { defaultValueSources, type ValueSources } from "../services/valueScoreSe
 import type { HoldingEventSources } from "../services/holdingEvents.js";
 import { NasdaqScreener } from "./market/nasdaqScreener.js";
 import { defaultKrValueSources, type KrValueSources } from "../services/krValueService.js";
+import { defaultInvestorFlowSources, type InvestorFlowSources } from "../services/investorFlowService.js";
 
 export interface Providers {
   quotes: QuoteProvider;
@@ -83,6 +84,11 @@ export interface Providers {
   /** 한국 간이 가치 출처 (네이버 재무 요약 + 업종 구성 종목, 3-44 3단계). 없으면 한국 가치 줄은 '지금 계산하지 않음' */
   krValueSources?: KrValueSources | null;
   investorFlow: InvestorFlowProvider | null; // KIS 키 없으면 null
+  /**
+   * 종목 상세 '수급' 탭 출처 묶음 (3-33 — 토스 웹 공개 자료 → 네이버, 토스 Open API 는 대조만). 없으면(테스트 기본) 경로 404 · 외부 호출 0.
+   * 브리핑 수집기의 investorFlow(KIS·토스 Open API)와 따로 둔다 — 화면 자료는 공개 자료로만
+   */
+  investorFlowSources?: InvestorFlowSources | null;
   generator: TextGenerator;
   dart: DartProvider | null;
   push: PushSender;
@@ -177,6 +183,8 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
       naverExDividend: (code) => fundamentals.exDividendAt(code),
     },
     investorFlow: kis ?? tossOpenApi,
+    // 수급 탭 (3-33): 토스 웹 → 네이버 (로그인 없음). 토스 Open API 는 그 인스턴스만 대조에 (KIS 는 쓰지 않음)
+    investorFlowSources: defaultInvestorFlowSources(tossOpenApi),
     generator,
     dart,
     push: new ExpoPushSender(cfg.EXPO_ACCESS_TOKEN || undefined),

@@ -1,0 +1,354 @@
+{
+ "A252670": {
+  "info": {
+   "result": {
+    "code": "A252670",
+    "symbol": "252670",
+    "name": "KODEX 200선물인버스2X",
+    "group": {
+     "code": "EF",
+     "displayName": "ETF"
+    },
+    "sharesOutstanding": 10762500000
+   }
+  },
+  "trend": {
+   "result": {
+    "body": [
+     {
+      "baseDate": "2026-09-28",
+      "netIndividualsBuyVolume": -872471391,
+      "netForeignerBuyVolume": 257554880,
+      "netInstitutionBuyVolume": 614820059,
+      "netOtherCorporationBuyVolume": 3362604,
+      "foreignerHoldingVolume": 641855686,
+      "foreignerLimitVolume": 10762500000,
+      "foreignerRatio": 5.96,
+      "base": 67,
+      "close": 73,
+      "inMarketTime": false,
+      "hasIndividual": true,
+      "hasInstitution": true,
+      "hasForeigner": true,
+      "updatedAt": "2026-09-28T20:16:03.000+09:00"
+     },
+     {
+      "baseDate": "2026-09-23",
+      "netIndividualsBuyVolume": 208710100,
+      "netForeignerBuyVolume": 38624726,
+      "netInstitutionBuyVolume": -249717062,
+      "netOtherCorporationBuyVolume": 2148986,
+      "foreignerHoldingVolume": 540024946,
+      "foreignerLimitVolume": 10582500000,
+      "foreignerRatio": 5.1,
+      "base": 70,
+      "close": 67,
+      "inMarketTime": false,
+      "hasIndividual": true,
+      "hasInstitution": true,
+      "hasForeigner": true,
+      "updatedAt": "2026-09-23T20:16:05.000+09:00"
+     },
+     {
+      "baseDate": "2026-09-22",
+      "netIndividualsBuyVolume": 222390284,
+      "netForeignerBuyVolume": 72234996,
+      "netInstitutionBuyVolume": -295573198,
+      "netOtherCorporationBuyVolume": 1396497,
+      "foreignerHoldingVolume": 481948017,
+      "foreignerLimitVolume": 10612500000,
+      "foreignerRatio": 4.54,
+      "base": 69,
+      "close": 70,
+      "inMarketTime": false,
+      "hasIndividual": true,
+      "hasInstitution": true,
+      "hasForeigner": true,
+      "updatedAt": "2026-09-22T20:16:04.000+09:00"
+     },
+     {
+      "baseDate": "2026-09-21",
+      "netIndividualsBuyVolume": 225295195,
+      "netForeignerBuyVolume": -20329274,
+      "netInstitutionBuyVolume": -218003681,
+      "netOtherCorporationBuyVolume": 11026147,
+      "foreignerHoldingVolume": 404451851,
+      "foreignerLimitVolume": 11052500000,
+      "foreignerRatio": 3.66,
+      "base": 72,
+      "close": 69,
+      "inMarketTime": false,
+      "hasIndividual": true,
+      "hasInstitution": true,
+      "hasForeigner": true,
+      "updatedAt": "2026-09-21T20:16:05.000+09:00"
+     }
+    ]
+   }
+  }
+ },
+ "A122630": {
+  "info": {
+   "result": {
+    "code": "A122630",
+    "symbol": "122630",
+    "name": "KODEX 레버리지",
+    "group": {
+     "code": "EF",
+     "displayName": "ETF"
+    },
+    "sharesOutstanding": 51400000
+   }
+  },
+  "trend": {
+   "result": {
+    "body": [
+     {
+      "baseDate": "2026-09-28",
+      "netIndividualsBuyVolume": 1492028,
+      "netForeignerBuyVolume": 82757,
+      "netInstitutionBuyVolume": -1604210,
+      "netOtherCorporationBuyVolume": 26572,
+      "foreignerHoldingVolume": 276322,
+      "foreignerLimitVolume": 51400000,
+      "foreignerRatio": 0.54,
+      "base": 116975,
+      "close": 109370,
+      "inMarketTime": false,
+      "hasIndividual": true,
+      "hasInstitution": true,
+      "hasForeigner": true,
+      "updatedAt": "2026-09-28T20:15:53.000+09:00"
+     },
+     {
+      "baseDate": "2026-09-23",
+      "netIndividualsBuyVolume": -145793,
+      "netForeignerBuyVolume": 9444,
+      "netInstitutionBuyVolume": 138367,
+      "netOtherCorporationBuyVolume": -3693,
+      "foreignerHoldingVolume": 244150,
+      "foreignerLimitVolume": 50850000,
+      "foreignerRatio": 0.48,
+      "base": 114400,
+      "close": 116975,
+      "inMarketTime": false,
+      "hasIndividual": true,
+      "hasInstitution": true,
+      "hasForeigner": true,
+      "updatedAt": "2026-09-23T20:15:56.000+09:00"
+     },
+     {
+      "baseDate": "2026-09-22",
+      "netIndividualsBuyVolume": 154724,
+      "netForeignerBuyVolume": 285698,
+      "netInstitutionBuyVolume": -433508,
+      "netOtherCorporationBuyVolume": -5246,
+      "foreignerHoldingVolume": 565878,
+      "foreignerLimitVolume": 53550000,
+      "foreignerRatio": 1.06,
+      "base": 114060,
+      "close": 114400,
+      "inMarketTime": false,
+      "hasIndividual": true,
+      "hasInstitution": true,
+      "hasForeigner": true,
+      "updatedAt": "2026-09-22T20:15:55.000+09:00"
+     },
+     {
+      "baseDate": "2026-09-21",
+      "netIndividualsBuyVolume": -791562,
+      "netForeignerBuyVolume": 52936,
+      "netInstitutionBuyVolume": 839556,
+      "netOtherCorporationBuyVolume": -95692,
+      "foreignerHoldingVolume": 341798,
+      "foreignerLimitVolume": 52050000,
+      "foreignerRatio": 0.66,
+      "base": 109265,
+      "close": 114060,
+      "inMarketTime": false,
+      "hasIndividual": true,
+      "hasInstitution": true,
+      "hasForeigner": true,
+      "updatedAt": "2026-09-21T20:15:56.000+09:00"
+     }
+    ]
+   }
+  }
+ },
+ "A233740": {
+  "info": {
+   "result": {
+    "code": "A233740",
+    "symbol": "233740",
+    "name": "KODEX 코스닥150레버리지",
+    "group": {
+     "code": "EF",
+     "displayName": "ETF"
+    },
+    "sharesOutstanding": 487800000
+   }
+  },
+  "trend": {
+   "result": {
+    "body": [
+     {
+      "baseDate": "2026-09-28",
+      "netIndividualsBuyVolume": -5743580,
+      "netForeignerBuyVolume": 557953,
+      "netInstitutionBuyVolume": 5269464,
+      "netOtherCorporationBuyVolume": -54386,
+      "foreignerHoldingVolume": 1956022,
+      "foreignerLimitVolume": 487800000,
+      "foreignerRatio": 0.4,
+      "base": 6980,
+      "close": 6960,
+      "inMarketTime": false,
+      "hasIndividual": true,
+      "hasInstitution": true,
+      "hasForeigner": true,
+      "updatedAt": "2026-09-28T20:16:01.000+09:00"
+     },
+     {
+      "baseDate": "2026-09-23",
+      "netIndividualsBuyVolume": -6810672,
+      "netForeignerBuyVolume": 183073,
+      "netInstitutionBuyVolume": 6652219,
+      "netOtherCorporationBuyVolume": -6461,
+      "foreignerHoldingVolume": 1504564,
+      "foreignerLimitVolume": 497100000,
+      "foreignerRatio": 0.3,
+      "base": 6775,
+      "close": 6980,
+      "inMarketTime": false,
+      "hasIndividual": true,
+      "hasInstitution": true,
+      "hasForeigner": true,
+      "updatedAt": "2026-09-23T20:16:03.000+09:00"
+     },
+     {
+      "baseDate": "2026-09-22",
+      "netIndividualsBuyVolume": 2839683,
+      "netForeignerBuyVolume": -319587,
+      "netInstitutionBuyVolume": -2285338,
+      "netOtherCorporationBuyVolume": -360480,
+      "foreignerHoldingVolume": 1382411,
+      "foreignerLimitVolume": 493200000,
+      "foreignerRatio": 0.28,
+      "base": 6905,
+      "close": 6775,
+      "inMarketTime": false,
+      "hasIndividual": true,
+      "hasInstitution": true,
+      "hasForeigner": true,
+      "updatedAt": "2026-09-22T20:16:02.000+09:00"
+     },
+     {
+      "baseDate": "2026-09-21",
+      "netIndividualsBuyVolume": -7277244,
+      "netForeignerBuyVolume": 1090997,
+      "netInstitutionBuyVolume": 6244422,
+      "netOtherCorporationBuyVolume": -4536,
+      "foreignerHoldingVolume": 1851158,
+      "foreignerLimitVolume": 503600000,
+      "foreignerRatio": 0.37,
+      "base": 6695,
+      "close": 6905,
+      "inMarketTime": false,
+      "hasIndividual": true,
+      "hasInstitution": true,
+      "hasForeigner": true,
+      "updatedAt": "2026-09-21T20:16:03.000+09:00"
+     }
+    ]
+   }
+  }
+ },
+ "A069500": {
+  "info": {
+   "result": {
+    "code": "A069500",
+    "symbol": "069500",
+    "name": "KODEX 200",
+    "group": {
+     "code": "EF",
+     "displayName": "ETF"
+    },
+    "sharesOutstanding": 228950000
+   }
+  },
+  "trend": {
+   "result": {
+    "body": [
+     {
+      "baseDate": "2026-09-28",
+      "netIndividualsBuyVolume": 623855,
+      "netForeignerBuyVolume": 44222,
+      "netInstitutionBuyVolume": -689176,
+      "netOtherCorporationBuyVolume": 3392,
+      "foreignerHoldingVolume": 51640161,
+      "foreignerLimitVolume": 228950000,
+      "foreignerRatio": 22.56,
+      "base": 113145,
+      "close": 109500,
+      "inMarketTime": false,
+      "hasIndividual": true,
+      "hasInstitution": true,
+      "hasForeigner": true,
+      "updatedAt": "2026-09-28T20:15:51.000+09:00"
+     },
+     {
+      "baseDate": "2026-09-23",
+      "netIndividualsBuyVolume": -156736,
+      "netForeignerBuyVolume": 31505,
+      "netInstitutionBuyVolume": 143503,
+      "netOtherCorporationBuyVolume": -16286,
+      "foreignerHoldingVolume": 51090011,
+      "foreignerLimitVolume": 230250000,
+      "foreignerRatio": 22.19,
+      "base": 111880,
+      "close": 113145,
+      "inMarketTime": false,
+      "hasIndividual": true,
+      "hasInstitution": true,
+      "hasForeigner": true,
+      "updatedAt": "2026-09-23T20:15:54.000+09:00"
+     },
+     {
+      "baseDate": "2026-09-22",
+      "netIndividualsBuyVolume": -150476,
+      "netForeignerBuyVolume": 7294,
+      "netInstitutionBuyVolume": 141556,
+      "netOtherCorporationBuyVolume": 2498,
+      "foreignerHoldingVolume": 50819177,
+      "foreignerLimitVolume": 230700000,
+      "foreignerRatio": 22.03,
+      "base": 111700,
+      "close": 111880,
+      "inMarketTime": false,
+      "hasIndividual": true,
+      "hasInstitution": true,
+      "hasForeigner": true,
+      "updatedAt": "2026-09-22T20:15:53.000+09:00"
+     },
+     {
+      "baseDate": "2026-09-21",
+      "netIndividualsBuyVolume": -526879,
+      "netForeignerBuyVolume": -288953,
+      "netInstitutionBuyVolume": 873167,
+      "netOtherCorporationBuyVolume": -55829,
+      "foreignerHoldingVolume": 50751715,
+      "foreignerLimitVolume": 230900000,
+      "foreignerRatio": 21.98,
+      "base": 109285,
+      "close": 111700,
+      "inMarketTime": false,
+      "hasIndividual": true,
+      "hasInstitution": true,
+      "hasForeigner": true,
+      "updatedAt": "2026-09-21T20:15:54.000+09:00"
+     }
+    ]
+   }
+  }
+ }
+}
