@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { createMigratedDb, migrate } from "../src/db/index.js";
+import { MIGRATION_VERSIONS } from "../src/db/migrate.js";
 import type { Database } from "../src/db/schema.js";
 import { TossOpenApiProvider, type TossHolding } from "../src/providers/market/tossOpenApi.js";
 import { StockService } from "../src/services/stockService.js";
@@ -582,6 +583,12 @@ describe("BH-48 Postgres 에서 수량·평단 정밀도", () => {
   const versionsOf = async (db: Kysely<Database>) =>
     (await sql<{ version: number }>`select version from schema_version order by version`.execute(db)).rows.map((r) => Number(r.version));
 
+  /** 기존 표를 바꾸는(alter table) SQL 이 17(3-34 관심 그룹 칸 둘)·19(계정 — 푸시 기기에 비어 있을 수 있는 세션 칸 하나)뿐인지 */
+  const onlyKnownAlters = (sqls: string[]) =>
+    sqls
+      .filter((s) => /alter table/i.test(s))
+      .every((s) => /alter table "?registered_stocks"? add column "?watch_(group_id|position)"? integer/i.test(s) || /alter table "?devices"? add column "?session_id"? integer/i.test(s));
+
   it("quantity·avg_price 를 double precision(8바이트)으로 바꾸는 마이그레이션이 있다 (real 은 4바이트라 16.123456 → 16.123455)", async () => {
     const { db, sqls } = recordingPostgres();
     await migrate(db, "postgres");
@@ -605,7 +612,7 @@ describe("BH-48 Postgres 에서 수량·평단 정밀도", () => {
     const { db, sqls, inserted } = recordingPostgres([1, 2, 3, 4, 5]);
     await migrate(db, "postgres");
     // 이후 새 표와 최신 보고서 조회 색인(12)이 더해졌다. 이전 자료를 변경하는 SQL은 추가하지 않는다.
-    expect(inserted).toEqual([6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
+    expect(inserted).toEqual([6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
     expect(sqls.some((s) => /create table.*"?account_briefings"?/i.test(s))).toBe(false); // 5 는 다시 돌지 않는다
     expect(sqls.some((s) => /create table.*"?market_summaries"?/i.test(s))).toBe(true);
     expect(sqls.some((s) => /create table.*"?account_snapshots"?/i.test(s))).toBe(true);
@@ -620,14 +627,14 @@ describe("BH-48 Postgres 에서 수량·평단 정밀도", () => {
     // 새 Postgres DB 는 1~15 를 한 번씩 기록한다
     const fresh = recordingPostgres();
     await migrate(fresh.db, "postgres");
-    expect(fresh.inserted).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
+    expect(fresh.inserted).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
     await fresh.db.destroy();
   });
 
   it("새 SQLite DB 는 버전 1~15 를 한 번씩 기록하고, 6만 누락된 DB도 기존 자료를 보존해 올라간다", async () => {
     const db = await createMigratedDb(":memory:");
     try {
-      expect(await versionsOf(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
+      expect(await versionsOf(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
       // 버전 5 까지만 올라간 운영 DB 흉내: 계좌 브리핑·보유 종목이 이미 있다
       await sql`delete from schema_version where version = 6`.execute(db);
       await db
@@ -640,7 +647,7 @@ describe("BH-48 Postgres 에서 수량·평단 정밀도", () => {
         .execute();
       await migrate(db, "sqlite");
       await migrate(db, "sqlite"); // 두 번 돌아도 안전
-      expect(await versionsOf(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
+      expect(await versionsOf(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
       expect(await db.selectFrom("account_briefings").select(["briefing_date", "session"]).execute()).toEqual([{ briefing_date: "2026-09-24", session: "morning" }]);
       expect(await db.selectFrom("registered_stocks").select(["quantity", "avg_price"]).where("code", "=", "VRT").executeTakeFirst()).toEqual({ quantity: 16.123456, avg_price: 201234.57 });
     } finally {
@@ -651,34 +658,34 @@ describe("BH-48 Postgres 에서 수량·평단 정밀도", () => {
   it("가격 알림 조건 표(10, 3-29)는 새 표만 만들고, 값은 Postgres 에서 double precision · (종목·종류·값) 유일 색인", async () => {
     const { db, sqls, inserted } = recordingPostgres([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     await migrate(db, "postgres");
-    expect(inserted).toEqual([10, 11, 12, 13, 14, 15, 16, 17]);
+    expect(inserted).toEqual([10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
     const create = sqls.find((s) => /create table.*"?price_alerts"?/i.test(s));
     expect(create).toMatch(/"?value"?\s+double precision/i);
     expect(create).toMatch(/"?fired_value"?\s+double precision/i);
     expect(sqls.some((s) => /create unique index if not exists uq_price_alerts_rule on price_alerts \(code, kind, value\)/i.test(s))).toBe(true);
-    expect(sqls.some((s) => /alter table/i.test(s) && !/add column "?watch_(group_id|position)"?/i.test(s))).toBe(false); // 17(3-34)는 관심 그룹 칸 둘만 더한다
+    expect(onlyKnownAlters(sqls)).toBe(true); // 기존 표를 바꾸는 것은 17(3-34 관심 그룹 칸 둘)·19(계정 — 푸시 기기의 세션 칸 하나)뿐
     await db.destroy();
   });
 
   it("가치 지표 표(11, 3-44 2단계)는 새 표 두 개만 만들고(재무 · 비교 기준), 종목·(시장·기준일) 유일 색인", async () => {
     const { db, sqls, inserted } = recordingPostgres([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     await migrate(db, "postgres");
-    expect(inserted).toEqual([11, 12, 13, 14, 15, 16, 17]);
+    expect(inserted).toEqual([11, 12, 13, 14, 15, 16, 17, 18, 19]);
     expect(sqls.some((s) => /create table.*"?value_fundamentals"?/i.test(s))).toBe(true);
     expect(sqls.some((s) => /create table.*"?value_references"?/i.test(s))).toBe(true);
     expect(sqls.some((s) => /create unique index if not exists uq_value_fundamentals_code on value_fundamentals \(code\)/i.test(s))).toBe(true);
     expect(sqls.some((s) => /create unique index if not exists uq_value_references_market_date on value_references \(market, ref_date\)/i.test(s))).toBe(true);
-    expect(sqls.some((s) => /alter table/i.test(s) && !/add column "?watch_(group_id|position)"?/i.test(s))).toBe(false); // 17(3-34)는 관심 그룹 칸 둘만 더한다
+    expect(onlyKnownAlters(sqls)).toBe(true); // 기존 표를 바꾸는 것은 17(3-34 관심 그룹 칸 둘)·19(계정 — 푸시 기기의 세션 칸 하나)뿐
     await db.destroy();
   });
 
   it("관심 그룹(17, 3-34 — 처음 12 로 만들었다가 병합 때 다시 매김)은 새 표 하나 + registered_stocks 에 integer 칸 둘 — 칸이 이미 있는지 먼저 본다(information_schema)", async () => {
     const { db, sqls, inserted } = recordingPostgres([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
     await migrate(db, "postgres");
-    expect(inserted).toEqual([17]);
+    expect(inserted).toEqual([17, 18, 19]); // 17 뒤에 계정 표(18)·기기 세션 칸(19)
     expect(sqls.find((s) => /create table.*"?watch_groups"?/i.test(s))).toMatch(/"?id"?\s+integer.*generated always as identity/i);
-    expect(sqls.filter((s) => /information_schema\.columns/i.test(s))).toHaveLength(2);
-    const alter = sqls.filter((s) => /alter table/i.test(s));
+    expect(sqls.filter((s) => /information_schema\.columns/i.test(s))).toHaveLength(3); // 17 의 칸 둘 + 19(계정)의 기기 세션 칸 하나 (같은 칸 검사 함수)
+    const alter = sqls.filter((s) => /alter table "?registered_stocks"?/i.test(s));
     expect(alter).toHaveLength(2);
     expect(alter.join(" ; ")).toMatch(/"?registered_stocks"?\s+add column\s+"?watch_group_id"?\s+integer/i);
     expect(alter.join(" ; ")).toMatch(/"?registered_stocks"?\s+add column\s+"?watch_position"?\s+integer/i);
@@ -688,25 +695,84 @@ describe("BH-48 Postgres 에서 수량·평단 정밀도", () => {
   it("SEC 공시 표(15, 3-38)는 새 표 두 개만 만들고(CIK 마다 확인 · 받은 공시), (cik, 접수 번호) 유일 색인 · 처음 본 시각 색인", async () => {
     const { db, sqls, inserted } = recordingPostgres([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
     await migrate(db, "postgres");
-    expect(inserted).toEqual([15, 16, 17]);
+    expect(inserted).toEqual([15, 16, 17, 18, 19]);
     expect(sqls.some((s) => /create table.*"?sec_filing_watch"?/i.test(s))).toBe(true);
     expect(sqls.find((s) => /create table.*"?sec_filings"?/i.test(s))).toMatch(/generated always as identity/i);
     expect(sqls.some((s) => /create unique index if not exists uq_sec_filings_cik_acc on sec_filings \(cik, accession\)/i.test(s))).toBe(true);
     expect(sqls.some((s) => /create index if not exists ix_sec_filings_seen on sec_filings \(first_seen_at\)/i.test(s))).toBe(true);
-    expect(sqls.some((s) => /alter table/i.test(s) && !/add column "?watch_(group_id|position)"?/i.test(s))).toBe(false); // 17(3-34)는 관심 그룹 칸 둘만 더한다
+    expect(onlyKnownAlters(sqls)).toBe(true); // 기존 표를 바꾸는 것은 17(3-34 관심 그룹 칸 둘)·19(계정 — 푸시 기기의 세션 칸 하나)뿐
     await db.destroy();
   });
 
   it("매매일지 표(16, 3-37)는 새 표 두 개만 만들고(거래 메모 · 환율 기록), 환율은 double precision · (계좌·주문번호)·(종류·시각) 유일 색인", async () => {
     const { db, sqls, inserted } = recordingPostgres([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
     await migrate(db, "postgres");
-    expect(inserted).toEqual([16, 17]);
+    expect(inserted).toEqual([16, 17, 18, 19]);
     expect(sqls.some((s) => /create table.*"?trade_notes"?/i.test(s))).toBe(true);
     const fx = sqls.find((s) => /create table.*"?fx_rates"?/i.test(s));
     expect(fx).toMatch(/"?rate"?\s+double precision/i);
     expect(sqls.some((s) => /create unique index if not exists uq_trade_notes_account_order on trade_notes \(account, order_id\)/i.test(s))).toBe(true);
     expect(sqls.some((s) => /create unique index if not exists uq_fx_rates_kind_at on fx_rates \(kind, at\)/i.test(s))).toBe(true);
-    expect(sqls.some((s) => /alter table/i.test(s) && !/add column "?watch_(group_id|position)"?/i.test(s))).toBe(false); // 17(3-34)는 관심 그룹 칸 둘만 더한다
+    expect(onlyKnownAlters(sqls)).toBe(true); // 기존 표를 바꾸는 것은 17(3-34 관심 그룹 칸 둘)·19(계정 — 푸시 기기의 세션 칸 하나)뿐
     await db.destroy();
+  });
+
+  it("계정 표(18 — 처음 12 로 만들었다가 병합 때 다시 매김, 로그인·회원가입)는 새 표만 만들고: 아이디 비교 키·이메일·주인 한 명(부분 색인)·세션 토큰 해시 유일", async () => {
+    const { db, sqls, inserted } = recordingPostgres([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
+    await migrate(db, "postgres");
+    expect(inserted).toEqual([18, 19]);
+    expect(sqls.find((s) => /create table.*"?users"?/i.test(s))).toMatch(/"?id"?\s+integer[^,]*generated always as identity/i);
+    expect(sqls.find((s) => /create table.*"?sessions"?/i.test(s))).toMatch(/references "?users"? \("?id"?\) on delete cascade/i);
+    for (const re of [/uq_users_login_id_key on users \(login_id_key\)/, /uq_users_email on users \(email\)/, /uq_users_owner on users \(is_owner\) where is_owner = 1/, /uq_sessions_token_hash on sessions \(token_hash\)/]) {
+      expect(sqls.some((s) => re.test(s)), String(re)).toBe(true);
+    }
+    expect(sqls.filter((s) => /alter table|drop /i.test(s))).toEqual([expect.stringMatching(/alter table "?devices"? add column "?session_id"? integer/i)]);
+    await db.destroy();
+  });
+
+  it("푸시 기기 세션 칸(19 — 처음 13, 계정 보안 보강)은 비어 있을 수 있는 칸 하나와 색인만 — 기존 행·다른 표는 그대로 (칸이 이미 있는지 먼저 본다 — 검증 5차)", async () => {
+    const { db, sqls, inserted } = recordingPostgres([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
+    await migrate(db, "postgres");
+    expect(inserted).toEqual([19]);
+    expect(sqls.filter((s) => !/schema_version/i.test(s))).toEqual([
+      expect.stringMatching(/from information_schema\.columns where table_schema = current_schema\(\) and table_name = \$1 and column_name = \$2/i),
+      expect.stringMatching(/alter table "?devices"? add column "?session_id"? integer/i),
+      expect.stringMatching(/create index if not exists idx_devices_session on devices \(session_id\)/i),
+    ]);
+    await db.destroy();
+  });
+
+  it("마이그레이션 번호는 1 부터 빈 곳·겹침 없이 하나씩 — 두 브랜치가 같은 번호를 쓰면 이미 그 번호까지 올라간 운영 DB 가 뒤의 표를 건너뛴다", () => {
+    expect(MIGRATION_VERSIONS).toEqual(MIGRATION_VERSIONS.map((_, i) => i + 1));
+    // main 의 17(관심 그룹, #126) 다음이 계정 표(18)·기기 세션 칸(19)
+    expect(MIGRATION_VERSIONS.slice(-3)).toEqual([17, 18, 19]);
+  });
+  it("SQLite: 19(처음 13) 전에 등록한 기기 행은 세션 칸이 비어(NULL) 예전처럼 알림을 받는다", async () => {
+    const db = await createMigratedDb(":memory:");
+    try {
+      await sql`delete from schema_version where version = 19`.execute(db);
+      await sql`drop index if exists idx_devices_session`.execute(db);
+      await sql`alter table devices drop column session_id`.execute(db);
+      await db.insertInto("devices").values({ token: "ExponentPushToken[old]", platform: "android", device_name: null, enabled: 1, disabled_reason: null, created_at: "x", last_seen_at: "x" }).execute();
+      await migrate(db, "sqlite");
+      expect(await db.selectFrom("devices").select(["token", "session_id"]).execute()).toEqual([{ token: "ExponentPushToken[old]", session_id: null }]);
+    } finally {
+      await db.destroy();
+    }
+  });
+  it("SQLite: 19(처음 13) 가 칸만 더하고 멈췄어도(색인·번호 적기 전) 다음 기동에 다시 돌아 끝난다 — '칸이 이미 있음'으로 서버가 못 뜨지 않게 (검증 5차)", async () => {
+    const db = await createMigratedDb(":memory:");
+    try {
+      await sql`delete from schema_version where version = 19`.execute(db);
+      await sql`drop index if exists idx_devices_session`.execute(db);
+      await migrate(db, "sqlite");
+      await migrate(db, "sqlite");
+      const versions = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
+      expect(versions.rows.map((r) => Number(r.version))).toEqual(MIGRATION_VERSIONS);
+      const idx = await sql<{ name: string }>`select name from sqlite_master where type = 'index' and name = 'idx_devices_session'`.execute(db);
+      expect(idx.rows).toHaveLength(1);
+    } finally {
+      await db.destroy();
+    }
   });
 });

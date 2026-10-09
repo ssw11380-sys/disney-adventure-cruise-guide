@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { ownerView } from "../auth/routePolicy.js";
 import { CODE_RE, normalizeCode } from "../lib/codes.js";
 import { evaluate, type StockService } from "../services/stockService.js";
 
@@ -41,18 +42,21 @@ export const stockRoutes: FastifyPluginAsync<{ service: StockService }> = async 
 
   app.get("/:code", async (req, reply) => {
     const { code } = codeParam.parse(req.params);
-    // 등록하지 않은 종목(발견 탭에서 누른 종목 등)도 종목 마스터에 있으면 미리 보기로 보여 준다 (registered: false)
-    const registered = await service.get(code);
+    // 등록하지 않은 종목(발견 탭에서 누른 종목 등)도 종목 마스터에 있으면 미리 보기로 보여 준다 (registered: false).
+    // 계정 A단계: 주인 아닌 계정은 등록 표를 보지 않는다 — 주인이 등록한 종목도 등록하지 않은 종목과 같은 미리 보기 (수량·평단·메모·토스 표시 없음)
+    const owner = ownerView(req);
+    const registered = owner ? await service.get(code) : null;
     const stock = registered ?? (await service.preview(code));
     if (!stock) return reply.code(404).send({ error: "NOT_FOUND", message: `종목을 찾을 수 없습니다: ${code}` });
     let quote = null;
     let quoteError: string | null = null;
     try {
-      quote = await service.getQuote(code);
+      // 주인 아닌 계정: 주인 등록 종목 때문에 쌓인 세션 자격·웹소켓 상태를 보지 않는 시세 (검증 5차 M2 — 등록 종목과 처음 보는 종목이 같은 모양)
+      quote = await service.getQuote(code, owner ? {} : { shared: true });
     } catch (e) {
       quoteError = e instanceof Error ? e.message : String(e);
     }
-    const { detail, krw, synced, inSnapshot } = await service.holdingMeta();
+    const { detail, krw, synced, inSnapshot } = owner ? await service.holdingMeta() : { detail: new Map(), krw: new Map(), synced: new Set<string>(), inSnapshot: new Set<string>() };
     return {
       ...stock,
       registered: !!registered,
@@ -79,12 +83,16 @@ export const stockRoutes: FastifyPluginAsync<{ service: StockService }> = async 
   app.get("/:code/quote", async (req) => {
     const { code } = codeParam.parse(req.params);
     const { fresh } = quoteQuery.parse(req.query);
-    return service.getQuote(code, { fresh });
+    // 계정 A단계: 주인 아닌 계정은 캐시를 건너뛰지 못한다 (서버 env 에 있는 주인의 시세 키로 외부 호출을 강제로 일으켜 주인 몫의 호출 한도를 쓰지 않게).
+    // 세션 자격·웹소켓 상태도 보지 않는다 (검증 5차 M2 — 주인 등록 종목만 eligible 이 true/false 로 나오던 것)
+    const owner = ownerView(req);
+    return service.getQuote(code, owner ? { fresh } : { shared: true });
   });
 
   app.get("/:code/candles", async (req) => {
     const { code } = codeParam.parse(req.params);
     const { period, count } = candlesQuery.parse(req.query);
-    return service.getCandles(code, period, count);
+    // 계정 A단계 (검증 7차 M2): 주인 아닌 계정은 새 값(분봉 20초·일봉 60초 안)만 캐시에서 — 주인 앱이 열어 둔 옛 봉으로 주인 등록 종목이 드러나지 않게
+    return service.getCandles(code, period, count, ownerView(req) ? undefined : { shared: true });
   });
 };

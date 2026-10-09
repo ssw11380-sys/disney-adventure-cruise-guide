@@ -27,6 +27,8 @@ interface Entry {
 export class CandleCache {
   private readonly entries = new Map<string, Entry>();
   private readonly inflight = new Map<string, { count: number; p: Promise<CandleSeries> }>();
+  /** 종목·주기마다 마지막 새로 받기 오류 (받아 둔 봉으로 돌아왔을 때 주인 아닌 계정에게는 그 오류를 그대로 — getShared) */
+  private readonly lastError = new Map<string, unknown>();
   readonly stats = { hits: 0, stale: 0, misses: 0 };
 
   constructor(
@@ -44,10 +46,11 @@ export class CandleCache {
     return regular ? 10 * 60_000 : 12 * 3_600_000;
   }
 
-  async get(code: string, period: CandlePeriod, count: number, opts: { maxAgeMs?: number } = {}): Promise<CandleSeries> {
+  async get(code: string, period: CandlePeriod, count: number, opts: { maxAgeMs?: number; shared?: boolean } = {}): Promise<CandleSeries> {
     const key = `${code}|${period}`;
     const t = this.now();
     const cached = this.entries.get(key);
+    if (opts.shared) return this.getShared(key, code, period, count, t, cached);
     const e = cached && (opts.maxAgeMs === undefined || t - cached.at <= opts.maxAgeMs) ? cached : undefined;
     const session = this.sessionOf(code, t);
     const age = e ? t - e.at : Infinity;
@@ -71,6 +74,29 @@ export class CandleCache {
     return slice(got, count);
   }
 
+  /**
+   * 주인 아닌 계정 (계정 A단계 검증 7차 M2): 새 값으로 보는 시간(분봉 20초·일봉 60초) 안의 봉만 캐시에서 주고, 그보다 오래됐으면 처음 보는 종목처럼
+   * 새로 받기를 끝까지 기다린다. 예전처럼 옛 봉(정규장 10분·장 밖 12시간까지)을 먼저 주면 주인 등록 종목(서버가 켤 때 미리 받고 주인 앱이 여는 차트)만
+   * 마지막 봉 종가·거래량이 지금 시세와 달라 본문으로 드러났다. 새로 받기가 실패하면 받아 둔 봉 대신 처음 보는 종목과 같은 오류.
+   * 받아 둔 개수(800 등)는 줄이지 않는다 (주인 차트가 다시 받지 않게)
+   */
+  private async getShared(key: string, code: string, period: CandlePeriod, count: number, t: number, cached: Entry | undefined): Promise<CandleSeries> {
+    const session = this.sessionOf(code, t);
+    const fresh = !!cached && t - cached.at < this.freshMs(period) && cached.session === session.key;
+    if (cached && fresh && (cached.count >= count || cached.series.candles.length < cached.count)) {
+      this.stats.hits++;
+      this.entries.delete(key);
+      this.entries.set(key, cached);
+      return slice(cached.series, count);
+    }
+    this.stats.misses++;
+    // 받는 중인 요청이 있으면 그것을 같이 기다린다 (방금 시작한 새 값)
+    const got = await this.refresh(key, code, period, Math.max(count, cached?.count ?? 0));
+    // 새로 받기가 실패해 예전 봉으로 돌아왔으면: 처음 보는 종목의 실패와 같은 오류
+    if (cached && got === cached.series) throw this.lastError.get(key) ?? new Error(`봉을 새로 받지 못함 (${code})`);
+    return slice(got, count);
+  }
+
   private refresh(key: string, code: string, period: CandlePeriod, count: number, fresh = false): Promise<CandleSeries> {
     const running = this.inflight.get(key);
     // fresh: 받는 중인 요청이 있어도 그게 끝난 뒤 새로 한 번 (그 요청이 오래전에 시작했을 수 있으므로)
@@ -88,9 +114,12 @@ export class CandleCache {
         this.entries.delete(key);
         this.entries.set(key, { at: started, count, session: this.sessionOf(code, started).key, series });
         while (this.entries.size > MAX_ENTRIES) this.entries.delete(this.entries.keys().next().value!);
+        this.lastError.delete(key);
         return series;
       })
       .catch((err: unknown) => {
+        this.lastError.set(key, err);
+        if (this.lastError.size > MAX_ENTRIES) this.lastError.delete(this.lastError.keys().next().value!);
         const old = this.entries.get(key);
         if (old) return old.series;
         throw err;

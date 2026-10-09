@@ -81,6 +81,11 @@ export interface DeviceTable {
   disabled_reason: string | null;
   created_at: string;
   last_seen_at: string;
+  /**
+   * 이 기기를 등록한 로그인 세션 (계정 A단계, 마이그레이션 12). 세션을 끊으면(로그아웃·모든 기기에서 로그아웃·비밀번호 변경) 이 등록도 지우고,
+   * 끊겼거나 기한이 지난 세션의 기기에는 알림을 보내지 않는다. 비어 있으면(NULL) 계정 전(API 토큰만)의 등록 = 주인 기기
+   */
+  session_id: ColumnType<number | null, number | null | undefined, number | null>;
 }
 
 /** 앱이 보낸 JS 오류 (토큰·금액은 지운 뒤 저장) */
@@ -337,6 +342,32 @@ export interface WatchGroupTable {
   updated_at: string;
 }
 
+/** 계정 (계정 A단계, 플래그 accounts) */
+export interface UserTable {
+  id: Generated<number>;
+  login_id: string; // 보이는 아이디 (NFC)
+  login_id_key: string; // 비교용 (NFC + 소문자)
+  email: string | null; // 소문자
+  password_hash: string; // scrypt$N$r$p$소금$키
+  is_owner: number; // 1 = 주인 (지금까지의 데이터 주인, 한 명)
+  initial_password: number; // 1 = 처음 비밀번호(바꾸기 권유)
+  created_at: string;
+  updated_at: string;
+}
+
+/** 로그인 세션 (토큰은 sha256 만) */
+export interface SessionTable {
+  id: Generated<number>;
+  user_id: number;
+  token_hash: string;
+  remember: number; // 1 = 자동 로그인 (1년), 0 = 12시간
+  device_label: string | null;
+  created_at: string;
+  last_seen_at: string;
+  expires_at: string;
+  revoked_at: string | null;
+}
+
 export interface Database {
   watch_items: { code: string; name: string; market: string; start_price: number; desired_price: number; alerts: number; revision: string; created_at: string; updated_at: string };
   movement_marks: { mark_key: string; up: number; down: number; created_at: string };
@@ -366,4 +397,6 @@ export interface Database {
   indicator_scores: IndicatorScoreTable;
   price_alerts: PriceAlertTable;
   watch_groups: WatchGroupTable;
+  users: UserTable;
+  sessions: SessionTable;
 }

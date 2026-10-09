@@ -219,6 +219,11 @@ export const FEATURES = {
     description:
       "이동평균선 기간·색 (3-39, 앱만): 선 6개의 기간(2~240)·색(8가지)·보이기를 새 화면 '이동평균선'(차트 칩 '설정'·설정 > 표시)에서 정해 기기에 저장(chartPrefs.maLines.v1), 종목·지수 상세와 전체 화면 차트가 같이 씀. 처음 값은 지금과 같은 5·10·20·60·120·200·같은 색. 끄면 칩 6개(5·10·20·60·120·200) 켜고 끄기·색 그대로이고 저장한 선은 지우지 않음",
   },
+  accounts: {
+    default: true,
+    description:
+      "로그인·회원가입 (계정 A단계): 아이디·비밀번호 로그인, 자동 로그인(기본 켬 — 1년 유지·쓸 때마다 연장, 서버가 401 session_invalid 를 줄 때만 로그아웃 · 끄면 12시간·앱을 닫으면 다시 로그인), 회원가입(아이디·비밀번호 2번·이메일), 주인 계정 '서성원'(처음 비밀번호 1111 — 한 번 권유·설정 띠, 서버를 다시 켜도 되돌리지 않음), 비밀번호 변경(다른 기기 로그아웃)·모든 기기에서 로그아웃·이메일 변경. /api/* 는 세션(X-Session-Token)이 있어야 하고(플래그·로그인·가입만 빼고, API 토큰 확인은 그 앞에 그대로), 주인 아닌 계정은 공유 경로 목록(시장·종목 정보 — 보유 정보는 뺌)만 열리고 개인 경로는 빈 값·403 personal_data_not_ready, 관리 경로는 403. API 토큰만으로는 주인 개인 데이터 0 (위젯·푸시 포함 — 주인 세션만). 끄면(비상 모드) 로그인 화면이 없고 /api/auth/* 는 404 — 계정 전과 같음(세션 머리글이 없으면 API 토큰 = 주인). 막는 것은 주인 아닌 계정의 세션을 보낸 요청뿐(로그아웃·다시 설치한 가입자 폰·API 토큰을 꺼낸 사람은 못 막음 → 가입자가 있으면 끄기 전에 API_TOKEN 을 바꾸고 새 값은 주인 폰에만). 비상 끄기: Railway 변수 ACCOUNTS_DISABLED=1",
+  },
   chartHighLow: {
     default: true,
     description:
@@ -307,6 +312,9 @@ export const FEATURES = {
 
 export type FeatureKey = keyof typeof FEATURES;
 export const FEATURE_KEYS = Object.keys(FEATURES) as FeatureKey[];
+
+/** 값을 한 번도 읽지 못했을 때 켜짐으로 보는 플래그 — 켜짐이 '막는 쪽'인 보안 관문 (계정: 꺼지면 API 토큰만으로 주인 데이터가 열린다) */
+export const FAIL_ON: ReadonlySet<FeatureKey> = new Set<FeatureKey>(["accounts"]);
 export const FEATURES_META_KEY = "features";
 
 interface Stored {
@@ -321,10 +329,13 @@ export class FeatureService {
   private cache: { at: number; stored: Stored } | null = null;
   /** 바꾸기는 한 줄로 (읽고-고쳐-쓰기 사이에 다른 변경이 사라지지 않게) */
   private queue: Promise<unknown> = Promise.resolve();
+  private readonly changeListeners = new Set<() => void>();
 
   constructor(
     private readonly db: Db,
     private readonly now: () => Date = () => new Date(),
+    /** 저장된 값과 상관없이 꺼짐으로 보는 플래그 (비상 끄기 — 계정 ACCOUNTS_DISABLED=1). 앱에도 꺼짐으로 준다 */
+    private readonly forcedOff: ReadonlySet<FeatureKey> = new Set(),
   ) {}
 
   private async load(): Promise<Stored> {
@@ -350,21 +361,25 @@ export class FeatureService {
   async all(): Promise<{ features: Record<FeatureKey, boolean>; updatedAt: string | null }> {
     const s = await this.load();
     const features = {} as Record<FeatureKey, boolean>;
-    for (const k of FEATURE_KEYS) features[k] = s.overrides[k] ?? FEATURES[k].default;
+    for (const k of FEATURE_KEYS) features[k] = !this.forcedOff.has(k) && (s.overrides[k] ?? FEATURES[k].default);
     return { features, updatedAt: s.updatedAt };
   }
 
-  /** DB 를 못 읽으면 마지막 값, 그것도 없으면 꺼짐 (끄기 스위치가 오류로 다시 켜지지 않게, 앱과 같은 쪽으로) */
+  /**
+   * DB 를 못 읽으면 마지막 값, 그것도 없으면 꺼짐 (끄기 스위치가 오류로 다시 켜지지 않게, 앱과 같은 쪽으로).
+   * 보안 관문(FAIL_ON — 계정)만은 켜짐: 서버를 막 켰는데 읽기가 실패해도 'API 토큰 = 주인'으로 열리지 않게 (끄려면 비상 끄기 ACCOUNTS_DISABLED)
+   */
   async enabled(key: FeatureKey): Promise<boolean> {
+    if (this.forcedOff.has(key)) return false;
     const s = await this.load().catch(() => this.cache?.stored ?? null);
-    if (!s) return false;
+    if (!s) return FAIL_ON.has(key);
     return s.overrides[key] ?? FEATURES[key].default;
   }
 
   /** 관리 화면용: 기본값·설명·바꾼 값까지 */
   async detail(): Promise<Array<{ key: FeatureKey; enabled: boolean; default: boolean; overridden: boolean; description: string }>> {
     const s = await this.load();
-    return FEATURE_KEYS.map((k) => ({ key: k, enabled: s.overrides[k] ?? FEATURES[k].default, default: FEATURES[k].default, overridden: k in s.overrides, description: FEATURES[k].description }));
+    return FEATURE_KEYS.map((k) => ({ key: k, enabled: !this.forcedOff.has(k) && (s.overrides[k] ?? FEATURES[k].default), default: FEATURES[k].default, overridden: k in s.overrides, description: FEATURES[k].description }));
   }
 
   /** true/false 로 바꾸고, null 이면 기본값으로 되돌린다. 모르는 키는 거절 */
@@ -388,7 +403,20 @@ export class FeatureService {
     const value = JSON.stringify(next);
     await this.db.insertInto("meta").values({ key: FEATURES_META_KEY, value }).onConflict((oc) => oc.column("key").doUpdateSet({ value })).execute();
     this.cache = { at: this.now().getTime(), stored: next };
+    for (const fn of this.changeListeners) {
+      try {
+        fn();
+      } catch {
+        /* 알림 실패는 바꾸기를 막지 않는다 */
+      }
+    }
     return this.all();
+  }
+
+  /** 플래그를 바꾼 뒤(이 서버에서) 부른다 — 계정 A단계 검증 6차: 비상 모드 → 보통 모드가 되면 세션 없이 연 실시간 스트림을 바로 닫게 */
+  onChange(fn: () => void): () => void {
+    this.changeListeners.add(fn);
+    return () => this.changeListeners.delete(fn);
   }
 }
 

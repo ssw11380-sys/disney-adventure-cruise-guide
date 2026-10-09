@@ -51,13 +51,35 @@ const schema = z.object({
 
   /** 설정하면 /api/* 요청에 `Authorization: Bearer <토큰>` 이 필요하다 (인터넷에 노출할 때 필수) */
   API_TOKEN: z.string().default(""),
+
+  /** 계정(로그인) 비상 끄기: 1 이면 기능 플래그 accounts 와 상관없이 끈다 (로그인이 안 돼 관리 API 를 못 쓸 때 — Railway 변수) */
+  ACCOUNTS_DISABLED: z.string().default(""),
+  /** 주인 계정 아이디·처음 비밀번호 (주인이 없을 때 한 번만 쓴다 — 이미 있으면 바꾸지 않는다) */
+  OWNER_LOGIN_ID: z.string().default(""),
+  OWNER_INITIAL_PASSWORD: z.string().default(""),
+  /**
+   * 비상 주인 비밀번호 되돌리기: 설정하면 서버를 켤 때 주인 비밀번호를 이 값으로 바꾸고 주인 세션·기기 등록을 모두 끊는다
+   * (지금 비밀번호와 같으면 아무것도 안 함). 누가 먼저 로그인해 비밀번호를 바꿨을 때처럼 되찾을 길이 없을 때만 — 쓴 뒤에는 지운다
+   */
+  OWNER_RESET_PASSWORD: z.string().default(""),
+  /** 앞단 프록시 수 (요청 IP 를 X-Forwarded-For 에서 읽는다 — IP 별 로그인 제한). 비우면 Railway 에서는 1, 그 밖에는 0 */
+  TRUST_PROXY_HOPS: z.preprocess((v) => (v === "" ? undefined : v), z.coerce.number().int().min(0).max(5).optional()),
 });
 
 export type AppConfig = z.infer<typeof schema> & {
   kisEnabled: boolean;
   tossOpenApiEnabled: boolean;
+  /** 계정 비상 끄기 (ACCOUNTS_DISABLED=1·true) */
+  accountsDisabled: boolean;
+  /** Fastify trustProxy 에 넘기는 프록시 수 (0 = 믿지 않음) */
+  trustProxyHops: number;
   timezone: "Asia/Seoul";
 };
+
+/** '1'·'true'·'yes'·'on' 이면 켬 */
+export function envOn(v: string | undefined | null): boolean {
+  return /^(1|true|yes|on)$/i.test((v ?? "").trim());
+}
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const parsed = schema.safeParse(env);
@@ -70,6 +92,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ...cfg,
     kisEnabled: cfg.KIS_APP_KEY.length > 0 && cfg.KIS_APP_SECRET.length > 0,
     tossOpenApiEnabled: cfg.TOSS_CLIENT_ID.length > 0 && cfg.TOSS_CLIENT_SECRET.length > 0,
+    accountsDisabled: envOn(cfg.ACCOUNTS_DISABLED),
+    trustProxyHops: cfg.TRUST_PROXY_HOPS ?? (env["RAILWAY_ENVIRONMENT"] ? 1 : 0),
     timezone: "Asia/Seoul",
   };
 }

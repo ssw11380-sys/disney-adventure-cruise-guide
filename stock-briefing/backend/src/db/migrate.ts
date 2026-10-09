@@ -499,16 +499,73 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>, dialect: D
         if (!(await hasColumn(db, dialect, "registered_stocks", col))) await db.schema.alterTable("registered_stocks").addColumn(col, "integer").execute();
     },
   },
+  {
+    // main 의 가장 큰 번호(17) + 1 (처음 12·13 으로 만들었다가 main 에 12~17 이 먼저 들어가 병합 때 다시 매김) — 'if not exists'·칸 있음 검사라 번호가 바뀌어도 안전.
+    // 번호가 겹치면 이미 그 번호까지 올라간 DB 는 이 표를 건너뛰므로 늘 main 의 가장 큰 번호 + 1
+    version: 18, // 계정 A단계
+    up: async (db, dialect) => {
+      // 로그인·회원가입 (플래그 accounts). 새 표만 추가하고 기존 표는 건드리지 않는다. 예전 서버로 되돌려도 이 표를 모르고 지나갈 뿐이다.
+      // 시각은 이 저장소 방식대로 seoulIso(+09:00) 글자로 적는다
+      await db.schema
+        .createTable("users")
+        .ifNotExists()
+        .addColumn("id", "integer", idColumn(dialect))
+        .addColumn("login_id", "text", (c) => c.notNull()) // 보이는 아이디 (NFC, 앞뒤 공백 없음)
+        .addColumn("login_id_key", "text", (c) => c.notNull()) // 비교용: NFC + 소문자
+        .addColumn("email", "text") // 소문자. 주인은 비어 있을 수 있다
+        .addColumn("password_hash", "text", (c) => c.notNull()) // scrypt$N$r$p$소금$키
+        .addColumn("is_owner", "integer", (c) => c.notNull().defaultTo(0))
+        .addColumn("initial_password", "integer", (c) => c.notNull().defaultTo(0))
+        .addColumn("created_at", "text", (c) => c.notNull())
+        .addColumn("updated_at", "text", (c) => c.notNull())
+        .execute();
+      await sql`create unique index if not exists uq_users_login_id_key on users (login_id_key)`.execute(db);
+      // 이메일이 없는(NULL) 행은 여러 개여도 된다 (SQLite·Postgres 공통)
+      await sql`create unique index if not exists uq_users_email on users (email)`.execute(db);
+      // 주인은 한 명 (여러 서버가 동시에 켜져 시드해도)
+      await sql`create unique index if not exists uq_users_owner on users (is_owner) where is_owner = 1`.execute(db);
+      await db.schema
+        .createTable("sessions")
+        .ifNotExists()
+        .addColumn("id", "integer", idColumn(dialect))
+        .addColumn("user_id", "integer", (c) => c.notNull().references("users.id").onDelete("cascade"))
+        .addColumn("token_hash", "text", (c) => c.notNull()) // sha256(토큰) hex — 토큰 자체는 적지 않는다
+        .addColumn("remember", "integer", (c) => c.notNull()) // 1 = 자동 로그인 (1년, 쓸 때마다 연장)
+        .addColumn("device_label", "text")
+        .addColumn("created_at", "text", (c) => c.notNull())
+        .addColumn("last_seen_at", "text", (c) => c.notNull())
+        .addColumn("expires_at", "text", (c) => c.notNull())
+        .addColumn("revoked_at", "text")
+        .execute();
+      await sql`create unique index if not exists uq_sessions_token_hash on sessions (token_hash)`.execute(db);
+      await sql`create index if not exists idx_sessions_user on sessions (user_id)`.execute(db);
+    },
+  },
+  {
+    version: 19, // 계정 A단계 보안 보강 (처음 13): 푸시 기기 등록을 로그인 세션에 묶는다
+    up: async (db, dialect) => {
+      // 세션을 끊으면(로그아웃·모든 기기에서 로그아웃·비밀번호 변경) 그 세션으로 등록한 기기도 지운다 — 잃어버린 폰으로 주인 계좌 알림이 가지 않게.
+      // 비어 있을 수 있는 칸 하나만 더한다 (FK 없음 — 세션을 지워도 기기 행은 남고, 알림은 살아 있는 세션의 기기에만 간다).
+      // 예전 서버로 되돌려도 이 칸을 모르고 지나갈 뿐이다.
+      // 여러 번 돌려도 안전하게 (검증 5차): 칸을 더한 뒤 색인·schema_version 적기 전에 멈췄다면 다음 기동 때 '칸이 이미 있음'으로 서버가 뜨지 못했다
+      if (!(await hasColumn(db, dialect, "devices", "session_id"))) await db.schema.alterTable("devices").addColumn("session_id", "integer").execute();
+      await sql`create index if not exists idx_devices_session on devices (session_id)`.execute(db);
+    },
+  },
 ];
 
-/** 표에 그 칸이 이미 있는지 (칸을 더하는 마이그레이션을 다시 돌려도 안전하게) */
-async function hasColumn(db: Kysely<Database>, dialect: Dialect, table: string, column: string): Promise<boolean> {
-  const rows =
-    dialect === "postgres"
-      ? await sql<{ name: string }>`select column_name as name from information_schema.columns where table_schema = current_schema() and table_name = ${table}`.execute(db)
-      : await sql<{ name: string }>`select name from pragma_table_info(${table})`.execute(db);
-  return rows.rows.some((r) => r.name === column);
+/** 표에 칸이 있는지 (SQLite: pragma_table_info · Postgres: information_schema — 지금 스키마) */
+export async function hasColumn(db: Kysely<Database>, dialect: Dialect, table: string, column: string): Promise<boolean> {
+  if (dialect === "postgres") {
+    const r = await sql<{ n: number }>`select count(*)::int as n from information_schema.columns where table_schema = current_schema() and table_name = ${table} and column_name = ${column}`.execute(db);
+    return Number(r.rows[0]?.n ?? 0) > 0;
+  }
+  const r = await sql<{ name: string }>`select name from pragma_table_info(${table})`.execute(db);
+  return r.rows.some((x) => x.name === column);
 }
+
+/** 마이그레이션 번호 (테스트: 1 부터 빈 곳·겹침 없이 하나씩 — 두 브랜치가 같은 번호를 쓰면 이미 그 번호까지 올라간 DB 는 뒤의 것을 건너뛴다) */
+export const MIGRATION_VERSIONS: readonly number[] = migrations.map((m) => m.version);
 
 export async function migrate(db: Kysely<Database>, dialect: Dialect = "sqlite"): Promise<void> {
   await sql`create table if not exists schema_version (version integer primary key)`.execute(db);

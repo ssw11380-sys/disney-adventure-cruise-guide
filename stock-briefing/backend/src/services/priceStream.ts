@@ -28,10 +28,29 @@ export interface StreamTick {
 
 export interface StreamSocket {
   send(data: string): void;
-  close(): void;
+  close(code?: number, reason?: string): void;
   on(event: "close" | "error" | "message", listener: (...args: unknown[]) => void): unknown;
   readyState?: number;
 }
+
+/**
+ * 이 연결을 연 사람 (계정 A단계 검증 6차 M1). 연결할 때 한 번만 확인하면 세션이 끝난 뒤에도(로그아웃·모든 기기에서 로그아웃·비밀번호 변경·
+ * OWNER_RESET_PASSWORD·기한 지남, 비상 모드 → 보통 모드) 이미 열린 연결로 주인 등록 종목의 체결·'holdings'·'reconcile' 알림이 계속 갔다.
+ * 그래서 연결마다 세션을 적어 두고, 세션을 끊을 때 그 연결을 바로 닫고(revoke), ping 때마다 다시 확인한다(recheck)
+ */
+export interface StreamAccess {
+  /** 세션으로 열었으면 그 세션·사용자 id. 세션 없이(API 토큰만 — 계정 꺼짐·비상 모드) 열었으면 null */
+  sessionId: number | null;
+  userId: number | null;
+  /**
+   * 아직 이 연결로 받아도 되는지 다시 확인 (ping 마다·플래그가 바뀔 때). false 면 닫는다.
+   * 확인 자체가 실패하면(DB 오류) 던진다 → 이번에는 두고 다음 ping 에 다시 (로그아웃 아님 — REST 의 503 과 같은 쪽)
+   */
+  recheck?: () => Promise<boolean>;
+}
+
+/** 세션이 끝나 서버가 닫는 연결의 닫기 코드 (앱은 보통 끊김처럼 다시 붙고, 다시 붙을 때 401 이면 REST 가 로그아웃을 맡는다) */
+export const STREAM_CLOSE_SESSION = 4401;
 
 export interface PriceStreamDeps {
   live?: (LiveTicks & EventEmitter) | null;
@@ -65,6 +84,9 @@ export interface PriceStreamDeps {
 
 export class PriceStream {
   private readonly clients = new Set<StreamSocket>();
+  /** 연결마다 연 사람 (세션을 끊을 때·ping 때 닫을 연결을 찾는다) */
+  private readonly access = new Map<StreamSocket, StreamAccess>();
+  private rechecking: Promise<number> | null = null;
   /** {type:"hello", batch:true} 를 보낸 앱 (한 통에 여러 종목) */
   private readonly batchClients = new WeakSet<StreamSocket>();
   /** 다음 묶음에 보낼 종목별 마지막 체결 */
@@ -87,9 +109,10 @@ export class PriceStream {
     return { clients: this.clients.size, polling: this.pollTimer !== null, tracked: this.last.size, sent: { ...this.sent } };
   }
 
-  attach(socket: StreamSocket): void {
+  attach(socket: StreamSocket, access?: StreamAccess): void {
     if (this.clients.has(socket)) return;
     this.clients.add(socket);
+    if (access) this.access.set(socket, access);
     const drop = () => this.detach(socket);
     socket.on("close", drop);
     socket.on("error", drop);
@@ -123,11 +146,55 @@ export class PriceStream {
   }
 
   private detach(socket: StreamSocket): void {
+    this.access.delete(socket);
     if (!this.clients.delete(socket)) return;
     if (this.clients.size === 0) {
       this.stopTimers();
       this.deps.onActiveChange?.(false);
     }
+  }
+
+  /** 세션이 끝난 연결을 닫는다 (먼저 목록에서 빼서 닫는 동안 더 보내지 않는다) */
+  private kick(socket: StreamSocket): void {
+    this.detach(socket);
+    try {
+      socket.close(STREAM_CLOSE_SESSION, "session_invalid");
+    } catch {
+      /* 이미 닫힘 */
+    }
+  }
+
+  /** 조건에 맞는 연결(연 사람 기준)을 바로 닫는다 — 로그아웃·모든 기기에서 로그아웃·비밀번호 변경·비상 되돌리기. 닫은 수 */
+  revoke(match: (a: StreamAccess) => boolean): number {
+    let n = 0;
+    for (const [socket, a] of [...this.access]) {
+      if (!match(a)) continue;
+      this.kick(socket);
+      n++;
+    }
+    return n;
+  }
+
+  /**
+   * 연결마다 아직 받아도 되는지 다시 확인한다 (ping 마다·플래그가 바뀔 때 — 기한 지남, 다른 서버에서 끊은 세션, 비상 모드 → 보통 모드의 세션 없는 연결).
+   * 확인이 실패(DB 오류)한 연결은 두고 다음에 다시. 겹쳐 부르면 도는 것을 기다린다. 닫은 수
+   */
+  recheck(): Promise<number> {
+    if (this.rechecking) return this.rechecking;
+    const run = (async () => {
+      let n = 0;
+      for (const [socket, a] of [...this.access]) {
+        if (!a.recheck) continue;
+        const ok = await a.recheck().catch(() => true);
+        if (!ok && this.clients.has(socket)) {
+          this.kick(socket);
+          n++;
+        }
+      }
+      return n;
+    })();
+    this.rechecking = run.finally(() => (this.rechecking = null));
+    return this.rechecking;
   }
 
   stop(): void {
@@ -142,11 +209,17 @@ export class PriceStream {
     }
     if (this.clients.size > 0) this.deps.onActiveChange?.(false);
     this.clients.clear();
+    this.access.clear();
   }
 
   private startTimers(): void {
     if (this.deps.quickPrices && !this.pollTimer) this.pollTimer = setInterval(() => void this.poll(), this.deps.pollMs ?? 3000);
-    if (!this.pingTimer) this.pingTimer = setInterval(() => this.broadcast(JSON.stringify({ type: "ping", at: Date.now() })), this.deps.pingMs ?? 25_000);
+    // ping 때 연결마다 세션을 다시 확인한다 (계정 A단계 검증 6차 M1 — 끝난 세션의 연결을 닫는다)
+    if (!this.pingTimer)
+      this.pingTimer = setInterval(() => {
+        this.broadcast(JSON.stringify({ type: "ping", at: Date.now() }));
+        void this.recheck();
+      }, this.deps.pingMs ?? 25_000);
   }
 
   private stopTimers(): void {

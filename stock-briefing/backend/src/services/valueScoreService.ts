@@ -36,6 +36,7 @@ import {
 import type { Db } from "../db/index.js";
 import type { Candle } from "../domain/types.js";
 import { isKrCode, normalizeCode } from "../lib/codes.js";
+import { DoneWaiters } from "../lib/concurrency.js";
 import { seoulIso } from "../lib/time.js";
 import type { FeatureService } from "./featureService.js";
 import { STATUS_TEXT, VALUE_ABOUT, valueAboutOf } from "./indicatorScoreText.js";
@@ -350,6 +351,8 @@ export class ValueScoreService {
   private worker: Promise<void> | null = null;
   /** 백그라운드 받기에서 지금 받는 종목 */
   private active: string | null = null;
+  /** 재무 받기가 끝나기를 기다리는 요청 (waitFacts) */
+  private readonly waiters = new DoneWaiters();
   private building: Promise<unknown> | null = null;
   /** 화면 요청이 건 비교 기준 만들기 (끝나면 null) · 마지막으로 건 때 */
   private kicked: Promise<unknown> | null = null;
@@ -438,6 +441,17 @@ export class ValueScoreService {
     return this.queue.has(code) || this.active === code;
   }
 
+  /**
+   * 이 종목 재무 받기가 끝날 때까지 ms 까지 기다린다 (받는 중이 아니면 바로 true, 끝나면 true, 시간이 지나면 false). 한국 종목은 간이 가치 서비스에.
+   * 계정 A단계 검증 6차 M2: 주인 아닌 계정의 점수 요청이 '계산 준비 중'(처음 보는 종목만 — 주인 등록 종목은 매일 미리 받아 둠)으로 끝나지 않게
+   */
+  waitFacts(code: string, ms: number): Promise<boolean> {
+    const c = normalizeCode(code);
+    if (isKrCode(c)) return this.deps.kr ? this.deps.kr.waitFacts(c, ms) : Promise.resolve(true);
+    if (!this.inFlight(c)) return Promise.resolve(true);
+    return this.waiters.wait(c, ms);
+  }
+
   /** 테스트·관리용: 백그라운드 받기와 화면 요청이 건 비교 기준 만들기가 끝날 때까지 */
   async idle(): Promise<void> {
     while (this.worker || this.kicked) {
@@ -456,6 +470,7 @@ export class ValueScoreService {
         if (await this.enabled()) await this.refreshFacts(c);
       } finally {
         this.active = null;
+        this.waiters.done(c);
       }
       if (this.queue.size && pause > 0) await new Promise((r) => setTimeout(r, pause));
     }

@@ -1,11 +1,13 @@
 import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { sql } from "kysely";
 import { describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
+import { AuthService } from "../src/auth/authService.js";
 import { loadConfig } from "../src/config.js";
 import { createDb, createMigratedDb, migrate } from "../src/db/index.js";
-import { BackupService, decodeBackup, encryptJsonBackup, restoreBackup } from "../src/services/backupService.js";
+import { BACKUP_TABLES, BackupService, decodeBackup, encryptJsonBackup, restoreBackup } from "../src/services/backupService.js";
 import { FakeGenerator, fakeProviders } from "./helpers.js";
 
 const KEY = "test-key-not-a-secret";
@@ -56,6 +58,36 @@ describe("DB 백업 (3-7)", () => {
     await migrate(fresh.db, fresh.dialect);
     expect((await restoreBackup(fresh.db, fresh.dialect, decoded.payload))["registered_stocks"]).toBe(1);
     expect((await restoreBackup(fresh.db, fresh.dialect, decoded.payload))["registered_stocks"]).toBe("skipped");
+  });
+
+  it("계정(A단계): 백업에 users → sessions 순서로 들어가고, 되살리면 바꾼 비밀번호·로그인이 그대로 (1111 로 돌아가지 않음)", async () => {
+    const db = await createMigratedDb(":memory:");
+    const auth = new AuthService({ db, now: () => new Date("2026-09-28T10:00:00+09:00"), scryptN: 1024 });
+    await auth.ensureOwner();
+    const s = await auth.login({ loginId: "서성원", password: "1111", remember: true, ip: "1.1.1.1" });
+    const ctx = (await auth.authenticate(s.token))!;
+    await auth.changePassword(ctx, { current: "1111", next: "changed123", nextConfirm: "changed123" });
+    expect(BACKUP_TABLES.indexOf("users")).toBeLessThan(BACKUP_TABLES.indexOf("sessions"));
+    const tables: Record<string, Record<string, unknown>[]> = {};
+    for (const t of BACKUP_TABLES) tables[t] = (await sql<Record<string, unknown>>`select * from ${sql.table(t)}`.execute(db)).rows;
+    const dir = await mkdtemp(join(tmpdir(), "bk-"));
+    const file = join(dir, "acct.sbk");
+    await encryptJsonBackup({ version: 1, createdAt: "t", tables }, file, KEY);
+    const raw = await readFile(file);
+    expect(raw.includes(Buffer.from("서성원"))).toBe(false);
+    const decoded = await decodeBackup(raw, KEY);
+    if (decoded.kind !== "json") throw new Error("json 이어야 함");
+    const fresh = createDb(":memory:");
+    await migrate(fresh.db, fresh.dialect);
+    const restored = await restoreBackup(fresh.db, fresh.dialect, decoded.payload);
+    expect(restored).toMatchObject({ users: 1, sessions: 1 });
+    const back = new AuthService({ db: fresh.db, now: () => new Date("2026-09-28T11:00:00+09:00"), scryptN: 1024 });
+    expect(await back.ensureOwner()).toBe("exists");
+    expect((await back.authenticate(s.token))?.user).toMatchObject({ loginId: "서성원", usingInitialPassword: false });
+    await expect(back.login({ loginId: "서성원", password: "1111", remember: true, ip: "1.1.1.2" })).rejects.toMatchObject({ code: "bad_credentials" });
+    expect((await back.login({ loginId: "서성원", password: "changed123", remember: true, ip: "1.1.1.2" })).user.isOwner).toBe(true);
+    await db.destroy();
+    await fresh.db.destroy();
   });
 
   it("날짜별 1개씩 7일치만 남기고(같은 날 수동 백업은 하나로), 남은 임시 파일을 치우고, 경로를 벗어난 이름은 읽지 않는다", async () => {

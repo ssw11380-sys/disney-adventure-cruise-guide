@@ -56,7 +56,7 @@ export interface AnalysisServiceDeps {
   collector: DataCollector;
   generator: TextGenerator;
   prompts: PromptStore;
-  /** 등록 종목·종목 마스터에 없을 때 이름·시장 찾기 (StockService.preview: 외부 검색으로 대신 찾는다 — 신규 상장 등). 모르면 null */
+  /** 종목 마스터에 없을 때 이름·시장 찾기 (StockService.preview: 외부 검색으로 대신 찾는다 — 신규 상장 등). 모르면 null */
   lookup?: (code: string) => Promise<{ code: string; name: string; market: string } | null>;
   /**
    * 가치 점수 개선 1단계 [8] (플래그 valueAiSafeWording): AI 가치분석 글을 새 프롬프트(value_analysis_safe — '평가하는 애널리스트'·강점/리스크 없음)로
@@ -73,7 +73,8 @@ export interface AnalysisServiceDeps {
 /** 종목 상세 탭(회사 소개 / 가치투자 / 기술적 분석) 생성 + 캐시 */
 export class AnalysisService {
   private readonly now: () => Date;
-  private readonly inflight = new Map<string, Promise<Analysis>>();
+  /** 이 서버에서 만드는 중인 분석 (종목·종류마다 하나 — 서명은 이름·시장까지, 계정 A단계) */
+  private readonly inflight = new Map<string, { signature: string; promise: Promise<Analysis> }>();
   private readonly requests = new Map<string, TrackedAnalysisRequest>();
   private readonly activeGets = new Set<Promise<Analysis>>();
   private shuttingDown = false;
@@ -86,9 +87,16 @@ export class AnalysisService {
     this.generator = checkpointGenerator(deps.generator);
   }
 
-  async get(code: string, kind: AnalysisKind, opts: { refresh?: boolean; requestKey?: string } = {}): Promise<Analysis> {
+  /**
+   * 분석 글의 종목 이름·시장은 **공개 이름**(종목 마스터 → 코드가 정확히 같은 검색 결과)으로 만든다 — 캐시(analyses)는 모든 계정이 같이 쓰므로
+   * 주인 등록 표의 이름(토스 동기화 이름 등)이 글·뉴스 검색에 실리면 이름만으로 주인 등록 종목이 드러난다 (계정 A단계 검증 8차).
+   * 등록 표는 공개 이름을 못 찾을 때 주인에게만 쓴다.
+   * publicOnly (주인 아닌 계정): 공개 이름을 못 찾으면 처음 보는 모르는 종목과 같은 404, 캐시는 **지금 공개 이름·시장으로 만든 글**만 준다
+   * (고치기 전에 등록 표 이름으로 만든 캐시·공개 이름을 잠깐 못 찾아 등록 표 이름으로 만든 캐시는 공개 이름으로 새로 만든다). refresh·요청 추적은 보지 않는다
+   */
+  async get(code: string, kind: AnalysisKind, opts: { refresh?: boolean; requestKey?: string; publicOnly?: boolean } = {}): Promise<Analysis> {
     if (this.shuttingDown) throw new AppError(503, "SERVER_CLOSING", "서버가 재시작 중입니다. 잠시 뒤 다시 시도해 주세요.");
-    const work = this.getActive(code, kind, opts);
+    const work = opts.publicOnly ? this.getPublic(code, kind) : this.getActive(code, kind, opts);
     this.activeGets.add(work);
     try {
       return await work;
@@ -116,7 +124,7 @@ export class AnalysisService {
     let oldCached: Analysis | null = null;
     if (!opts.refresh && !active) {
       const cached = await this.latest(code, kind);
-      if (cached && this.now().getTime() - Date.parse(cached.createdAt) < TTL_MS[kind]) {
+      if (cached && this.fresh(cached.createdAt, kind)) {
         if (!safe || !isOldValueText(cached.content)) {
           const result = { ...cached, cached: true };
           if (opts.requestKey) await this.jobs.completeRequest(opts.requestKey, `analysis:${key}`, result);
@@ -125,18 +133,64 @@ export class AnalysisService {
         oldCached = cached;
       }
     }
+    // 주인 보기: 공개 이름, 못 찾으면 등록 표 이름 (계정 A단계 검증 8차)
+    const stock =
+      (await this.publicStock(code)) ??
+      (await this.deps.db.selectFrom("registered_stocks").select(["code", "name", "market"]).where("code", "=", code).executeTakeFirst()) ??
+      null;
+    if (!stock) throw new NotFoundError(`종목 ${code} 을 찾을 수 없습니다`);
+    return this.run(code, kind, stock, opts, safe, oldCached);
+  }
+
+  /**
+   * 주인 아닌 계정: 공개 이름으로 만든 캐시만 (계정 A단계 검증 8차). 가치분석 금지어 검사(플래그 valueAiSafeWording, main #128)도 주인과 같게 —
+   * 예전 프롬프트 형식의 캐시는 쓰지 않고 새로 만들며, 만들기에 실패하면 그 글(공개 이름으로 만든 것)을 검사해 보인다
+   */
+  private async getPublic(code: string, kind: AnalysisKind): Promise<Analysis> {
+    const safe = kind === "value" && (await this.valueSafeOn());
+    const stock = await this.publicStock(code);
+    if (!stock) throw new NotFoundError(`종목 ${code} 을 찾을 수 없습니다`);
+    const cached = await this.latestRow(code, kind);
+    let oldCached: Analysis | null = null;
+    if (cached && this.fresh(cached.created_at, kind) && madeFor(cached.data_snapshot, stock)) {
+      const found = toAnalysis(cached);
+      if (!safe || !isOldValueText(found.content)) return safe ? this.safeAnalysis(found, "cache") : found;
+      oldCached = found;
+    }
+    return this.run(code, kind, stock, {}, safe, oldCached);
+  }
+
+  private fresh(createdAt: string, kind: AnalysisKind): boolean {
+    return this.now().getTime() - Date.parse(createdAt) < TTL_MS[kind];
+  }
+
+  /**
+   * 생성 작업 하나 (작업 키는 종목·종류마다 하나). 이름·시장을 작업 서명에 넣는다 (계정 A단계 — 등록 표 이름으로 만드는 중인 글에
+   * 주인 아닌 계정이 붙지 않게): 같은 이름·시장이면 진행 중인 생성에 합류하고, 다르면 그 생성이 끝나기를 기다렸다가 따로 만든다.
+   * safe(가치분석 금지어 검사, main #128): 새 프롬프트로 만들고 돌려줄 때만 검사한다. oldCached: 만들기에 실패하면 대신 보일 예전 형식 캐시 글
+   */
+  private run(
+    code: string,
+    kind: AnalysisKind,
+    stock: StockIdentity,
+    opts: { refresh?: boolean; requestKey?: string },
+    safe: boolean,
+    oldCached: Analysis | null,
+  ): Promise<Analysis> {
+    const key = `${code}:${kind}`;
+    const signature = JSON.stringify(["analysis", code, kind, stock.name, stock.market]);
     const existing = this.inflight.get(key);
-    if (existing && !opts.requestKey) return safe ? existing.then((a) => this.safeAnalysis(a, null)) : existing;
-    const p = this.jobs.run<Analysis>(`analysis:${key}`, { ...(opts.requestKey ? { requestKey: opts.requestKey } : {}), retryUncertain: opts.refresh === true }, (context) => this.generate(code, kind, context, safe))
-      .finally(() => { if (this.inflight.get(key) === p) this.inflight.delete(key); });
-    this.inflight.set(key, p);
+    if (existing && existing.signature === signature && !opts.requestKey) return safe ? existing.promise.then((a) => this.safeAnalysis(a, null)) : existing.promise;
+    const p = this.jobs
+      .run<Analysis>(`analysis:${key}`, { signature, waitForDifferent: true, ...(opts.requestKey ? { requestKey: opts.requestKey } : {}), retryUncertain: opts.refresh === true }, (context) => this.generate(code, kind, stock, context, safe))
+      .finally(() => { if (this.inflight.get(key)?.promise === p) this.inflight.delete(key); });
+    this.inflight.set(key, { signature, promise: p });
     if (!safe) return p;
     // 저장·작업 기록에는 원문을 두고, 돌려줄 때만 금지어 검사를 한다 (같은 작업에 합류한 요청은 기록 없이 같은 검사)
-    const fallback = oldCached;
     return p.then(
       (a) => this.safeAnalysis(a, "new"),
       (e: unknown) => {
-        if (fallback) return this.safeAnalysis({ ...fallback, cached: true }, "oldCache");
+        if (oldCached) return this.safeAnalysis({ ...oldCached, cached: true }, "oldCache");
         throw e;
       },
     );
@@ -161,6 +215,11 @@ export class AnalysisService {
     const read = this.deps.valueSafe;
     if (!read) return false;
     return read().catch(() => false);
+  }
+
+  /** 공개 이름·시장: 종목 마스터, 없으면 코드가 정확히 같은 검색 결과 (마스터를 받은 뒤 상장한 종목도 상세 화면·뉴스 탭처럼). 등록 표는 보지 않는다 */
+  private async publicStock(code: string): Promise<StockIdentity | null> {
+    return (await this.deps.db.selectFrom("listed_stocks").select(["code", "name", "market"]).where("code", "=", code).executeTakeFirst()) ?? (await this.lookup(code));
   }
 
   /** 생성 요청을 즉시 시작한다. 같은 요청은 재생성하지 않고, 진행 중인 같은 종목 분석에도 합류한다. */
@@ -195,16 +254,12 @@ export class AnalysisService {
     }
   }
 
-  private async generate(code: string, kind: AnalysisKind, context: GenerationContext, safe = false): Promise<Analysis> {
+  private async generate(code: string, kind: AnalysisKind, identity: StockIdentity, context: GenerationContext, safe = false): Promise<Analysis> {
     const timing = new ReportTiming({ report: "분석", kind }, this.deps.log);
     let success = false;
     try {
-      const stock = await context.step("stock", async () =>
-        (await this.deps.db.selectFrom("registered_stocks").select(["code", "name", "market"]).where("code", "=", code).executeTakeFirst()) ??
-        (await this.deps.db.selectFrom("listed_stocks").select(["code", "name", "market"]).where("code", "=", code).executeTakeFirst()) ??
-        // 마스터를 받은 뒤 상장한 종목도 상세 화면·뉴스 탭처럼 찾는다 (코드가 정확히 같은 종목만)
-        (await this.lookup(code)));
-      if (!stock) throw new NotFoundError(`종목 ${code} 을 찾을 수 없습니다`);
+      // 이름·시장은 작업을 시작할 때 정한 값 (공개 이름 — 계정 A단계 검증 8차). 서명에 들어 있어 이어 받은 작업도 같은 값이다
+      const stock = await context.step("stock", async () => identity);
 
       const snapshot = await context.step("snapshot", () => this.deps.collector.collectAnalysis(stock, kind));
       timing.next("프롬프트");
@@ -251,31 +306,26 @@ export class AnalysisService {
     }
   }
 
-  private async lookup(code: string): Promise<{ code: string; name: string; market: string } | null> {
+  private async lookup(code: string): Promise<StockIdentity | null> {
     const found = await this.deps.lookup?.(code).catch(() => null);
     return found && found.code === code ? { code: found.code, name: found.name, market: found.market } : null;
   }
 
-  async latest(code: string, kind: AnalysisKind): Promise<Analysis | null> {
-    const r = await this.deps.db
+  private latestRow(code: string, kind: AnalysisKind): Promise<AnalysisRow | undefined> {
+    return this.deps.db
       .selectFrom("analyses")
-      .selectAll()
+      .select(["id", "code", "kind", "content", "data_snapshot", "missing_data", "model", "created_at"])
       .where("code", "=", code)
       .where("kind", "=", kind)
       .orderBy("created_at", "desc")
       .orderBy("id", "desc")
       .limit(1)
       .executeTakeFirst();
-    if (!r) return null;
-    let missing: string[] = [];
-    try {
-      missing = JSON.parse(r.missing_data) as string[];
-    } catch {
-      /* ignore */
-    }
-    let snapshot: unknown = null;
-    try { snapshot = JSON.parse(r.data_snapshot); } catch { /* 예전 본문은 보존하고 자료 확인 불가로 표시한다. */ }
-    return { id: r.id, code: r.code, kind: r.kind as AnalysisKind, content: r.content, missing, model: r.model, createdAt: r.created_at, cached: true, verification: verifyReport(r.content, snapshot) };
+  }
+
+  async latest(code: string, kind: AnalysisKind): Promise<Analysis | null> {
+    const r = await this.latestRow(code, kind);
+    return r ? toAnalysis(r) : null;
   }
 
   /** 저장된 결과와 이 서버의 진행 여부만 확인한다. 자료 수집·AI 생성은 시작하지 않는다. */
@@ -292,6 +342,31 @@ export class AnalysisService {
       ? { id: requestId, status: tracked.status, result: tracked.result }
       : { id: requestId, ...await this.jobs.request<Analysis>(`${code}:${kind}:${requestId}`) };
     return { latest, running, request: { ...request, result: shown(request.result) } };
+  }
+}
+
+type StockIdentity = { code: string; name: string; market: string };
+type AnalysisRow = { id: number; code: string; kind: string; content: string; data_snapshot: string; missing_data: string; model: string; created_at: string };
+
+function toAnalysis(r: AnalysisRow): Analysis {
+  let missing: string[] = [];
+  try {
+    missing = JSON.parse(r.missing_data) as string[];
+  } catch {
+    /* ignore */
+  }
+  let snapshot: unknown = null;
+  try { snapshot = JSON.parse(r.data_snapshot); } catch { /* 예전 본문은 보존하고 자료 확인 불가로 표시한다. */ }
+  return { id: r.id, code: r.code, kind: r.kind as AnalysisKind, content: r.content, missing, model: r.model, createdAt: r.created_at, cached: true, verification: verifyReport(r.content, snapshot) };
+}
+
+/** 캐시 글이 이 이름·시장으로 만든 것인지 (스냅샷의 stock — 만들 때 프롬프트·뉴스 검색에 쓴 값). 읽지 못하면 아니라고 본다 */
+function madeFor(dataSnapshot: string, stock: StockIdentity): boolean {
+  try {
+    const s = (JSON.parse(dataSnapshot) as { stock?: { name?: unknown; market?: unknown } } | null)?.stock;
+    return s?.name === stock.name && s?.market === stock.market;
+  } catch {
+    return false;
   }
 }
 

@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FakeGenerator, fakeProviders, makeQuote, SAMPLE_MASTER } from "./helpers.js";
 import { IndicatorScoreService } from "../src/services/indicatorScoreService.js";
+import { AuthService } from "../src/auth/authService.js";
 import { benchOf, candlesOf } from "./fixtures/indicatorScores/load.js";
 
 /**
@@ -58,7 +59,7 @@ describe.skipIf(!url)("postgres dialect", () => {
   it("마이그레이션이 두 번 실행돼도 안전하다", async () => {
     await migrate(db, "postgres");
     const rows = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
-    expect(rows.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
+    expect(rows.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
     const idx12 = await sql<{ indexdef: string }>`select indexdef from pg_indexes where schemaname = current_schema() and indexname = 'idx_briefings_date_created'`.execute(db);
     expect(idx12.rows).toHaveLength(1);
     expect(idx12.rows[0]!.indexdef).toContain("(briefing_date DESC, created_at DESC)");
@@ -96,6 +97,28 @@ describe.skipIf(!url)("postgres dialect", () => {
       { table_name: "watch_groups", column_name: "id", data_type: "integer", is_nullable: "NO", is_identity: "YES" },
       { table_name: "watch_groups", column_name: "position", data_type: "integer", is_nullable: "NO", is_identity: "NO" },
     ]);
+    // 18 = 계정 (처음 12 — 병합 때 다시 매김. 아이디 비교 키·이메일·주인 한 명 유일, 세션 토큰 해시 유일)
+    const idx18 = await sql<{ indexname: string }>`select indexname from pg_indexes where tablename in ('users', 'sessions')`.execute(db);
+    expect(idx18.rows.map((r) => r.indexname)).toEqual(expect.arrayContaining(["uq_users_login_id_key", "uq_users_email", "uq_users_owner", "uq_sessions_token_hash", "idx_sessions_user"]));
+  });
+
+  it("계정 (A단계): 주인 시드는 두 번 해도 한 명, 가입·로그인·세션 확인·모든 기기 로그아웃 (Postgres)", async () => {
+    const auth = new AuthService({ db, now: () => new Date("2026-09-28T10:00:00+09:00"), scryptN: 1024 });
+    try {
+      expect(await auth.ensureOwner()).toBe("created");
+      expect(await auth.ensureOwner()).toBe("exists");
+      expect((await db.selectFrom("users").select("id").where("is_owner", "=", 1).execute()).length).toBe(1);
+      const s = await auth.signup({ loginId: "pgUser1", password: "abcd1234", passwordConfirm: "abcd1234", email: "PG@Example.com", remember: true, ip: "1.1.1.1" });
+      await expect(auth.signup({ loginId: "PGUSER1", password: "abcd1234", passwordConfirm: "abcd1234", email: "x@example.com", remember: true, ip: "1.1.1.2" })).rejects.toMatchObject({ code: "login_id_taken" });
+      const l = await auth.login({ loginId: "서성원", password: "1111", remember: false, ip: "1.1.1.3" });
+      expect((await auth.authenticate(s.token))?.user).toMatchObject({ loginId: "pgUser1", email: "pg@example.com", isOwner: false });
+      expect((await auth.authenticate(l.token))?.user).toMatchObject({ isOwner: true, usingInitialPassword: true });
+      expect(await auth.logoutAll(l.user.id)).toBe(1);
+      expect(await auth.authenticate(l.token)).toBeNull();
+    } finally {
+      await db.deleteFrom("sessions").execute();
+      await db.deleteFrom("users").execute();
+    }
   });
 
   it("지표 점수 기록 (3-44): 같은 종목·기준일은 덮어쓴다 (Postgres on conflict)", async () => {
@@ -181,7 +204,13 @@ describe.skipIf(!url)("postgres dialect", () => {
       await migrate(db, "postgres");
       expect(await read()).toEqual({ quantity: 16.123455, avg_price: 1234.5677 });
       const versions = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
-      expect(versions.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
+      expect(versions.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
+      // 19(처음 13) 가 칸만 더하고 멈춘 DB 도 다시 돌려 끝난다 (검증 5차 — '칸이 이미 있음'으로 서버가 못 뜨지 않게)
+      await sql`delete from schema_version where version = 19`.execute(db);
+      await sql`drop index if exists idx_devices_session`.execute(db);
+      await migrate(db, "postgres");
+      const again = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
+      expect(again.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
       const doubles = await sql<{ n: number }>`select count(*) as n from information_schema.columns where table_name = 'registered_stocks' and data_type = 'double precision'`.execute(db);
       expect(Number(doubles.rows[0]!.n)).toBe(2);
     } finally {

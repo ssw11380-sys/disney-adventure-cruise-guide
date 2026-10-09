@@ -362,6 +362,30 @@ describe("장 마감 뒤 하루 한 번 (한국 20:10 · 뉴욕 17:30), 휴장�
     expect(await db.selectFrom("indicator_scores").selectAll().execute()).toEqual([]);
   });
 
+  it("주인 아닌 계정의 계산(getShared)은 하루 기록을 남기지 않는다 — 같은 계산을 주인·미리 계산이 받을 때 남긴다 (다시 계산하지 않음, 검증 9차)", async () => {
+    const { src, calls } = fixtureSources({ registered: ["NVDA", "MSFT"] });
+    await start(src);
+    const svc = app!.indicatorScores;
+    // 주인 등록 종목이어도 주인 아닌 계정의 요청은 표를 바꾸지 않는다 (가치 기다림 포함 — getShared 의 모든 계산)
+    expect((await svc.getShared("NVDA", 10))?.trend.score).toBe(69);
+    expect(await rowsOf()).toEqual([]);
+    // 주인이 같은 기준 거래일 결과(캐시)를 받으면 그때 남긴다 — 일봉을 다시 받지 않는다
+    const n = calls.candles.length;
+    expect((await svc.get("NVDA"))?.trend.score).toBe(69);
+    expect(calls.candles.length).toBe(n);
+    expect((await rowsOf()).map((r) => [r.code, r.score_date, r.status])).toEqual([["NVDA", "2026-09-25", "ok"]]);
+    // 한 번만 남긴다
+    await svc.get("NVDA");
+    expect(await rowsOf()).toHaveLength(1);
+    // 주인 아닌 계정의 계산이 도는 중에 주인 요청이 붙어도 주인 요청이 남긴다 (같은 계산을 한 번만)
+    const before = calls.candles.length;
+    const [shared, mine] = await Promise.all([svc.getShared("MSFT", 10), svc.get("MSFT")]);
+    expect(shared).toBe(mine);
+    expect(calls.candles.filter((c) => c === "MSFT").length).toBe(1);
+    expect(calls.candles.length).toBeGreaterThan(before);
+    expect((await rowsOf()).map((r) => r.code)).toEqual(["MSFT", "NVDA"]);
+  });
+
   it("같은 기준 거래일이면 다시 계산하지 않는다 (일봉 요청 1번)", async () => {
     const { src, calls } = fixtureSources();
     await start(src);

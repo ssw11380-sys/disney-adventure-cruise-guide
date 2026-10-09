@@ -117,7 +117,7 @@ describe("마이그레이션", () => {
     dbs.push(db);
     await migrate(db, dialect);
     const versions = (await sql<{ version: number }>`select version from schema_version order by version`.execute(db)).rows.map((r) => Number(r.version));
-    expect(versions.at(-1)).toBe(17); // 처음 12 → main 의 12~16 다음으로 다시 매김
+    expect(versions).toContain(17); // 처음 12 → main 의 12~16 다음으로 다시 매김 (그 뒤는 계정 A단계 18·19)
     const cols = async (t: string) => (await sql<{ name: string; type: string }>`select name, type from pragma_table_info(${t})`.execute(db)).rows.map((r) => `${r.name}:${r.type.toUpperCase()}`);
     expect(await cols("watch_groups")).toEqual(["id:INTEGER", "name:TEXT", "position:INTEGER", "created_at:TEXT", "updated_at:TEXT"]);
     expect(await cols("registered_stocks")).toEqual(expect.arrayContaining(["watch_group_id:INTEGER", "watch_position:INTEGER"]));
