@@ -310,6 +310,8 @@ export class AnalysisService {
  * '오르게 되어 있습니다'·'늘게 됩니다'·영어 'Buy.'·'Hold.'·'Rating: Hold'·'Price target'·'recommend'·'Overweight'·'Accumulate'·'fairly valued'·'entry point' — 26개 모두 지나갔다)와
  * 걱정·평가 말('걱정됩니다'·'염려'·'조심스럽습니다'·'너무 높습니다'·'깔끔'·'든든'·'믿음직'·'값어치'·'제 가치'·'인정받지 못'·'반영되지 않은 가치'·'공정 가치는 10만원'·'Solid'·'great')를 더한다.
  * '올랐습니다'·'10만원까지 올랐습니다'·'늘게 되었습니다'(지난 일)·'매출 비중은 30%로 유지되었습니다'·'금융자산의 공정가치는 3.2조원'·'Best Buy'·'Holdings'·'Accumulated'는 걸리지 않게
+ * 1단계 검토 6차: '나쁩니다'·존댓말 허락('사셔도 됩니다'·'보유하셔도'·'갖고 계셔도')·'사도 무방합니다'·'사도 문제없습니다'·'살 시기입니다'·'살 차례입니다'·'들어갈 때죠'·
+ * '더 나은 선택'·'매입 구간'·'늦지 않았습니다' (5차 검사로는 27개 모두 지나갔다)를 더한다. '지급할 시기는'·'같은 시기에'·'네 차례 지급'·'자사주 매입 기간'은 걸리지 않게
  */
 const VALUE_AI_EXTRA = [
   // 평가 말 (싸다·비싸다·강점·리스크·적정 주가·과소평가 …) — '싸'는 '둘러싸고·감싸·휩싸여'(에워싸다)·'싸움'·'싸이월드'·'싸늘'을 빼고 모든 활용
@@ -370,6 +372,15 @@ const VALUE_AI_EXTRA = [
   "(?<!Best )\\bBuy\\b|\\b(?:Sell|Hold|HOLD|Accumulate|ACCUMULATE|Neutral|NEUTRAL)\\b|[Oo]ver ?weight|[Uu]nder ?weight|OVERWEIGHT|UNDERWEIGHT|[Ee]qual[- ]?[Ww]eight|[Mm]arket ?[Pp]erform|[Ss]ector ?[Pp]erform",
   "[Pp]rice ?target|[Tt]arget ?price|PRICE TARGET|[Rr]ecommend|RECOMMEND|[Ww]orth (?:buying|owning|holding|a look)|[Ff]airly (?:valued|priced)|[Ee]ntry (?:point|price)|[Gg]ood (?:buy|time to buy)",
   "\\b(?:[Ss]olid|[Rr]obust|[Hh]ealthy|[Ee]xcellent|[Gg]reat|[Ww]onderful)\\b|[Ss]trong (?:balance|company|business|fundamentals|financials|growth|dividend|cash)|[Ww]eak (?:balance|company|business|fundamentals|financials)",
+  // ── 1단계 검토 6차: '나쁩니다' · 존댓말 허락 · '~도 무방' · '살 시기·차례' · '때죠' · '더 나은 선택' · '매입 구간' · '늦지 않' ──
+  // 나쁘다의 '-ㅂ니다' 활용 (실적이 나쁩니다 — 4차 줄은 '나빠·나빴·나쁠'만)
+  "나쁩",
+  // 존댓말 허락 (사셔도 됩니다·보유하셔도 됩니다·사 두셔도·갖고 계셔도) · '~도 무방/문제없' (사도 무방합니다·보유해도 무방·사도 문제없습니다)
+  "셔도 ?(?:됩|되|돼|괜찮|무방|좋)|도 ?(?:무방|문제 ?없)",
+  // 받침 ㄹ + 시기·차례 (살 시기입니다·팔 시기입니다·모아갈 시기입니다·살 차례입니다 — '지급할 시기는'·'같은 시기에'·'네 차례 지급'은 그대로) · '때죠·때네요'(들어갈 때죠·모을 때네요)
+  `[${RIEUL_FINAL}] ?(?:시기|차례)(?:입|이|예|라|로)|때(?:죠|네|고요)`,
+  // 고르기·시점 말 (더 나은 선택·나은 투자처·매입 구간·아직 늦지 않았습니다 — '자사주 매입 기간'은 그대로)
+  "나은 ?(?:선택|편|투자)|매입 ?구간|늦지 ?않",
 ].join("|");
 export const VALUE_AI_BANNED = new RegExp([BRIEFING_BANNED.source, SCORE_BANNED_RE.source, SCORE_FUTURE_RE.source, VALUE_AI_EXTRA].join("|"), "g");
 

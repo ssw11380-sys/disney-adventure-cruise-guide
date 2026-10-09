@@ -1249,6 +1249,66 @@ describe("[8] AI 가치분석 글 금지어 검사 (valueAiSafeWording, 서버�
     expect(FACTS5.slice(0, 5).filter((f) => cleanDetail(f, "", before, allowBefore).dropped === 1)).toHaveLength(5);
   });
 
+  // 1단계 검토 6차: '나쁩니다'(나쁘다의 -ㅂ니다 활용)·존댓말 허락('사셔도 됩니다')·'~도 무방/문제없'·'살 시기·차례'·'때죠·때네요'·'더 나은 선택'·'매입 구간'·'늦지 않' (5차 검사로는 지나갔다)
+  const ATTACKS6 = [
+    // 나쁘다의 '-ㅂ니다' 활용 (4차 줄은 '나빠·나빴·나쁠'만)
+    "실적이 나쁩니다.",
+    "재무 상태가 나쁩니다.",
+    "업황이 나쁩니다.",
+    // 존댓말 허락 '~셔도 됩니다'
+    "지금 사셔도 됩니다.",
+    "계속 보유하셔도 됩니다.",
+    "들어가셔도 됩니다.",
+    "투자하셔도 됩니다.",
+    "매입하셔도 됩니다.",
+    "사들이셔도 됩니다.",
+    "사 두셔도 됩니다.",
+    "파셔도 됩니다.",
+    "갖고 계셔도 됩니다.",
+    // '~도 무방·문제없'
+    "지금 사도 무방합니다.",
+    "보유해도 무방합니다.",
+    "매입해도 무방합니다.",
+    "사도 문제없습니다.",
+    // 받침 ㄹ + 시기·차례 · '때죠·때네요'
+    "이제는 살 시기입니다.",
+    "지금은 팔 시기입니다.",
+    "모아갈 시기입니다.",
+    "이제 살 차례입니다.",
+    "들어갈 때죠.",
+    "모을 때네요.",
+    // 고르기·시점 말
+    "이 종목이 더 나은 선택입니다.",
+    "더 나은 투자처입니다.",
+    "지금은 매입 구간입니다.",
+    "아직 늦지 않았습니다.",
+    "지금 사셔도 늦지 않습니다.",
+  ];
+  // 6차 낱말과 겹치는 사실 문장 (걸리면 안 됨): '~할 시기는'(뒤에 '는'·'에')·'네 차례'·'자사주 매입 기간'
+  const FACTS6 = [
+    "배당금을 지급할 시기는 매년 4월입니다.",
+    "2024년 분기 배당을 네 차례 지급했습니다.",
+    "같은 시기에 부채는 줄었습니다.",
+    "자사주 매입 기간은 2025년 3월부터 6월입니다.",
+  ];
+  it("1단계 검토 6차: '나쁩니다'·'사셔도 됩니다'·'사도 무방합니다'·'살 시기입니다'·'들어갈 때죠'·'더 나은 선택'·'매입 구간'·'늦지 않았습니다' 27개도 모두 빼고, 사실 문장 86개(21·20·23·22)는 한 글자도 바꾸지 않는다", () => {
+    expect(ATTACKS6).toHaveLength(27);
+    const passed = ATTACKS6.filter((a) => safeValueText(`## 숫자로 본 변화\n1. 매출은 3년 연속 늘었습니다.\n2. ${a}`).includes(a));
+    expect(passed).toEqual([]);
+    for (const a of ATTACKS6) expect(safeValueCheck(a).dropped, a).toBe(1);
+    // 사실 문장 86개(1차 21 · 3차 20 · 4차 23 · 5차 22)와 6차 낱말과 겹치는 사실 문장은 그대로
+    const facts = [...FACTS, ...FACTS3, ...FACTS4, ...FACTS5];
+    expect(facts).toHaveLength(86);
+    for (const f of [...facts, ...FACTS6]) expect(safeValueCheck(f), f).toEqual({ text: f, dropped: 0 });
+    expect(safeValueText(facts.join("\n"))).toBe(facts.join("\n"));
+    // 앞의 공격 문장도 그대로 걸린다
+    expect([...ATTACKS, ...ATTACKS3, ...ATTACKS4, ...ATTACKS5, ...JUDGE5].filter((a) => safeValueCheck(a).dropped === 0)).toEqual([]);
+    // 고치기 전 금지어(6차 줄을 뺀 것)로는 모두 지나갔다
+    const before = new RegExp(VALUE_AI_BANNED.source.split("|나쁩|")[0]!, "g");
+    expect(before.source.length).toBeLessThan(VALUE_AI_BANNED.source.length);
+    expect(ATTACKS6.filter((a) => cleanDetail(`## 변화\n${a}`, "", before, VALUE_AI_ALLOW).dropped === 0)).toEqual(ATTACKS6);
+  });
+
   it("요청 ID로 회수하는 경로(analysisWaitRecovery)도 같은 검사: 응답·상태 확인의 latest·request.result 모두 걸린 줄을 뺀 글, 저장은 원문 · 끄면 원문 그대로", async () => {
     const ID = "value-request-0001";
     for (const on of [true, false]) {

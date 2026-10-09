@@ -22,6 +22,8 @@ const h = vi.hoisted(() => ({
   stock: undefined as unknown,
   scores: undefined as unknown,
   scoresError: false,
+  // 받은 AI 분석 글 (종류별) — 없으면 지금처럼 '분석 생성 중'
+  analysis: {} as Record<string, unknown>,
   scoreCalls: [] as Array<[string, boolean]>,
   push: vi.fn(),
   setParams: vi.fn(),
@@ -55,7 +57,7 @@ vi.mock("@/api/hooks", () => ({
   useStock: () => ({ ...idle, data: h.stock }),
   useCandles: () => idle,
   useBriefings: () => ({ ...idle, data: [] }),
-  useAnalysis: () => ({ ...idle, isLoading: true }),
+  useAnalysis: (_code: string, kind: string) => (h.analysis[kind] ? { ...idle, data: h.analysis[kind] } : { ...idle, isLoading: true }),
   useStockNews: () => ({ ...idle, data: { code: "NVDA", name: "엔비디아", news: [], newsError: null, disclosures: [], disclosuresError: null } }),
   useAnyMarketOpen: () => ({ open: false, fresh: false }),
   useStockMutations: () => ({ register: { mutate: vi.fn() }, remove: { mutate: vi.fn() }, refreshAnalysis: { mutate: vi.fn(), isPending: false, isError: false, error: null } }),
@@ -124,6 +126,7 @@ const order = (r: ReturnType<typeof render>, ...needles: string[]) => needles.ma
 beforeEach(() => {
   h.scoreCalls.length = 0;
   h.scoresError = false;
+  h.analysis = {};
   h.push.mockReset();
   h.setParams.mockReset();
   forgetWindowClass();
@@ -682,5 +685,44 @@ describe("3단계 — 한국 간이 가치 (삼성전자·SK하이닉스·KB금�
     const small = open(nvdaStock(), "NVDA");
     small.act(() => (small.byLabel("구성·계산 방법 보기").props.onPress as () => void)());
     expect(small.all().filter((n) => n.type === "Text").map(textOf)).toContain("가격 안정성 · 10");
+  });
+});
+
+describe("AI 가치분석 안전망 (1단계 [8], 서버 플래그 valueAiSafeWording — 앱 fallback 켜짐)", () => {
+  const NOTE = "AI가 쓴 글 · 틀릴 수 있음 · 참고 정보이며 투자 권유가 아닙니다";
+  const BODY = "## 매출과 이익\n매출은 3년 연속 늘었습니다.";
+  const withValueText = () => {
+    h.analysis = { value: { id: 1, code: "NVDA", kind: "value", content: BODY, missing: [], model: "fake", cached: true, createdAt: "2026-09-28T10:00:00+09:00" } };
+  };
+  // 접은 화면 · 펼친 가로(좌우) · 펼친 세로(한 단) · 울트라 펼침 세로(윗줄+아랫줄 — 오른쪽 칸 미리보기), 지표 점수 켬/끔 · 가치 되돌리기 스위치 끔
+  const SIZES: Array<[number, number]> = [[475, 751], [933, 704], [704, 933], [859, 954]];
+  const FLAGS = [
+    { name: "지표 점수 켬", scoresCase: "NVDA", extra: {} },
+    { name: "지표 점수 끔", scoresCase: "NVDA", extra: { flag: false } },
+    { name: "가치 되돌리기 스위치 끔", scoresCase: "NVDA_valueOff", extra: {} },
+  ];
+  it.each(SIZES.flatMap((size) => FLAGS.map((f) => ({ size, ...f }))))(
+    "$size · $name: 가치분석 글 바로 위에 'AI가 쓴 글' + 고지 한 줄이 한 번, 화면 아래 공통 고지도 그대로",
+    ({ size, scoresCase, extra }) => {
+      withValueText();
+      const r = open(nvdaStock(), scoresCase, { tab: "value", size, ...extra });
+      const text = r.text();
+      expect(text).toContain("매출은 3년 연속 늘었습니다");
+      expect(text.split(NOTE)).toHaveLength(2);
+      expect(text.indexOf(NOTE)).toBeLessThan(text.indexOf("매출은 3년 연속"));
+      // 화면 아래 공통 고지: Screen 의 disclaimer(접은 화면·펼친 세로·울트라) 또는 두 칸 화면(SplitScreen — 펼친 가로)이 늘 그리는 Disclaimer
+      const screen = r.all().find((n) => n.type === "Screen");
+      expect(screen ? screen.props.disclaimer === true : r.all().filter((n) => n.type === "Disclaimer").length === 1).toBe(true);
+    },
+  );
+  it("서버가 valueAiSafeWording 을 끄면 지금 화면 그대로 (한 줄 없음) · 다른 탭 AI 글에는 붙지 않음", () => {
+    withValueText();
+    const off = open(nvdaStock(), "NVDA", { tab: "value", flags: { valueAiSafeWording: false } });
+    expect(off.text()).toContain("매출은 3년 연속 늘었습니다");
+    expect(off.text()).not.toContain(NOTE);
+    h.analysis = { company: { id: 2, code: "NVDA", kind: "company", content: "기업개요 본문", missing: [], model: "fake", cached: true, createdAt: "2026-09-28T10:00:00+09:00" } };
+    const company = open(nvdaStock(), "NVDA", { tab: "company" });
+    expect(company.text()).toContain("기업개요 본문");
+    expect(company.text()).not.toContain(NOTE);
   });
 });

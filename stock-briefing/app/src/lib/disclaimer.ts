@@ -6,3 +6,8 @@ export const DISCLAIMER_SHORT = "참고 정보이며 투자 권유가 아닙니�
 export const AI_NOTE = "AI가 쓴 글 · 틀릴 수 있음";
 /** 종목 브리핑 카드 날짜 줄 끝 조각 (같은 플래그) */
 export const AI_TAG = "AI가 쓴 글";
+/**
+ * AI 가치분석 글 바로 위 한 줄 (가치 점수 개선 1단계 [8] 안전망, 서버 플래그 valueAiSafeWording) — 금지어 검사가 놓친 말이 있어도
+ * 글이 AI가 쓴 참고 글이며 권유가 아님을 글과 함께 보인다 (위의 'AI가 쓴 글 · 틀릴 수 있음' + 짧은 고지)
+ */
+export const VALUE_AI_NOTE = `${AI_NOTE} · ${DISCLAIMER_SHORT}`;
