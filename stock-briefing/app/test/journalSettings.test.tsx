@@ -14,7 +14,11 @@ const h = vi.hoisted(() => ({
   health: { data: undefined as unknown, isError: false, error: null as unknown },
   push: vi.fn(),
   win: { width: 475, height: 751, scale: 2.625, fontScale: 1 },
+  appVersion: "1.5.0",
 }));
+
+/** 지문은 이 고정 버전으로 뜬다 — 배포마다 releaseVersion.json 이 올라가도(AGENTS.md) 지문이 흔들리지 않게 */
+const PINNED_VERSION = "1.5.0";
 
 vi.mock("react-native", () => ({
   View: "View",
@@ -28,6 +32,8 @@ vi.mock("react-native", () => ({
 }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
 vi.mock("expo-constants", () => ({ default: { expoConfig: { version: "1.5.0" } } }));
+// 설정 화면은 '현재 {버전}'(releaseVersion.json)을 보여 준다 — 지문이 배포 버전에 묶이지 않게 고정 (foldScreens·screenInfoCard 와 같은 방식)
+vi.mock("@/releaseVersion.json", () => ({ get version() { return h.appVersion; } }));
 vi.mock("@expo/vector-icons/Ionicons", () => ({ default: "Ionicons" }));
 vi.mock("expo-router", () => ({ router: { push: h.push }, useLocalSearchParams: () => ({}) }));
 vi.mock("@/theme", async () => {
@@ -95,6 +101,7 @@ const draw = (w: number, hh: number, flags: Record<string, boolean>) => {
 };
 
 beforeEach(() => {
+  h.appVersion = PINNED_VERSION;
   h.flags = {};
   h.health = healthWith(records());
   h.push.mockReset();
@@ -109,12 +116,12 @@ const LAYOUTS = [
   ["폰 475 묶음", 475, 751, { settingsSections: true, tradeRecords: true }],
 ] as const;
 
-/** 바꾸기 전 main 코드에서 뜬 지문 (main fdce7e8 위에 다시 맞출 때 그 main 의 settings.tsx 를 이 틀로 그려 다시 뜸 — 끈 트리와 같음) */
+/** 바꾸기 전 main 코드에서 뜬 지문 (main fdce7e8 의 settings.tsx 를 이 틀로, 버전은 PINNED_VERSION 으로 고정해 그려 다시 뜸 — 끈 트리와 같음) */
 const BASE: Record<string, string> = {
-  "폰 475": "d246c5ad73b4d85af04354d0bcd5a928bfef29f2",
-  "폰 475 매매 기록 줄": "b3fdc1c00da09af642e57244c43b4443dabb2522",
-  "넓은 933×704 두 칸": "c2889a0ab0aec336f59f5fc489a6f52db7d3d25e",
-  "폰 475 묶음": "607dada512716cd83008add2ef715234647afc62",
+  "폰 475": "6bf396ffaf671c89eaea9852b7e11b34974a3934",
+  "폰 475 매매 기록 줄": "e304f7bb2584cec361eb4605cba4dbcfd0016c42",
+  "넓은 933×704 두 칸": "f3abba770daa0348b40e5a88d21594e341e91043",
+  "폰 475 묶음": "afa9227c3bc3a3d69a846fb3be27fa52f9dd4f3f",
 };
 
 describe("매매일지 카드를 끄면 설정이 지금과 같다 (지문)", () => {
@@ -128,6 +135,20 @@ describe("매매일지 카드를 끄면 설정이 지금과 같다 (지문)", ()
       if (!("tradeRecords" in flags) || flags.tradeRecords === false) expect(print(draw(w, hh, { ...flags, tradeJournal: true }))).toBe(off);
     });
   }
+});
+
+describe("배포 버전을 올려도 지문은 그대로 (releaseVersion.json 고정)", () => {
+  it("다음 배포 버전이면 '현재 {버전}' 글만 바뀌고, 고정 버전으로 그리면 BASE 와 같다", async () => {
+    const real = ((await vi.importActual("@/releaseVersion.json")) as { version: string }).version;
+    const next = real.replace(/(\d+)$/, (d) => String(Number(d) + 1));
+    const [name, w, hh, flags] = LAYOUTS[3]; // 폰 475 묶음 — '앱 업데이트' 칸 설명에 '현재 {버전}'
+    h.appVersion = next;
+    const bumped = draw(w, hh, { ...flags });
+    expect(JSON.stringify(tree(bumped.tree))).toContain(`현재 ${next}`);
+    expect(print(bumped)).not.toBe(BASE[name]);
+    h.appVersion = PINNED_VERSION;
+    expect(print(draw(w, hh, { ...flags }))).toBe(BASE[name]);
+  });
 });
 
 const ON = { tradeJournal: true, tradeRecords: true };
