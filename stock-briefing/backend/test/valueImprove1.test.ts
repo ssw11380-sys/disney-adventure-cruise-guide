@@ -11,7 +11,7 @@ import { parsePromptFile, PromptStore } from "../src/llm/prompts.js";
 import { createMigratedDb, type Db } from "../src/db/index.js";
 import type { Candle } from "../src/domain/types.js";
 import type { GenerateRequest, GenerateResult, TextGenerator } from "../src/llm/generator.js";
-import { isOldValueText, safeValueCheck, safeValueText, VALUE_AI_BANNED } from "../src/services/analysisService.js";
+import { isOldValueText, safeValueCheck, safeValueText, VALUE_AI_ALLOW, VALUE_AI_BANNED } from "../src/services/analysisService.js";
 import { cleanDetail } from "../src/services/briefingWording.js";
 import { FEATURES } from "../src/services/featureService.js";
 import { compositeOf, type ScoreSources, type ScoresResponse, type ScoreStock } from "../src/services/indicatorScoreService.js";
@@ -378,17 +378,20 @@ describe("[3] PER 줄 · 적자 회사 덩어리 · 가격 안내 · 영업 외 
     expect(metricRow(a1, { ...ON, extra: { plainPer: 400, cyclical: { byIndustry: false, lo: -26.7, hi: 31.6, steady: "up" } } }).note).toContain("해마다 올라 변동 폭이 커서");
   });
 
-  it("1단계 검토 4차: 머리 문장 회사 수(153개 회사)와 지표 값이 있는 회사 수(152)가 다르면 'PER 값이 있는 152곳 중' · 같으면 '비교한 업종 N곳 중' · 무리 단계가 다르면 그대로", () => {
-    expect(profitMedianText("A1", "20.2배", "업종", 152, 27, "PER")).toBe("흑자 회사 가운데값 20.2배 · PER 값이 있는 152곳 중 27%는 적자");
-    expect(profitMedianText("A2", "73.4배", "업종", 64, 47, "기업가치 ÷ 영업이익")).toBe("영업이익 흑자 회사 가운데값 73.4배 · 기업가치 ÷ 영업이익 값이 있는 64곳 중 47%는 영업적자");
+  it("1단계 검토 4차·5차: 머리 문장 회사 수(153개 회사)와 지표 값이 있는 회사 수(152)가 다르면 '이익 자료가 있는 152곳 중'('PER 값이 있는'은 적자 회사에 PER 이 없다고 아는 사람에게 앞뒤가 맞지 않았다) · 같으면 '비교한 업종 N곳 중' · 무리 단계가 다르면 그대로", () => {
+    expect(profitMedianText("A1", "20.2배", "업종", 152, 27, true)).toBe("흑자 회사 가운데값 20.2배 · 이익 자료가 있는 152곳 중 27%는 적자");
+    expect(profitMedianText("A2", "73.4배", "업종", 64, 47, true)).toBe("영업이익 흑자 회사 가운데값 73.4배 · 영업이익 자료가 있는 64곳 중 47%는 영업적자");
+    expect(profitMedianText("A1", "20.2배", "업종", 152, 27, false)).toBe("흑자 회사 가운데값 20.2배 · 비교한 업종 152곳 중 27%는 적자");
+    // 'PER 값이 있는'·'값이 있는' 말은 더 쓰지 않는다
+    expect(profitMedianText("A1", "20.2배", "업종", 152, 27, true)).not.toMatch(/PER 값이 있는|값이 있는/);
     const a1 = ms("A1", 71, { x: 1 / 44.8, show: 44.8, peer: peer({ n: 152 }), loss: { share: 0.27, median: 1 / 20.2, pos: { industry: 59, market: 24 }, score: 50 } });
     const row = (groupN: NonNullable<RowCtx["extra"]>["groupN"]) => metricRow(a1, { ...ON, extra: { groupN } }).peerMedian;
-    expect(row({ level: "industry", n: 153 })).toBe("흑자 회사 가운데값 20.2배 · PER 값이 있는 152곳 중 27%는 적자");
+    expect(row({ level: "industry", n: 153 })).toBe("흑자 회사 가운데값 20.2배 · 이익 자료가 있는 152곳 중 27%는 적자");
     expect(row({ level: "industry", n: 152 })).toBe("흑자 회사 가운데값 20.2배 · 비교한 업종 152곳 중 27%는 적자");
     expect(row({ level: "sector", n: 400 })).toBe("흑자 회사 가운데값 20.2배 · 비교한 업종 152곳 중 27%는 적자");
     expect(row(null)).toBe("흑자 회사 가운데값 20.2배 · 비교한 업종 152곳 중 27%는 적자");
     // 끄면 (valueMedianText) 예전 가운데값 그대로
-    expect(metricRow(a1, { ...ON, text: { ...VALUE_TEXT_ON, medianText: false }, extra: { groupN: { level: "industry", n: 153 } } }).peerMedian).not.toContain("값이 있는");
+    expect(metricRow(a1, { ...ON, text: { ...VALUE_TEXT_ON, medianText: false }, extra: { groupN: { level: "industry", n: 153 } } }).peerMedian).not.toContain("자료가 있는");
   });
 
   it("가격 안내: 기본 · 경기 민감(섞기로 크게 다름) · 마지막 종가가 20일 평균과 5% 넘게 다르면 그 가격의 PER·PBR, 끄면 예전 한 줄", () => {
@@ -1119,6 +1122,131 @@ describe("[8] AI 가치분석 글 금지어 검사 (valueAiSafeWording, 서버�
     for (const f of [...FACTS, ...FACTS3, ...FACTS4]) expect(safeValueCheck(f), f).toEqual({ text: f, dropped: 0 });
     // 앞의 공격 문장도 그대로 걸린다
     expect([...ATTACKS, ...ATTACKS3].filter((a) => safeValueCheck(a).dropped === 0)).toEqual([]);
+  });
+
+  // 1단계 검토 5차: 직접적인 지시·예측의 흔한 모양 (4차 검사로는 검토 문장 26개 모두 지나갔다 — scratchpad vs5/adv5.mts)
+  const ATTACKS5 = [
+    // '~면 됩니다'
+    "지금 사면 됩니다.",
+    "조정 때 사면 됩니다.",
+    "팔면 됩니다.",
+    "보유하면 됩니다.",
+    "계속 보유하시면 됩니다.",
+    "담으면 됩니다.",
+    "처분하면 됩니다.",
+    "갈아타면 됩니다.",
+    "지금 사시면 됩니다.",
+    "이 가격에 파시면 됩니다.",
+    "조금씩 모으면 됩니다.",
+    "기다리면 됩니다.",
+    "배당만 받으면 됩니다.",
+    "지금 사면 되는 가격입니다.",
+    "팔면 좋습니다.",
+    "정리하면 됩니다.",
+    "보유하시면 돼요.",
+    // 의견·보유 표현
+    "보유 의견입니다.",
+    "비중 유지입니다.",
+    "중립 의견입니다.",
+    "비중 확대 의견입니다.",
+    "비중을 유지합니다.",
+    // 현재형 예측
+    "주가는 곧 오릅니다.",
+    "주가는 10만원까지 갑니다.",
+    "주가는 오르게 되어 있습니다.",
+    "배당은 늘게 됩니다.",
+    "주가는 내립니다.",
+    "주가는 곧 떨어집니다.",
+    "주가는 두 배로 뜁니다.",
+    "주가는 상승합니다.",
+    "주가는 하락합니다.",
+    "주가는 20만원까지 간다.",
+    "실적은 좋아지게 되어 있습니다.",
+    "이익은 커지게 됩니다.",
+    "주가는 회복하게 됩니다.",
+    // 영어 투자 의견
+    "Buy.",
+    "Sell.",
+    "Hold.",
+    "Rating: Hold",
+    "Price target: $200.",
+    "We recommend holding the shares.",
+    "Overweight.",
+    "Underweight.",
+    "Accumulate.",
+    "Worth buying.",
+    "fairly valued",
+    "a good entry point",
+    "HOLD.",
+    "Rating: Neutral",
+    "Target price $250.",
+    "Equal-weight.",
+    "Market Perform.",
+    "Good time to buy.",
+  ];
+  // 걱정·평가 말과 가치를 돌려 말한 문장 (검토 should — 13개 모두 지나갔다)
+  const JUDGE5 = [
+    "실적이 걱정됩니다.",
+    "주가 하락이 염려됩니다.",
+    "부채가 많아 조심스럽습니다.",
+    "주가가 이익에 비해 너무 높습니다.",
+    "재무가 깔끔합니다.",
+    "든든한 배당입니다.",
+    "믿음직한 회사입니다.",
+    "값어치가 있습니다.",
+    "제 가치를 인정받지 못하고 있습니다.",
+    "공정 가치는 10만원입니다.",
+    "주가에 아직 반영되지 않은 가치가 있습니다.",
+    "Solid balance sheet.",
+    "A great company.",
+    "주당 공정가치는 150달러입니다.",
+    "주가는 공정가치보다 낮습니다.",
+    "Strong balance sheet.",
+  ];
+  // 5차 낱말과 겹치거나 '~야 할 '·'팔아'에 잘못 걸리던 사실 문장 (걸리면 안 됨)
+  const FACTS5 = [
+    "1년 안에 갚아야 할 빚(유동부채)은 3.2조원입니다.",
+    "2024년 자회사를 팔아 생긴 이익 2.1조원이 순이익에 들어 있습니다.",
+    "지급해야 할 배당금은 0.5조원입니다.",
+    "회사가 내야 할 법인세는 1.1조원입니다.",
+    "2023년 공장을 팔아 얻은 이익은 0.3조원입니다.",
+    "자회사 지분을 팔아서 남긴 이익은 0.4조원입니다.",
+    "상환해야 할 사채는 1.0조원입니다.",
+    "주가는 2025년 한 해 30% 올랐습니다.",
+    "주가는 2025년 10만원까지 올랐습니다.",
+    "금융자산의 공정가치는 3.2조원입니다.",
+    "투자부동산의 공정가치는 1,200억원입니다.",
+    "매출 비중은 30%로 유지되었습니다.",
+    "해외 매출 비중이 확대되었습니다.",
+    "감가상각누계액(Accumulated depreciation)은 2.0조원입니다.",
+    "HD현대(HD Hyundai Holdings) 매출은 늘었습니다.",
+    "이 비용은 영업비용에 들어갑니다.",
+    "배당은 연 2회 지급합니다.",
+    "현재가를 EPS로 나누면 PER 12.0배가 됩니다.",
+    "주가가 오른 만큼 PER도 높아졌습니다.",
+    "이익이 늘게 되었습니다.",
+    "경제적 부가가치 자료는 확인 안 됨.",
+    "2025년 자사주 2,000억원어치를 사들였습니다.",
+  ];
+  it("1단계 검토 5차: '~면 됩니다'·'보유 의견'·'비중 유지'·현재형 예측('오릅니다'·'10만원까지 갑니다'·'오르게 되어 있습니다')·영어 투자 의견('Buy.'·'Hold.'·'Price target')·걱정·평가 말도 모두 빼고, '갚아야 할 빚'·'팔아 생긴 이익' 같은 사실 문장은 그대로", () => {
+    const passed = [...ATTACKS5, ...JUDGE5].filter((a) => safeValueText(`## 숫자로 본 변화\n1. 매출은 3년 연속 늘었습니다.\n2. ${a}`).includes(a));
+    expect(passed).toEqual([]);
+    expect(ATTACKS5.length).toBeGreaterThanOrEqual(53);
+    // 사실 문장(21 · 3차 20 · 4차 23 · 5차 22)은 한 글자도 바뀌지 않는다
+    expect([FACTS.length, FACTS3.length, FACTS4.length]).toEqual([21, 20, 23]);
+    for (const f of [...FACTS, ...FACTS3, ...FACTS4, ...FACTS5]) expect(safeValueCheck(f), f).toEqual({ text: f, dropped: 0 });
+    // 앞의 공격 문장도 그대로 걸린다
+    expect([...ATTACKS, ...ATTACKS3, ...ATTACKS4].filter((a) => safeValueCheck(a).dropped === 0)).toEqual([]);
+    // 허용 말('갚아야 할'·'팔아 생긴')은 뒤에 권유가 오면 그대로 걸린다
+    for (const a of ["빚을 갚아야 할 때입니다.", "지금은 팔아야 할 시점입니다.", "지금 내야 할 차례입니다.", "주식을 팔아 생긴 현금으로 다른 종목을 사면 됩니다.", "갚아야 할 빚이 많아 부담입니다.", "팔아서 얻은 이익이 크니 다시 사도 됩니다."]) {
+      expect(safeValueCheck(a).dropped, a).toBe(1);
+    }
+    // 고치기 전 금지어(5차 줄을 뺀 것)로는 검토 문장이 모두 지나갔다
+    const before = new RegExp(VALUE_AI_BANNED.source.split("|(?<![가-힣])(?:사|팔|파|담으")[0]!, "g");
+    expect(before.source.length).toBeLessThan(VALUE_AI_BANNED.source.length);
+    const allowBefore = new RegExp(VALUE_AI_ALLOW.source.split("|(?:갚아")[0]!, "g");
+    expect(ATTACKS5.slice(0, 8).filter((a) => cleanDetail(`## 변화\n${a}`, "", before, allowBefore).dropped === 0)).toHaveLength(8);
+    expect(FACTS5.slice(0, 5).filter((f) => cleanDetail(f, "", before, allowBefore).dropped === 1)).toHaveLength(5);
   });
 
   it("요청 ID로 회수하는 경로(analysisWaitRecovery)도 같은 검사: 응답·상태 확인의 latest·request.result 모두 걸린 줄을 뺀 글, 저장은 원문 · 끄면 원문 그대로", async () => {

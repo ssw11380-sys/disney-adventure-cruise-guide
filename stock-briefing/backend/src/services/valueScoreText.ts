@@ -539,12 +539,13 @@ const signedPct = (v: number) => `${v < 0 ? "−" : ""}${(Math.round(Math.abs(v)
 /** [3] 적자 회사 덩어리 (valueMedianText) — 적자 비율이 이보다 크면 위치 옆에 흑자 회사끼리 위치 */
 export const LOSS_NOTE_SHARE = 0.1;
 /**
- * valueName: 머리 문장의 회사 수(같은 업종(…, 153개 회사))와 이 지표 값이 있는 회사 수(152)가 다를 때 지표 이름 — '비교한 업종 152곳 중' 대신
- * 'PER 값이 있는 152곳 중'으로 왜 수가 다른지 보인다 (1단계 검토 4차)
+ * countDiffers: 머리 문장의 회사 수(같은 업종(…, 153개 회사))와 이 지표 값이 있는 회사 수(152)가 다를 때 — '비교한 업종 152곳 중' 대신
+ * '이익 자료가 있는 152곳 중'(기업가치 ÷ 영업이익은 '영업이익 자료가 있는 64곳 중')으로 왜 수가 다른지 보인다 (1단계 검토 4차).
+ * 1단계 검토 5차: 4차의 'PER 값이 있는 152곳 중 27%는 적자'는 '적자 회사는 PER 이 없다(N/A)'고 아는 사람에게 앞뒤가 맞지 않게 읽혔다 — 적자 회사도 이익 자료는 있다
  */
-export function profitMedianText(k: MetricKey, median: string, lname: string, n: number, lossPct: number, valueName?: string | null): string {
+export function profitMedianText(k: MetricKey, median: string, lname: string, n: number, lossPct: number, countDiffers?: boolean): string {
   const op = k === "A2";
-  const who = valueName ? `${valueName} 값이 있는` : `비교한 ${lname}`;
+  const who = countDiffers ? `${op ? "영업이익" : "이익"} 자료가 있는` : `비교한 ${lname}`;
   return `${op ? "영업이익 " : ""}흑자 회사 가운데값 ${median} · ${who} ${n.toLocaleString("en-US")}곳 중 ${lossPct}%는 ${op ? "영업적자" : "적자"}`;
 }
 export const profitPosText = (base: string, p: number) => `${base} (흑자 회사끼리 ${Math.floor(p + 0.5)})`;

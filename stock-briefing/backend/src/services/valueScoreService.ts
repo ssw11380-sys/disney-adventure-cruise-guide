@@ -921,7 +921,7 @@ export interface RowExtra {
   plainPer?: number | "loss" | null;
   /** 경기 민감 까닭 (업종 목록 · 이익률 변동 — 가장 낮은 해·높은 해 %, 해마다 오르기만·내리기만 했는지) */
   cyclical?: { byIndustry: boolean; lo: number | null; hi: number | null; steady?: "up" | "down" | null } | null;
-  /** 머리 문장(peerLine)에 적은 비교 회사 수와 그 무리 단계 — 지표 값이 있는 회사 수가 다르면 'PER 값이 있는 152곳 중' (1단계 검토 4차) */
+  /** 머리 문장(peerLine)에 적은 비교 회사 수와 그 무리 단계 — 지표 값이 있는 회사 수가 다르면 '이익 자료가 있는 152곳 중' (1단계 검토 4차 · 5차 말 고침) */
   groupN?: { level: PeerLevel; n: number } | null;
   /** 영업이익 기준 PER (영업 외 이익이 세전이익의 30% 이상일 때만 — 영업 외 손실 쪽은 없음, oneOffOf) */
   opPer?: { taxPct: number; per: number } | null;
@@ -967,10 +967,10 @@ export function metricRow(m: MetricScore, ctx: RowCtx = { path: "general", annua
   let peerMedian = median && m.score !== null ? `${lname} 가운데값 ${median}` : null;
   if (clump && clump.median !== null) {
     const pm = medianText(m.key, clump.median, false);
-    // 머리 문장의 회사 수(153개 회사)와 이 지표 값이 있는 회사 수(152)가 다르면 'PER 값이 있는 152곳 중' (1단계 검토 4차)
+    // 머리 문장의 회사 수(153개 회사)와 이 지표 값이 있는 회사 수(152)가 다르면 '이익 자료가 있는 152곳 중' (1단계 검토 4차 · 5차 말 고침)
     const g = x.groupN;
-    const valueName = g && g.level === m.peer!.level && g.n !== m.peer!.n ? shortMetricName(m.key, ctx.grade) : null;
-    if (pm) peerMedian = lossPct > 0 ? profitMedianText(m.key, pm, lname, m.peer!.n, lossPct, valueName) : `${lname} 가운데값 ${pm}`;
+    const countDiffers = !!g && g.level === m.peer!.level && g.n !== m.peer!.n;
+    if (pm) peerMedian = lossPct > 0 ? profitMedianText(m.key, pm, lname, m.peer!.n, lossPct, countDiffers) : `${lname} 가운데값 ${pm}`;
   }
   // 경기 민감 PER (섞기): 까닭 글 — [10] 이면 업종 목록·이익률 숫자로, 아니면 예전 말
   const why = t.wordingFacts ? cyclicalWhy(x.cyclical ?? { byIndustry: true, lo: null, hi: null }) : CYCLICAL_WHY_OLD;
