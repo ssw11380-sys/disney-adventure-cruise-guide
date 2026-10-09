@@ -125,14 +125,58 @@ export function safeSummary(s: WordingSnapshot, modelText: string): string {
 const HEADING = /^## /;
 const isBlank = (l: string) => l.trim().length === 0;
 
+/** 앱 마크다운(markdown-it)이 빈칸으로 그리는 이름 붙은 HTML 엔티티 — 나머지 이름 엔티티는 검사할 때 빈 글자로 본다 ('&amp;' 등 몇 개는 그 글자) */
+const SPACE_ENTITY = /^(?:nbsp|NonBreakingSpace|ensp|emsp|emsp13|emsp14|numsp|puncsp|thinsp|ThinSpace|hairsp|VeryThinSpace|MediumSpace|ThickSpace|Tab|NewLine)$/;
+const CHAR_ENTITY: Readonly<Record<string, string>> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+
+function decodeEntity(m: string, dec: string | undefined, hex: string | undefined, name: string | undefined): string {
+  if (dec !== undefined || hex !== undefined) {
+    const n = dec !== undefined ? Number(dec) : parseInt(hex!, 16);
+    return n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : "\uFFFD";
+  }
+  if (name === undefined) return m;
+  return SPACE_ENTITY.test(name) ? " " : (CHAR_ENTITY[name] ?? "");
+}
+
+/**
+ * 검사용 복사본 (1단계 검토 7차): 앱 마크다운으로 그리면 같은 문장으로 보이는 변형을 걷어 낸다 — '지금  사셔도  됩니다'(두 칸·NBSP·탭·전각 공백),
+ * '지금 사셔도 **됩니다**'(낱말 하나만 강조 *·_·`), '&nbsp;'·'&#45768;'(엔티티), '<b>…</b>'(태그), '[글](주소)'(링크),
+ * 분해해 적은 한글·전각 글자(NFKC), 폭 없는 공백·U+2060 같은 보이지 않는 서식 글자, 한글 채움 글자(빈칸으로 보임), '\*'(역슬래시 꾸밈).
+ * 강조 표시를 빼고 빈칸을 한 칸으로 모은 뒤 예외 말·금지어를 본다. 보여 주는 글은 원문 그대로 둔다 (검사할 때만)
+ */
+export function renderedForCheck(line: string): string {
+  return line
+    .replace(/&(?:#(\d{1,7})|#[xX]([0-9a-fA-F]{1,6})|([A-Za-z][A-Za-z0-9]{1,31}));/g, decodeEntity)
+    .replace(/<\/?[A-Za-z][^<>]*>/g, "")
+    .replace(/!?\[([^\]\n]*)\]\([^)\n]*\)/g, "$1")
+    .normalize("NFKC")
+    .replace(/[\u115F\u1160\u3164\uFFA0]/g, " ")
+    .replace(/\p{Cf}/gu, "")
+    .replace(/\\(?=[!-/:-@[-`{-~])/g, "")
+    .replace(/[*_`]/g, "")
+    .replace(/\s+/g, " ");
+}
+
 /**
  * 상세 글 검사. 줄마다 보고, '## ' 제목 줄이 걸리면 그 제목과 다음 제목 전까지의 줄을 모두, 제목이 아닌 줄이 걸리면 그 줄만 뺀다.
  * 내용 줄(빈 줄 제외)이 모두 빠진 제목도 빼고, 빈 줄이 3줄 넘게 이어지면 1줄로. 뺀 내용 줄이 있으면 끝에 '(문장 검사에서 N줄을 뺐습니다)'.
  * 걸린 것이 없으면 글자 하나 바꾸지 않고 그대로 (dropped 0). banned: 거르는 말 (기본 브리핑 금지어 — AI 가치분석은 더 엄격한 VALUE_AI_BANNED, 'g' 플래그 필요).
- * allow: 검사 전에 빈칸으로 바꿔 두는 사실 말 ('g' 플래그 — AI 가치분석의 '이익 안정성'·'위험가중자산' 등). 없으면 그대로 본다. 돌려주는 글은 원문 그대로
+ * allow: 검사 전에 빈칸으로 바꿔 두는 사실 말 ('g' 플래그 — AI 가치분석의 '이익 안정성'·'위험가중자산' 등). 없으면 그대로 본다.
+ * opts.rendered: 줄을 검사용 복사본(renderedForCheck — 강조 표시 빼고 빈칸 한 칸으로)으로 바꾼 뒤 allow·banned 를 본다 (AI 가치분석).
+ * 없으면 줄 그대로 본다 (브리핑 경로는 지금 그대로). 돌려주는 글은 어느 쪽이든 원문 그대로
  */
-export function cleanDetail(detail: string, source: string, banned: RegExp = BRIEFING_BANNED, allow?: RegExp): { text: string; dropped: number } {
-  const hit1 = (l: string) => forbiddenIn(allow ? l.replace(allow, (m) => " ".repeat(m.length)) : l, source, banned);
+export function cleanDetail(
+  detail: string,
+  source: string,
+  banned: RegExp = BRIEFING_BANNED,
+  allow?: RegExp,
+  opts: { rendered?: boolean } = {},
+): { text: string; dropped: number } {
+  const view = opts.rendered === true ? renderedForCheck : (l: string) => l;
+  const hit1 = (raw: string) => {
+    const l = view(raw);
+    return forbiddenIn(allow ? l.replace(allow, (m) => " ".repeat(m.length)) : l, source, banned);
+  };
   const lines = detail.split("\n");
   // 절: 첫 제목 앞 줄들(heading null) + 제목마다 그 아래 줄들
   const sections: Array<{ heading: string | null; body: string[] }> = [{ heading: null, body: [] }];

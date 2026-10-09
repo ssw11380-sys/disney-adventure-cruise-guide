@@ -12,7 +12,7 @@ import { createMigratedDb, type Db } from "../src/db/index.js";
 import type { Candle } from "../src/domain/types.js";
 import type { GenerateRequest, GenerateResult, TextGenerator } from "../src/llm/generator.js";
 import { isOldValueText, safeValueCheck, safeValueText, VALUE_AI_ALLOW, VALUE_AI_BANNED } from "../src/services/analysisService.js";
-import { cleanDetail } from "../src/services/briefingWording.js";
+import { cleanDetail, renderedForCheck } from "../src/services/briefingWording.js";
 import { FEATURES } from "../src/services/featureService.js";
 import { compositeOf, type ScoreSources, type ScoresResponse, type ScoreStock } from "../src/services/indicatorScoreService.js";
 import { krReasonOf } from "../src/services/krValueService.js";
@@ -1307,6 +1307,107 @@ describe("[8] AI 가치분석 글 금지어 검사 (valueAiSafeWording, 서버�
     const before = new RegExp(VALUE_AI_BANNED.source.split("|나쁩|")[0]!, "g");
     expect(before.source.length).toBeLessThan(VALUE_AI_BANNED.source.length);
     expect(ATTACKS6.filter((a) => cleanDetail(`## 변화\n${a}`, "", before, VALUE_AI_ALLOW).dropped === 0)).toEqual(ATTACKS6);
+  });
+
+  // 1단계 검토 7차: 화면(앱 마크다운)에서는 같은 문장인데 빈칸·강조만 바꾼 변형 — 금지어의 ' ?'(빈칸 0~1개)를 비껴갔다
+  // (6차 검사로는 빈칸 변형 27개 중 22개 · 낱말 하나 굵게 44개 · 이전 차수 공격 문장의 빈칸 변형 248개 · 굵게 117/730개가 지나갔다)
+  const SPACES7 = ["  ", "\u00A0", "\t", "\u3000"];
+  const spaced = (a: string, s: string) => a.replaceAll(" ", s);
+  /** 낱말(빈칸으로 나눈 조각) 하나씩만 강조한 변형 — 끝 문장부호는 강조 밖 ('지금 사셔도 **됩니다**.') */
+  const emphasized = (a: string, mark: string) => {
+    const words = a.split(" ");
+    return words.map((_, i) =>
+      words.map((w, j) => (j === i ? w.replace(/^(.*?)([.,!?:]*)$/, (m, body: string, tail: string) => (body ? `${mark}${body}${mark}${tail}` : m)) : w)).join(" "),
+    );
+  };
+  const MARKS7 = ["**", "*", "__", "_", "`"];
+  const ALL_ATTACKS = () => [...ATTACKS, ...ATTACKS3, ...ATTACKS4, ...ATTACKS5, ...JUDGE5, ...ATTACKS6];
+  const ALL_FACTS = () => [...FACTS, ...FACTS3, ...FACTS4, ...FACTS5, ...FACTS6];
+  /** 6차까지의 검사 (검사용 복사본 없이 줄 그대로) */
+  const rawCheck = (l: string) => cleanDetail(l, "", VALUE_AI_BANNED, VALUE_AI_ALLOW).dropped;
+
+  it("1단계 검토 7차: 빈칸만 바꾼 변형(두 칸·NBSP·탭·전각 공백 — '지금  사셔도  됩니다.'·'이제는 살 시기입니다.'·'아직\\t늦지 않았습니다.')도 모두 빼고, 사실 문장 90개의 빈칸 변형은 한 글자도 바꾸지 않는다", () => {
+    const attacks = ALL_ATTACKS().filter((a) => a.includes(" "));
+    const variants = attacks.flatMap((a) => SPACES7.map((s) => spaced(a, s)));
+    expect(variants.length).toBeGreaterThan(900);
+    expect(variants.filter((v) => safeValueCheck(v).dropped !== 1)).toEqual([]);
+    // 목록 안에서도 그 줄만 빠진다 (앞 줄은 원문 그대로)
+    for (const s of SPACES7) {
+      const a = spaced("지금 사셔도 됩니다.", s);
+      expect(safeValueText(`## 숫자로 본 변화\n1. 매출은${s}3년 연속 늘었습니다.\n2. ${a}`), JSON.stringify(a)).toBe(`## 숫자로 본 변화\n1. 매출은${s}3년 연속 늘었습니다.\n\n(문장 검사에서 1줄을 뺐습니다)`);
+    }
+    // 사실 문장 90개(86 + 6차 4)는 빈칸을 바꿔도 걸리지 않고, 보이는 글은 원문 그대로 (빈칸을 한 칸으로 모으는 것은 검사할 때만)
+    const facts = ALL_FACTS();
+    expect(facts).toHaveLength(90);
+    for (const f of facts) for (const s of SPACES7) expect(safeValueCheck(spaced(f, s)), JSON.stringify(spaced(f, s))).toEqual({ text: spaced(f, s), dropped: 0 });
+    // 예외 말('이익 안정성'·'갚아야 할 빚')도 빈칸을 바꿔도 예외 — 같은 줄의 다른 금지어는 그대로 걸린다
+    expect(safeValueCheck("이익\u00A0안정성 자료는 확인 안 됨.").dropped).toBe(0);
+    expect(safeValueCheck("1년 안에 갚아야  할  빚(유동부채)은 3.2조원입니다.").dropped).toBe(0);
+    expect(safeValueCheck("이익  안정성이 높아  안정적입니다.").dropped).toBe(1);
+    expect(safeValueCheck("빚을 갚아야\t할\t때입니다.").dropped).toBe(1);
+    // 고치기 전(줄 그대로 본 검사)에는 6차 공격 문장의 빈칸 변형이 대부분 지나갔다
+    const passedBefore = ATTACKS6.filter((a) => SPACES7.some((s) => rawCheck(spaced(a, s)) === 0));
+    expect(passedBefore.length).toBeGreaterThanOrEqual(20);
+    expect(passedBefore).toEqual(expect.arrayContaining(["지금 사셔도 됩니다.", "이제는 살 시기입니다.", "아직 늦지 않았습니다."]));
+  });
+
+  it("1단계 검토 7차: 낱말 하나만 강조한 변형('지금 사셔도 **됩니다**.'·'더 나은 **선택입니다**.'·'지금은 **매입** 구간입니다.' — *·**·_·__·`)도 모두 빼고, 사실 문장 90개의 강조 변형은 한 글자도 바꾸지 않는다", () => {
+    expect(emphasized("지금 사셔도 됩니다.", "**")).toEqual(["**지금** 사셔도 됩니다.", "지금 **사셔도** 됩니다.", "지금 사셔도 **됩니다**."]);
+    const variants = ALL_ATTACKS().flatMap((a) => MARKS7.flatMap((m) => emphasized(a, m)));
+    expect(variants.length).toBeGreaterThan(4000);
+    expect(variants.filter((v) => safeValueCheck(v).dropped !== 1)).toEqual([]);
+    // 낱말 가운데 글자만 강조한 것 · 빈칸 변형과 겹친 것
+    for (const v of ["지금 사셔도 됩**니**다.", "지금 사**셔도** 됩니다.", "지금은 매**입** 구간입니다.", "지금\u00A0사셔도\u00A0**됩니다**.", "아직 **늦지**\t않았습니다.", "더  나은  `선택`입니다."]) {
+      expect(safeValueCheck(v).dropped, v).toBe(1);
+    }
+    // 보이는 글은 원문 그대로 (강조 표시는 검사할 때만 뺀다)
+    expect(safeValueText("## 숫자로 본 변화\n1. **매출**은 3년 연속 늘었습니다.\n2. 지금 사셔도 **됩니다**.")).toBe(
+      "## 숫자로 본 변화\n1. **매출**은 3년 연속 늘었습니다.\n\n(문장 검사에서 1줄을 뺐습니다)",
+    );
+    // 제목 줄도 강조를 빼고 본다 (예전 글의 평가 절은 통째로)
+    expect(safeValueText("## **강점**\n1. 저평가 매력\n## 매출\n늘었습니다.")).toBe("## 매출\n늘었습니다.\n\n(문장 검사에서 1줄을 뺐습니다)");
+    // 사실 문장 90개는 강조해도 걸리지 않는다
+    for (const f of ALL_FACTS()) {
+      for (const v of MARKS7.flatMap((m) => emphasized(f, m))) expect(safeValueCheck(v), v).toEqual({ text: v, dropped: 0 });
+    }
+    // 고치기 전(줄 그대로 본 검사)에는 강조 변형이 많이 지나갔다
+    const sixth = ATTACKS6.flatMap((a) => emphasized(a, "**"));
+    expect(sixth.filter((v) => rawCheck(v) === 0).length).toBeGreaterThanOrEqual(40);
+    expect(["지금 사셔도 **됩니다**.", "더 나은 **선택입니다**.", "지금은 **매입** 구간입니다."].map(rawCheck)).toEqual([0, 0, 0]);
+  });
+
+  it("1단계 검토 7차: 그 밖에 화면에서 같은 문장으로 보이는 꾸밈(엔티티 '&nbsp;'·'&#49492;' · 태그 · 링크 · 분해해 적은 한글 · 폭 없는 공백 · 한글 채움 글자 · 전각 영문)도 뺀다 · 브리핑 경로는 그대로", () => {
+    const variants = [
+      "지금&nbsp;사셔도&nbsp;됩니다.",
+      "지금 사&#49492;도 됩니다.",
+      "지금 사&#xC154;도 됩니다.",
+      "지금 사셔도 <b>됩니다</b>.",
+      "[지금 사셔도](https://example.com) 됩니다.",
+      "지금 사셔도 됩니다.".normalize("NFD"),
+      "지금 사셔\u200B도 됩니다.",
+      "지금 사셔\u2060도 됩니다.",
+      "지금 사셔도\u3164됩니다.",
+      "ＢＵＹ.",
+    ];
+    // 고치기 전에는 모두 지나갔다 → 이제 모두 빠진다
+    expect(variants.map(rawCheck)).toEqual(variants.map(() => 0));
+    for (const v of variants) expect(safeValueCheck(v).dropped, JSON.stringify(v)).toBe(1);
+    // 사실 문장의 꾸밈은 그대로 ('S&P 500'은 엔티티가 아님 · 링크 · 태그 · 분해해 적은 한글)
+    for (const f of [
+      "2023년 S&P 500 지수에 편입되었습니다.",
+      "R&amp;D 비용은 2025년 3.1조원입니다.",
+      "[DART 공시](https://dart.fss.or.kr) 기준 매출은 3년 연속 늘었습니다.",
+      "부채비율 < 100% 인 해는 3번입니다.",
+      "매출은 3년 연속 늘었습니다.".normalize("NFD"),
+      "이익\u200B 안정성 자료는 확인 안 됨.",
+    ]) {
+      expect(safeValueCheck(f), f).toEqual({ text: f, dropped: 0 });
+    }
+    // 브리핑 경로(옵션 없이 부르는 cleanDetail)는 줄 그대로 본다 — 지금 그대로
+    expect(cleanDetail("지금  사셔도  됩니다.", "", VALUE_AI_BANNED, VALUE_AI_ALLOW).dropped).toBe(0);
+    expect(cleanDetail("지금  사셔도  됩니다.", "", VALUE_AI_BANNED, VALUE_AI_ALLOW, { rendered: true }).dropped).toBe(1);
+    expect(renderedForCheck("지금\u00A0 사셔도\t**됩니다**.")).toBe("지금 사셔도 됩니다.");
+    expect(renderedForCheck("매출은 3년 연속 늘었습니다.")).toBe("매출은 3년 연속 늘었습니다.");
   });
 
   it("요청 ID로 회수하는 경로(analysisWaitRecovery)도 같은 검사: 응답·상태 확인의 latest·request.result 모두 걸린 줄을 뺀 글, 저장은 원문 · 끄면 원문 그대로", async () => {

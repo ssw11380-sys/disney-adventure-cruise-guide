@@ -406,9 +406,13 @@ export const isOldValueText = (text: string) => OLD_VALUE_HEADING.test(text);
 export function safeValueText(text: string): string {
   return safeValueCheck(text).text;
 }
-/** safeValueText + 뺀 줄 수 (기록용) */
+/**
+ * safeValueText + 뺀 줄 수 (기록용). 1단계 검토 7차: 줄마다 앱에 보이는 모양으로 바꾼 검사용 복사본(renderedForCheck — '*·_·`' 강조 표시를 빼고
+ * 두 칸·NBSP·탭·전각 공백을 한 칸으로, 엔티티·태그·링크 꾸밈·보이지 않는 글자도)으로 예외 말·금지어를 본다 — '지금  사셔도  됩니다'·'지금 사셔도 **됩니다**'처럼
+ * 화면에서는 같은 문장인데 금지어의 ' ?'(빈칸 0~1개)를 비껴가던 것. 보여 주는 글은 원문 그대로
+ */
 export function safeValueCheck(text: string): { text: string; dropped: number } {
-  return cleanDetail(text, "", VALUE_AI_BANNED, VALUE_AI_ALLOW);
+  return cleanDetail(text, "", VALUE_AI_BANNED, VALUE_AI_ALLOW, { rendered: true });
 }
 
 function snapshotForPrompt(s: AnalysisSnapshot, kind: AnalysisKind): Record<string, unknown> {
