@@ -10,13 +10,15 @@ export const featureRoutes: FastifyPluginAsync<{ features: FeatureService }> = a
 const patchBody = z.record(z.string(), z.boolean().nullable());
 
 /** 관리: GET 목록(기본값·설명), PUT {플래그: true|false|null} — null 은 기본값으로 */
-export const featureAdminRoutes: FastifyPluginAsync<{ features: FeatureService }> = async (app, { features }) => {
+export const featureAdminRoutes: FastifyPluginAsync<{ features: FeatureService; afterSet?: (patch: Record<string, boolean | null>) => Promise<void> }> = async (app, { features, afterSet }) => {
   app.get("/", async () => ({ features: await features.detail() }));
   app.put("/", async (req, reply) => {
     const body = patchBody.safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: "BAD_REQUEST", message: "{플래그: true|false|null} 형식이어야 합니다" });
     try {
-      return await features.set(body.data);
+      const result = await features.set(body.data);
+      await afterSet?.(body.data);
+      return result;
     } catch (e) {
       if (e instanceof UnknownFeatureError) return reply.code(400).send({ error: "UNKNOWN_FEATURE", message: e.message });
       throw e;

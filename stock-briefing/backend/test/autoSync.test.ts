@@ -119,6 +119,54 @@ describe("TossSyncService 전량 매도 처리", () => {
 });
 
 describe("HoldingsAutoSync", () => {
+  it("추가 화면 조회도 원본을 가져오지만 변화 없는 대조 이력만 늘리지 않는다", async () => {
+    const { db, toss, sync } = await setup();
+    let compared = 0, settled = 0;
+    const auto = new HoldingsAutoSync({ sync, intervalMin: 10, now: NOW,
+      onResult: async () => { compared++; }, onSettled: () => { settled++; } });
+    try {
+      toss.holdingsList = [h("035420", 9, 232555)];
+      await auto.run("view"); expect(compared).toBe(1);
+      await auto.run("view"); expect(compared).toBe(1);
+      expect(toss.calls).toBe(2); expect(settled).toBe(2);
+      toss.duringSync = () => { void auto.run("briefing"); };
+      await auto.run("view"); expect(compared).toBe(2);
+      await auto.run("schedule"); expect(compared).toBe(3);
+      toss.holdingsList = [h("035420", 10, 232555)];
+      await auto.run("view"); expect(compared).toBe(4);
+      expect((await db.selectFrom("registered_stocks").select("quantity").where("code", "=", "035420").executeTakeFirst())?.quantity).toBe(10);
+    } finally { await db.destroy(); }
+  });
+  it("수량 변화가 없어도 갱신 완료 상태를 즉시 전달하고 후속 대조를 기다리지 않는다", async () => {
+    const { db, toss, sync } = await setup();
+    const states: ReturnType<HoldingsAutoSync["status"]>[] = [];
+    let finish!: () => void;
+    const downstream = new Promise<void>(resolve => { finish = resolve; });
+    const auto = new HoldingsAutoSync({ sync, intervalMin: 10, now: NOW,
+      onResult: () => downstream, onSettled: () => states.push(auto.status()) });
+    try {
+      toss.holdingsList = [h("035420", 9, 232555)];
+      await auto.run("startup");
+      await auto.run("schedule");
+      expect(states).toHaveLength(2);
+      expect(states[1]).toMatchObject({ running: false, lastError: null, lastTrigger: "schedule", lastRunAt: "2026-09-23T10:00:00+09:00", lastChanges: { added: 0, updated: 0, removed: 0, holdings: 1 } });
+      toss.fail = true;
+      await auto.run("schedule");
+      expect(states).toHaveLength(3);
+      expect(states[2]?.lastError).toContain("토스 계좌 조회 실패");
+      expect(states[2]?.running).toBe(false);
+    } finally { finish(); await db.destroy(); }
+  });
+  it("갱신 전달 오류가 이미 저장된 성공 결과나 재실행을 막지 않는다", async () => {
+    const { db, toss, sync } = await setup();
+    const auto = new HoldingsAutoSync({ sync, intervalMin: 10, now: NOW, onSettled: () => { throw new Error("소켓 종료"); } });
+    try {
+      toss.holdingsList = [h("035420", 9, 232555)];
+      expect((await auto.run("manual"))?.added).toEqual(["035420"]);
+      expect((await auto.run("manual"))?.unchanged).toEqual(["035420"]);
+      expect(auto.status().lastError).toBeNull();
+    } finally { await db.destroy(); }
+  });
   it("run() 은 동기화하고 바뀐 게 있을 때만 afterSync 를 부르며, 실패는 lastError 에 남긴다(manual 은 던짐)", async () => {
     const { db, toss, sync } = await setup();
     let after = 0;

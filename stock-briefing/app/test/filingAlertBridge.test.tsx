@@ -11,6 +11,7 @@ import { cleanupRenders, render } from "./miniRender";
 const h = vi.hoisted(() => ({
   flags: {} as Record<string, boolean>,
   local: true,
+  member: false,
   calls: 0,
   notified: [] as unknown[],
   appState: null as ((s: string) => void) | null,
@@ -21,6 +22,8 @@ vi.mock("@/api/hooks", () => {
   return { useFeature: (k: string, f = false) => h.flags[k] ?? f, useApi: () => api };
 });
 vi.mock("@/lib/settings", () => ({ useSettings: () => ({ ready: true }) }));
+// 계정 A단계: 주인 아닌 계정이면 주인의 보유 종목 공시를 묻지 않는다
+vi.mock("@/lib/account", () => ({ useAccountView: () => ({ member: h.member }) }));
 vi.mock("@/lib/backgroundBriefings", () => ({ isLocalModeEnabled: async () => h.local }));
 vi.mock("@/lib/notifications", () => ({ ensureFilingChannel: async () => undefined }));
 vi.mock("@/lib/filingNotify", () => ({ notifyFilings: async (items: unknown) => void h.notified.push(items) }));
@@ -40,6 +43,7 @@ beforeEach(() => {
   vi.setSystemTime(Date.parse("2026-07-30T07:03:00+09:00"));
   h.flags = { filingAlerts: true };
   h.local = true;
+  h.member = false;
   h.calls = 0;
   h.notified = [];
 });
@@ -73,5 +77,15 @@ describe("FilingAlertBridge", () => {
     render(<FilingAlertBridge />);
     await tick();
     expect(h.calls).toBe(0);
+  });
+
+  it("주인 아닌 계정(계정 A단계)이면 요청 0 — 주인의 보유 종목 공시를 묻지 않는다", async () => {
+    h.member = true;
+    render(<FilingAlertBridge />);
+    await tick();
+    vi.advanceTimersByTime(FOREGROUND_CHECK_MS * 2);
+    await tick();
+    expect(h.calls).toBe(0);
+    expect(h.notified).toEqual([]);
   });
 });

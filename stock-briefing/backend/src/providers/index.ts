@@ -35,6 +35,10 @@ import type { HoldingEventSources } from "../services/holdingEvents.js";
 import type { FilingSource } from "../services/filingAlerts.js";
 import { NasdaqScreener } from "./market/nasdaqScreener.js";
 import { defaultKrValueSources, type KrValueSources } from "../services/krValueService.js";
+import { defaultInvestorFlowSources, type InvestorFlowSources } from "../services/investorFlowService.js";
+import type { MapSources } from "../services/holdingThemeMaps.js";
+import { TossCompanyTics } from "./market/tossCompanyTics.js";
+import { NaverIndustry } from "./market/naverIndustry.js";
 
 export interface Providers {
   quotes: QuoteProvider;
@@ -84,11 +88,20 @@ export interface Providers {
   /** 한국 간이 가치 출처 (네이버 재무 요약 + 업종 구성 종목, 3-44 3단계). 없으면 한국 가치 줄은 '지금 계산하지 않음' */
   krValueSources?: KrValueSources | null;
   /**
+   * 내 종목 테마 분류 출처 (3-35 — 토스 웹 회사 '주요 사업' 테마 + 네이버 업종 번호, 모두 로그인 없음). 없으면(테스트 기본) 서비스·경로를 두지 않는다
+   */
+  holdingThemes?: MapSources | null;
+  /**
    * 새 공시 알림 출처 (3-38 — SEC EDGAR 티커→CIK · submissions, 로그인·키 없음). 가치 지표와 같은 EdgarProvider 인스턴스(요청 간격 공유).
    * 없으면(테스트 기본) 공시 확인 작업을 두지 않는다 — 네트워크 없이
    */
   secFilings?: FilingSource | null;
   investorFlow: InvestorFlowProvider | null; // KIS 키 없으면 null
+  /**
+   * 종목 상세 '수급' 탭 출처 묶음 (3-33 — 토스 웹 공개 자료 → 네이버, 토스 Open API 는 대조만). 없으면(테스트 기본) 경로 404 · 외부 호출 0.
+   * 브리핑 수집기의 investorFlow(KIS·토스 Open API)와 따로 둔다 — 화면 자료는 공개 자료로만
+   */
+  investorFlowSources?: InvestorFlowSources | null;
   generator: TextGenerator;
   dart: DartProvider | null;
   push: PushSender;
@@ -185,10 +198,25 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
       productCode: (code) => toss.productCode(code),
       naverExDividend: (code) => fundamentals.exDividendAt(code),
     },
+    // 내 종목 테마 (3-35): 미국은 토스 웹 상품 코드(시세와 같은 인스턴스 — meta 캐시 공유) → 회사 → 주요 사업 테마, 업종 번호는 네이버(로이터 코드는 같은 자동완성)
+    holdingThemes: holdingThemeSources(toss, fundamentals),
     investorFlow: kis ?? tossOpenApi,
+    // 수급 탭 (3-33): 토스 웹 → 네이버 (로그인 없음). 토스 Open API 는 그 인스턴스만 대조에 (KIS 는 쓰지 않음)
+    investorFlowSources: defaultInvestorFlowSources(tossOpenApi),
     generator,
     dart,
     push: new ExpoPushSender(cfg.EXPO_ACCESS_TOKEN || undefined),
+  };
+}
+
+/** 내 종목 테마 분류 출처 (3-35) */
+function holdingThemeSources(toss: TossProvider, fundamentals: NaverFundamentals): MapSources {
+  const company = new TossCompanyTics();
+  const industry = new NaverIndustry(fetch, (code) => fundamentals.resolveReuters(code));
+  return {
+    usTics: async (code) => (await company.forProduct(await toss.productCode(code))).major,
+    usIndustry: (code) => industry.us(code),
+    krIndustry: (code) => industry.kr(code),
   };
 }
 

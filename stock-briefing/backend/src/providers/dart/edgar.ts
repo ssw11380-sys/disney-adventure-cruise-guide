@@ -198,6 +198,10 @@ export class EdgarProvider implements FinancialsProvider {
   private readonly cache: BoundedCache;
   /** 요청마다 보내는 User-Agent (SEC_USER_AGENT 가 있으면 그것, 없으면 기본) */
   private readonly ua: string;
+  /** 동시에 연 분석이 같은 SEC 원본을 중복 다운로드하지 않도록 진행 중 요청만 공유한다. */
+  private tickersPending: Promise<void> | null = null;
+  private readonly submissionsPending = new Map<string, Promise<Submissions>>();
+  private readonly factsPending = new Map<string, Promise<EdgarAnnualFinancials[]>>();
 
   constructor(
     private readonly fetchFn: FetchFn = fetch,
@@ -261,12 +265,17 @@ export class EdgarProvider implements FinancialsProvider {
     if (isKrCode(code)) throw new ProviderError(this.name, `미국 종목만 지원합니다: ${code}`);
     const t = this.now().getTime();
     if (!this.tickers || t - this.tickers.at > 24 * 3_600_000) {
-      const raw = await this.getJson<Record<string, { cik_str: number; ticker: string; title: string }>>(TICKERS_URL);
-      const map = new Map<string, { cik: string; title: string }>();
-      for (const v of Object.values(raw)) map.set(String(v.ticker).toUpperCase(), { cik: String(v.cik_str).padStart(10, "0"), title: v.title });
-      this.tickers = { at: t, map };
+      if (!this.tickersPending) {
+        this.tickersPending = (async () => {
+          const raw = await this.getJson<Record<string, { cik_str: number; ticker: string; title: string }>>(TICKERS_URL);
+          const map = new Map<string, { cik: string; title: string }>();
+          for (const v of Object.values(raw)) map.set(String(v.ticker).toUpperCase(), { cik: String(v.cik_str).padStart(10, "0"), title: v.title });
+          this.tickers = { at: t, map };
+        })().finally(() => { this.tickersPending = null; });
+      }
+      await this.tickersPending;
     }
-    const hit = this.tickers.map.get(code) ?? this.tickers.map.get(code.replace(".", "-")) ?? this.tickers.map.get(code.replace("-", "."));
+    const hit = this.tickers!.map.get(code) ?? this.tickers!.map.get(code.replace(".", "-")) ?? this.tickers!.map.get(code.replace("-", "."));
     if (!hit) throw new NotListedError(this.name, `SEC 에 등록된 티커가 아닙니다: ${code} (ETF·ADR 은 재무제표가 없을 수 있음)`);
     return hit;
   }
@@ -276,9 +285,16 @@ export class EdgarProvider implements FinancialsProvider {
     const key = `submissions:${cik}`;
     const hit = this.cache.get<Submissions>(key, t, ttlMs);
     if (hit) return hit;
-    const s = compactSubmissions(await this.getJson<Json>(`https://data.sec.gov/submissions/CIK${cik}.json`));
-    this.cache.set(key, s, t);
-    return s;
+    let pending = this.submissionsPending.get(cik);
+    if (!pending) {
+      pending = (async () => {
+        const s = compactSubmissions(await this.getJson<Json>(`https://data.sec.gov/submissions/CIK${cik}.json`));
+        this.cache.set(key, s, t);
+        return s;
+      })().finally(() => { this.submissionsPending.delete(cik); });
+      this.submissionsPending.set(cik, pending);
+    }
+    return pending;
   }
 
   async getCompany(stockCode: string): Promise<CompanyProfile> {
@@ -331,8 +347,16 @@ export class EdgarProvider implements FinancialsProvider {
     const key = `facts:${cik}`;
     let rows = this.cache.get<EdgarAnnualFinancials[]>(key, t, FACTS_TTL_MS);
     if (!rows) {
-      rows = extractFinancials(await this.getJson<Json>(`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`));
-      this.cache.set(key, rows, t);
+      let pending = this.factsPending.get(cik);
+      if (!pending) {
+        pending = (async () => {
+          const financials = extractFinancials(await this.getJson<Json>(`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`));
+          this.cache.set(key, financials, t);
+          return financials;
+        })().finally(() => { this.factsPending.delete(cik); });
+        this.factsPending.set(cik, pending);
+      }
+      rows = await pending;
     }
     // 빈 표를 성공으로 주면 분석이 "확인했는데 없음"으로 읽는다 → 실패(데이터 미확인)로 알린다
     if (!rows.length) throw new ProviderError(this.name, `연간 보고서(10-K·20-F·40-F) 재무 수치가 없습니다: ${stockCode}`);

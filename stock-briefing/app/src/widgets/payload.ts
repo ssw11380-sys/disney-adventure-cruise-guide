@@ -1,4 +1,4 @@
-import type { LatestBriefing, Quote, QuoteSession, RegisteredWithQuote } from "@/api/types";
+import type { LatestBriefing, Quote, QuoteSession, RegisteredWithQuote, TossAccountSnapshotBody } from "@/api/types";
 import { featureOn } from "@/lib/features";
 
 /**
@@ -39,6 +39,8 @@ export interface WidgetStock {
   e: [number, number, number | null, number | null, "exact" | "estimated" | null] | null;
   /** 시세 기준 원문 (quote.priceBasis — 'KRX+NXT 통합' 등). 서버 numberBasis 가 켜져 있고 &ms=1 로 물었을 때만, 기준이 있는 종목만 (3-32) */
   b?: string;
+  /** 새 위젯의 종목별 거래 대상 판정. 시장 전체가 열려도 미지원 종목은 지연으로 단정하지 않는다. */
+  ss?: QuoteSession;
 }
 
 export interface WidgetBriefing {
@@ -92,6 +94,8 @@ export interface WidgetIndex {
 
 export interface WidgetPayload {
   v: 1;
+  /** 같은 위젯 응답에 실린 토스 계좌 수신 기록. 새 앱의 account=1 요청만 받는다. */
+  tossAccount?: TossAccountSnapshotBody;
   market: WidgetMarket | null;
   stocks: WidgetStock[];
   briefings: WidgetBriefing[];
@@ -115,6 +119,8 @@ export interface WidgetPayload {
 
 /** 위젯 기능 플래그 (서버 featureService 의 widgetPnlToggle·widgetIndexLine·widgetMarket·widgetPolish·widgetExtended·widgetFoldFit·marketSummary) */
 export interface WidgetFeatures {
+  /** 계좌 합계·누적 손익은 토스 동기화 기록으로 표시한다. */
+  tossAccount?: boolean;
   /** 합계 옆 손익을 눌러 누적·당일 전환 */
   pnlToggle: boolean;
   /** 합계 아래 지수·환율 한 줄 */
@@ -144,6 +150,10 @@ export interface WidgetFeatures {
    * (foldFit 과 같은 규칙 — 꺼짐·모름·예전 서버는 칸이 없어 예전에 적어 둔 값·예전 그림과 같다)
    */
   basis?: boolean;
+  /** 위젯 정보 기준·경고·개인화. 꺼짐·예전 서버는 칸이 없어 예전 모습과 같다 (fallback false) */
+  clarity?: boolean;
+  /** 핵심 숫자 중심 표시 및 앱 실행 중 5초 묶음 전달. */
+  leanLive?: boolean;
 }
 
 export const NO_FEATURES: WidgetFeatures = { pnlToggle: false, indexLine: false, market: false, polish: false };
@@ -160,7 +170,24 @@ export function widgetFeatures(features: Record<string, boolean> | null | undefi
     ...(featureOn(flags, "widgetFoldFit", false) ? { foldFit: true } : {}),
     ...(featureOn(flags, "marketSummary", false) ? { marketSummary: true } : {}),
     ...(featureOn(flags, "numberBasis", false) ? { basis: true } : {}),
+    ...(featureOn(flags, "widgetClarity", false) ? { clarity: true } : {}),
+    ...(featureOn(flags, "widgetLeanLive", false) ? { leanLive: true } : {}),
+    ...(featureOn(flags, "tossAccountSnapshot", false) ? { tossAccount: true } : {}),
   };
+}
+
+/** 손상된 저장값도 시세 합계로 대체하지 않는다. 계좌 기능은 유지하고 확인 필요로 그린다. */
+export function cleanTossAccount(value: unknown): TossAccountSnapshotBody | undefined {
+  if (!value || typeof value !== "object" || typeof (value as TossAccountSnapshotBody).on !== "boolean") return undefined;
+  const body = value as TossAccountSnapshotBody;
+  if (!body.on) return { on: false, snapshot: null, sync: null };
+  const s = body.snapshot;
+  const amount = (a: unknown) => !!a && typeof a === "object" && Number.isFinite((a as { krw: number }).krw) && (a as { krw: number }).krw >= 0 && Number.isFinite((a as { usd: number }).usd) && (a as { usd: number }).usd >= 0;
+  const snapshot = s && s.source === "toss-openapi" && s.scope === "all-toss-stock-holdings" && s.excludesCash === true && s.includesExcludedHoldings === true
+    && typeof s.receivedAt === "string" && Number.isFinite(Date.parse(s.receivedAt)) && amount(s.gross) && amount(s.net)
+    && Number.isInteger(s.holdingCount) && s.holdingCount >= 0 ? s : null;
+  const sync = body.sync && typeof body.sync.enabled === "boolean" && Number.isFinite(body.sync.intervalMin) && Number.isFinite(body.sync.idleIntervalMin) ? body.sync : null;
+  return { on: true, snapshot, sync };
 }
 
 /** 위젯 지수 줄에 넣는 항목과 순서 (서버 widgetPayload.ts 의 WIDGET_INDEX_CODES 와 같다) */
@@ -263,6 +290,7 @@ export function cleanSummary(v: unknown): WidgetSummary | null {
 const rate = (profit: number, cost: number) => (cost > 0 ? Math.round((profit / cost) * 10000) / 100 : 0);
 
 export function fromPayload(p: WidgetPayload): {
+  tossAccount?: TossAccountSnapshotBody;
   stocks: RegisteredWithQuote[];
   briefings: LatestBriefing[];
   market: WidgetMarket | null;
@@ -280,6 +308,7 @@ export function fromPayload(p: WidgetPayload): {
           open: null, high: null, low: null, prevClose: null, volume: null, marketCap: null, per: null, pbr: null, eps: null, bps: null, high52w: null, low52w: null, source: "widget",
           ...(s.q[6] ? { stale: true } : {}),
           ...(s.b ? { priceBasis: s.b } : {}),
+          ...(s.ss ? { session: s.ss } : {}),
         } as Quote)
       : null;
     const e = s.e;
@@ -300,7 +329,8 @@ export function fromPayload(p: WidgetPayload): {
   }));
   const features = widgetFeatures(p.features);
   const summary = cleanSummary(p.ms);
-  return { stocks, briefings, market: gateExtended(p.market, features), indices: cleanIndices(p.indices), board: cleanIndices(p.board), features, brief: cleanBrief(p.brief), ...(summary ? { summary } : {}) };
+  const tossAccount = cleanTossAccount(p.tossAccount);
+  return { stocks, briefings, market: gateExtended(p.market, features), indices: cleanIndices(p.indices), board: cleanIndices(p.board), features, brief: cleanBrief(p.brief), ...(summary ? { summary } : {}), ...(tossAccount ? { tossAccount } : {}) };
 }
 
 /**
@@ -398,8 +428,10 @@ export function isDelayed(opts: { openAsOf: number | null; fetchedAt: number; er
  * 장중(연장 세션 포함)엔 15분 안에 받은 값(백그라운드 작업이 15분마다 받는다), 두 시장이 닫혀 있으면 shouldSkipFetch 규칙
  */
 export const REUSE_OPEN_MS = 15 * 60_000;
-export function canReuse(last: { at: number; market: WidgetMarket | null } | null, now: number): boolean {
+export function canReuse(last: { at: number; market: WidgetMarket | null } | null, now: number, frequent = false): boolean {
   if (!last) return false;
+  // 빠른 갱신에서는 연속 크기 변경·여러 위젯의 같은 시각 호출만 합친다.
+  if (frequent) return now >= last.at && now - last.at < 60_000;
   if (now - last.at < REUSE_OPEN_MS) return true;
   return shouldSkipFetch(last, now);
 }
@@ -411,7 +443,9 @@ export function canReuse(last: { at: number; market: WidgetMarket | null } | nul
  * 받아 둔 응답의 칩은 플래그로 거른 것(payloadMarket)을 넘긴다
  */
 export const CLOSED_REFRESH_MS = 2 * 3_600_000;
-export function shouldSkipFetch(last: { at: number; market: WidgetMarket | null } | null, now: number): boolean {
+export function shouldSkipFetch(last: { at: number; market: WidgetMarket | null } | null, now: number, frequent = false): boolean {
+  // Android가 실행 기회를 줬으면 장 마감 뒤에도 자체적으로 2시간 더 미루지 않는다.
+  if (frequent) return false;
   if (!last?.market || last.market.open || extOpen(last.market)) return false;
   if (now - last.at >= CLOSED_REFRESH_MS) return false;
   const next = last.market.nextChangeAt ? Date.parse(last.market.nextChangeAt) : NaN;

@@ -7,7 +7,7 @@ import type { FeatureFlags } from "@/api/types";
 import { pickNotified } from "@/lib/briefingPick";
 import { markBriefingRead } from "@/lib/briefingRead";
 import { featureOn } from "@/lib/features";
-import { ensureAndroidChannel, notificationNav, refreshBriefingsFor, routeForNotification, type NotificationNav } from "@/lib/notifications";
+import { ensureAndroidChannel, memberNotificationNav, notificationNav, refreshBriefingsFor, routeForNotification, type NotificationNav } from "@/lib/notifications";
 import { useSettings } from "@/lib/settings";
 import { useFoldLayout } from "@/lib/useFoldLayout";
 
@@ -51,6 +51,25 @@ export function useSplashHold(): boolean {
 }
 
 type Nav = Pick<typeof router, "canDismiss" | "dismissTo" | "navigate" | "push">;
+
+/**
+ * 계정 A단계: 알림을 누른 때의 로그인 상태 (_layout 이 useAuthGate·useAccountView 로 넘긴다). 넘기지 않으면 로그인 없는 앱 — 지금 그대로.
+ *  - ready: 저장된 설정·세션을 다 읽었는지 · needsLogin: 로그인 화면이 떠 있는지 (lib/authGate)
+ *  - member: 주인 아닌 계정 (lib/account — 플래그가 꺼져도 남은 주인 아닌 계정 세션이면 켜짐)
+ */
+export interface NotificationAuth {
+  ready: boolean;
+  needsLogin: boolean;
+  member: boolean;
+}
+const NO_AUTH: NotificationAuth = { ready: true, needsLogin: false, member: false };
+/**
+ * 로그인을 기다리는 알림 이동을 들고 있는 최대 시간. 넘으면 로그인해도 옮겨 가지 않는다 (한참 뒤 로그인했을 때 화면이 갑자기 바뀌지 않게 — 브리핑 탭은
+ * 로그인하면 늘 열 수 있다)
+ */
+export const LOGIN_WAIT_MAX_MS = 10 * 60_000;
+/** 로그인 화면이 앱 화면으로 바뀐 뒤(_layout Stack.Protected) 옮겨 가기까지 — 루트 네비게이터가 탭 화면을 다시 올린 뒤 */
+export const AFTER_LOGIN_NAV_MS = 150;
 
 /**
  * 알림이 가리키는 화면으로 이동. 탭 경로(묶음 알림 → 브리핑 탭)는 push 하지 않는다 — 종목 상세처럼 루트 스택에 쌓인 화면 위에서 push 하면
@@ -109,8 +128,10 @@ export async function claimResponse(key: string): Promise<boolean> {
  * 브리핑 알림을 받거나 누르면 브리핑 목록을 다시 받게 한다 — 이미 열려 있던 브리핑 탭이 옛 목록을 보이지 않게 (BH-16)
  * 브리핑 3차 1 (플래그 notifBack): 켜져 있으면 브리핑 알림의 '뒤로'가 브리핑 탭이다 (lib/notifications notificationNav). 플래그는 누른 그때
  * 캐시에서 읽는다 — 콜드 스타트는 저장된 캐시를 되살린 뒤(최대 1.5초). 꺼져 있거나 모르면 지금 그대로
+ * 계정 A단계 (auth — _layout 이 넘긴다): 로그인이 필요하면(로그인 화면) 이동을 들고 있다가 로그인한 뒤 그 브리핑으로 (LOGIN_WAIT_MAX_MS 안),
+ * 주인 아닌 계정이면 주인의 브리핑·계좌 브리핑 상세를 열지 않고 브리핑 탭으로만 (맨 위 차분한 안내 — 서버도 그 상세를 403 으로 막는다)
  */
-export function NotificationBridge() {
+export function NotificationBridge({ auth = NO_AUTH }: { auth?: NotificationAuth }) {
   const lastResponse = Notifications.useLastNotificationResponse();
   const handled = useRef<string | null>(null);
   const qc = useQueryClient();
@@ -127,6 +148,43 @@ export function NotificationBridge() {
   useEffect(() => {
     where.current = { twoPane, path: pathname ?? null };
   }, [twoPane, pathname]);
+  // 계정 A단계: 누른 그때의 로그인 상태 (아래 이동 effect 를 다시 돌리지 않게 ref 로)
+  const authNow = useRef(auth);
+  useEffect(() => {
+    authNow.current = { ready: auth.ready, needsLogin: auth.needsLogin, member: auth.member };
+  }, [auth.ready, auth.needsLogin, auth.member]);
+  // 로그인을 기다리는 알림 이동 (누른 시각과 알림 data)
+  const afterLogin = useRef<{ data: Record<string, unknown> | undefined; at: number } | null>(null);
+  const afterLoginTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (afterLoginTimer.current) clearTimeout(afterLoginTimer.current);
+    },
+    [],
+  );
+
+  /** 지금 캐시의 플래그·창·화면으로 이동을 정해 옮겨 간다. 주인 아닌 계정이면 브리핑 상세 대신 브리핑 탭으로만 */
+  const move = useCallback((data: Record<string, unknown> | undefined) => {
+    const { qc: client, apiUrl: url } = cache.current;
+    const back = featureOn(client.getQueryData<FeatureFlags>([url, "features"]), "notifBack", false);
+    const nav = notificationNav(data, { back, ...where.current });
+    const safe = authNow.current.member ? memberNotificationNav(nav, data) : nav;
+    if (safe) runNotificationNav(safe);
+  }, []);
+
+  // 로그인하면(로그인 화면이 닫히면) 기다리던 알림 이동을 한 번 — 주인 아닌 계정으로 로그인했으면 move 가 브리핑 탭으로만 보낸다
+  useEffect(() => {
+    if (!auth.ready || auth.needsLogin) return;
+    const w = afterLogin.current;
+    if (!w) return;
+    afterLogin.current = null;
+    if (Date.now() - w.at > LOGIN_WAIT_MAX_MS) return;
+    if (afterLoginTimer.current) clearTimeout(afterLoginTimer.current);
+    afterLoginTimer.current = setTimeout(() => {
+      afterLoginTimer.current = null;
+      move(w.data);
+    }, AFTER_LOGIN_NAV_MS);
+  }, [auth.ready, auth.needsLogin, move]);
 
   // 이동을 미루는 문: 설정과 저장된 캐시를 다 읽으면(또는 1.5초 뒤) 열리고 다시 닫히지 않는다. 기다리던 이동은 열릴 때 한 번에 간다
   const gate = useRef<{ open: boolean; waiting: (() => void)[] }>({ open: false, waiting: [] });
@@ -172,10 +230,14 @@ export function NotificationBridge() {
     // 콜드 스타트(문이 아직 닫힘): 옮겨 갈 때까지 스플래시를 잡아 둔다
     if (!gate.current.open) setSplashHold(true);
     const go = () => {
-      const { qc: client, apiUrl: url } = cache.current;
-      const back = featureOn(client.getQueryData<FeatureFlags>([url, "features"]), "notifBack", false);
-      const nav = notificationNav(data, { back, ...where.current });
-      if (nav) runNotificationNav(nav);
+      // 계정 A단계: 로그인 화면이 떠 있거나(세션 없음) 세션을 아직 읽지 못했으면 로그인 뒤로 미룬다 — 로그인 화면을 스플래시 뒤에 묶지 않게 바로 놓는다
+      const a = authNow.current;
+      if (!a.ready || a.needsLogin) {
+        afterLogin.current = { data, at: Date.now() };
+        setSplashHold(false);
+        return;
+      }
+      move(data);
       release = setTimeout(() => setSplashHold(false), SPLASH_AFTER_NAV_MS);
     };
     const later = () => {
@@ -195,7 +257,7 @@ export function NotificationBridge() {
       if (release) clearTimeout(release);
       setSplashHold(false);
     };
-  }, [lastResponse]);
+  }, [lastResponse, move]);
 
   return null;
 }

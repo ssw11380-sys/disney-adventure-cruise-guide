@@ -1,16 +1,21 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import React, { useEffect, useState } from "react";
-import { Animated, Linking, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View, type StyleProp, type ViewStyle } from "react-native";
+import { Animated, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View, type StyleProp, type ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useAnalysis, useFeature, useStockMutations, useStockNews } from "@/api/hooks";
+import { useAnalysis, useAnalysisRecovery, useFeature, useStockMutations, useStockNews } from "@/api/hooks";
 import type { AnalysisKind, Briefing, Disclosure, NewsItem } from "@/api/types";
 import { BriefingCard } from "@/components/BriefingCard";
 import { FlashPrice } from "@/components/FlashPrice";
 import { MarkdownView } from "@/components/MarkdownView";
+import { ReportVerificationNotice } from "@/components/ReportVerification";
 import { Button, Card, ErrorView, LiveDot, Loading, Muted, SectionTitle, Stat } from "@/components/ui";
 import { chunkRows, detailHeaderLayout, fillChartHeight, HEAD_PAD, headPriceParts, headTitleMaxWidth, markdownPreview, shortStamp } from "@/lib/detailLayout";
 import { formatDateKo, relativeTime } from "@/lib/format";
+import { openSourceLink } from "@/lib/openSourceLink";
 import { analysisView } from "@/lib/freshness";
+import { gated } from "@/lib/features";
+import type { AnalysisWait } from "@/lib/analysisRecovery";
+import { useNow } from "@/lib/useNow";
 import { navLabel, navSpeech, type HoldingsNav } from "@/lib/holdingsNav";
 import { alertButtonA11y, alertButtonText } from "@/lib/priceAlerts";
 import { font, fontCap, radius, slopFor, space, touch, useTheme } from "@/theme";
@@ -49,6 +54,12 @@ export function Range52({ range, low, high, color, compact = false }: { range: n
  * 이미 받아 둔 분석(캐시)이 있으면 누르지 않아도 보여 준다.
  */
 export function AnalysisTab({ code, kind, requested, onRequest }: { code: string; kind: AnalysisKind; requested: boolean; onRequest: (kind: AnalysisKind) => void }) {
+  const recovery = gated(useFeature("analysisWaitRecovery", false), true);
+  if (recovery) return <Card><AnalysisWaitBody code={code} kind={kind} requested={requested} onRequest={onRequest} /></Card>;
+  return <LegacyAnalysisTab code={code} kind={kind} requested={requested} onRequest={onRequest} />;
+}
+
+function LegacyAnalysisTab({ code, kind, requested, onRequest }: { code: string; kind: AnalysisKind; requested: boolean; onRequest: (kind: AnalysisKind) => void }) {
   const t = useTheme();
   const a = useAnalysis(code, kind, requested);
   const { refreshAnalysis } = useStockMutations();
@@ -71,11 +82,12 @@ export function AnalysisTab({ code, kind, requested, onRequest }: { code: string
           {refreshError}
         </Text>
       ) : null}
+      <ReportVerificationNotice verification={d.verification} />
       <MarkdownView>{d.content}</MarkdownView>
       {d.missing.length ? <Muted>데이터 미확인: {d.missing.join(", ")}</Muted> : null}
-      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: space.xs }}>
         <Muted>
-          {formatDateKo(d.createdAt, true)} 기준
+          보고서 생성 {formatDateKo(d.createdAt, true)}
         </Muted>
         <Button title={refreshError ? "다시 시도" : "갱신"} variant="secondary" icon="refresh" compact onPress={() => refreshAnalysis.mutate({ code, kind })} />
       </View>
@@ -85,7 +97,7 @@ export function AnalysisTab({ code, kind, requested, onRequest }: { code: string
 
 /**
  * 윗줄+아랫줄 배치(울트라 펼침 세로) 오른쪽 칸의 AI 분석 미리보기 — 설계 목업처럼 탭 없이 여러 분석을 함께 둔다.
- *  - 제목 줄: 제목 · 기준 시각 · '더 보기'. lines 줄만 보이고, '더 보기'를 누르면 그 자리에서 전체 분석(갱신 버튼 포함)을 펼친다
+ *  - 제목 줄: 제목 · 생성 시각 · '더 보기'. lines 줄만 보이고, '더 보기'를 누르면 그 자리에서 전체 분석(갱신 버튼 포함)을 펼친다
  *  - lines = 0 이면 제목 줄만 둔다 (가치분석). 펼칠 때 처음 받는다 — 접힌 동안에는 서버에 묻지 않는다
  *  - 미등록 종목(아직 만들지 않음)은 '만들기' 버튼, 불러오는 중·오류는 휴대폰 AI 분석 탭과 같은 안내
  */
@@ -103,6 +115,12 @@ export function AnalysisPreview({ code, kind, title, lines, requested, onRequest
 
 /** AnalysisPreview 의 내용 (받은 분석이 있을 때만 '더 보기'를 둔다). lines = null 이면 전체 */
 function AnalysisPeek({ code, kind, title, lines, requested, onRequest, toggle }: { code: string; kind: AnalysisKind; title: string; lines: number | null; requested: boolean; onRequest: (kind: AnalysisKind) => void; toggle: React.ReactNode }) {
+  const recovery = gated(useFeature("analysisWaitRecovery", false), true);
+  if (recovery) return <AnalysisWaitBody code={code} kind={kind} title={title} lines={lines} requested={requested} onRequest={onRequest} toggle={toggle} />;
+  return <LegacyAnalysisPeek code={code} kind={kind} title={title} lines={lines} requested={requested} onRequest={onRequest} toggle={toggle} />;
+}
+
+function LegacyAnalysisPeek({ code, kind, title, lines, requested, onRequest, toggle }: { code: string; kind: AnalysisKind; title: string; lines: number | null; requested: boolean; onRequest: (kind: AnalysisKind) => void; toggle: React.ReactNode }) {
   const t = useTheme();
   const a = useAnalysis(code, kind, requested);
   const { refreshAnalysis } = useStockMutations();
@@ -110,7 +128,7 @@ function AnalysisPeek({ code, kind, title, lines, requested, onRequest, toggle }
   const d = state === "ready" ? a.data : undefined;
   return (
     <View style={{ gap: space.xs }}>
-      <PaneTitle title={title} note={d ? `${shortStamp(d.createdAt)} 기준` : null} action={d || lines === null ? toggle : null} />
+      <PaneTitle title={title} note={d ? `생성 ${shortStamp(d.createdAt)}` : null} action={d || lines === null ? toggle : null} />
       {state === "ask" ? (
         <View style={styles.askRow}>
           <Muted>관심 종목이 아니라 미리 만들지 않았습니다.</Muted>
@@ -127,6 +145,8 @@ function AnalysisPeek({ code, kind, title, lines, requested, onRequest, toggle }
               {refreshError}
             </Text>
           ) : null}
+          <ReportVerificationNotice verification={d.verification} />
+          {d.missing.length ? <Muted>데이터 미확인: {d.missing.join(", ")}</Muted> : null}
           {lines !== null ? (
             <Text style={{ color: t.ink, fontSize: font.body, lineHeight: foldDetail.previewLineH }} numberOfLines={lines}>
               {markdownPreview(d.content)}
@@ -134,9 +154,8 @@ function AnalysisPeek({ code, kind, title, lines, requested, onRequest, toggle }
           ) : (
             <>
               <MarkdownView>{d.content}</MarkdownView>
-              {d.missing.length ? <Muted>데이터 미확인: {d.missing.join(", ")}</Muted> : null}
-              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-                <Muted>{formatDateKo(d.createdAt, true)} 기준</Muted>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: space.xs }}>
+                <Muted>보고서 생성 {formatDateKo(d.createdAt, true)}</Muted>
                 <Button title={refreshError ? "다시 시도" : "갱신"} variant="secondary" icon="refresh" compact onPress={() => refreshAnalysis.mutate({ code, kind })} />
               </View>
             </>
@@ -147,13 +166,76 @@ function AnalysisPeek({ code, kind, title, lines, requested, onRequest, toggle }
   );
 }
 
+/** 진행 상태는 본문 위에 따로 둔다. 시간 초과 뒤의 확인 버튼은 읽기 요청만 한다. */
+function AnalysisWaitBody({ code, kind, requested, onRequest, title, lines = null, toggle }: {
+  code: string; kind: AnalysisKind; requested: boolean; onRequest: (kind: AnalysisKind) => void;
+  title?: string; lines?: number | null; toggle?: React.ReactNode;
+}) {
+  const t = useTheme();
+  const a = useAnalysisRecovery(code, kind, requested);
+  const d = a.data;
+  const ask = !requested && !d && a.wait.phase === "idle";
+  const unknown = a.wait.phase === "unknown";
+  return (
+    <View style={{ gap: space.xs }}>
+      {title ? <PaneTitle title={title} note={d ? `생성 ${shortStamp(d.createdAt)}` : null} action={d || lines === null ? toggle : null} /> : null}
+      {ask ? (
+        <View style={{ gap: space.xs }}>
+          <Muted>관심 종목이 아니라 AI 분석을 미리 만들지 않았습니다.</Muted>
+          <Button title="AI 분석 만들기" icon="sparkles" onPress={() => onRequest(kind)} />
+        </View>
+      ) : (
+        <>
+          {a.busy ? (
+            <AnalysisWaitProgress wait={a.wait} previous={!!d} />
+          ) : unknown ? (
+            <View style={{ gap: space.xs }}>
+              <Text style={{ color: t.danger, fontSize: font.small }} accessibilityRole="alert" accessibilityLiveRegion="polite">{a.wait.message}</Text>
+              {d ? <Muted>이전 분석을 보여 주는 중입니다.</Muted> : null}
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.xs }}>
+                <Button title="결과 확인" variant="secondary" compact icon="refresh" onPress={a.check} />
+                <Button title="다시 만들기" variant="secondary" compact onPress={a.refresh} />
+              </View>
+            </View>
+          ) : !d ? <Loading label="저장된 분석 확인 중" /> : null}
+          {d ? <ReportVerificationNotice verification={d.verification} /> : null}
+          {d?.missing.length ? <Muted>데이터 미확인: {d.missing.join(", ")}</Muted> : null}
+          {d ? lines !== null ? (
+            <Text style={{ color: t.ink, fontSize: font.body, lineHeight: foldDetail.previewLineH }} numberOfLines={lines}>{markdownPreview(d.content)}</Text>
+          ) : (
+            <>
+              <MarkdownView>{d.content}</MarkdownView>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: space.xs }}>
+                <Muted>보고서 생성 {formatDateKo(d.createdAt, true)}</Muted>
+                {!unknown ? <Button title={a.busy ? "처리 중" : "갱신"} variant="secondary" icon="refresh" compact disabled={a.busy} onPress={a.refresh} /> : null}
+              </View>
+            </>
+          ) : null}
+        </>
+      )}
+    </View>
+  );
+}
+
+function AnalysisWaitProgress({ wait, previous }: { wait: AnalysisWait; previous: boolean }) {
+  const now = useNow(1_000);
+  const elapsed = Math.max(0, Math.floor((now - wait.startedAt) / 1_000));
+  const waiting = wait.phase === "checking" ? "저장된 분석 확인 중" : wait.phase === "recovering" ? "서버의 완료 결과 확인 중" : "분석 처리 중";
+  return (
+    <View style={{ gap: space.xxs }} accessibilityLiveRegion="none">
+      <Loading label={`${waiting} · ${elapsed}초 경과`} />
+      <Muted>{previous ? "이전 분석을 보여 주는 중입니다. " : ""}처리가 길어질 수 있습니다. 화면을 이동해도 서버 처리는 계속됩니다.</Muted>
+    </View>
+  );
+}
+
 /** 뉴스 줄들 (누르면 기사 열기) */
 export function NewsItems({ items }: { items: NewsItem[] }) {
   const t = useTheme();
   return (
     <>
       {items.map((item, i) => (
-        <Pressable key={`${item.url}-${i}`} onPress={() => void Linking.openURL(item.url)} accessibilityRole="link" accessibilityLabel={`뉴스: ${item.title}, ${item.source ?? ""} ${relativeTime(item.publishedAt) || formatDateKo(item.publishedAt)}`} style={[styles.newsItem, { borderTopColor: t.line, borderTopWidth: i === 0 ? 0 : StyleSheet.hairlineWidth }]}>
+        <Pressable key={`${item.url}-${i}`} onPress={() => void openSourceLink(item.url)} accessibilityRole="link" accessibilityLabel={`뉴스: ${item.title}, ${item.source ?? ""} ${relativeTime(item.publishedAt) || formatDateKo(item.publishedAt)}`} style={[styles.newsItem, { borderTopColor: t.line, borderTopWidth: i === 0 ? 0 : StyleSheet.hairlineWidth }]}>
           <Text style={{ color: t.ink, fontSize: font.body, lineHeight: 20 }} numberOfLines={2}>{item.title}</Text>
           <Muted>
             {item.source ?? ""} · {relativeTime(item.publishedAt) || formatDateKo(item.publishedAt)}
@@ -170,7 +252,7 @@ export function DisclosureItems({ items }: { items: Disclosure[] }) {
   return (
     <>
       {items.map((item, i) => (
-        <Pressable key={item.receiptNo} onPress={() => void Linking.openURL(item.url)} accessibilityRole="link" accessibilityLabel={`공시: ${item.title}, ${item.filer}, ${formatDateKo(item.filedAt)}`} style={[styles.newsItem, { borderTopColor: t.line, borderTopWidth: i === 0 ? 0 : StyleSheet.hairlineWidth }]}>
+        <Pressable key={item.receiptNo} onPress={() => void openSourceLink(item.url)} accessibilityRole="link" accessibilityLabel={`공시: ${item.title}, ${item.filer}, ${formatDateKo(item.filedAt)}`} style={[styles.newsItem, { borderTopColor: t.line, borderTopWidth: i === 0 ? 0 : StyleSheet.hairlineWidth }]}>
           <Text style={{ color: t.ink, fontSize: font.body }}>{item.title}</Text>
           <Muted>
             {item.filer} · {formatDateKo(item.filedAt)}
@@ -589,8 +671,10 @@ export function barStarText(star: BarStar): string {
  * 버튼 높이 44 (oneHand.barButtonH), 고지 바로 위.
  * 가격 알림(3-29, 플래그 priceAlerts · 등록 종목만): alert 가 있으면 가운데에 [종 알림 n] (내용 폭, 좁으면 종 아이콘만 — lib/detailLayout alertBarLabel). 없으면 지금 두 버튼 그대로
  */
-export function DetailBottomBar({ star, onStar, onChart, alert }: { star: BarStar; onStar: () => void; onChart: () => void; alert?: { count: number; label: boolean; onPress: () => void } }) {
+export function DetailBottomBar({ star, onStar, onChart, alert }: { star: BarStar | null; onStar: () => void; onChart: () => void; alert?: { count: number; label: boolean; onPress: () => void } }) {
   const t = useTheme();
+  // star 가 없으면(주인 아닌 계정의 미등록 종목 — 계정 A단계) 왼쪽 버튼 없이 [차트 크게]만
+  if (!star) return <View style={[styles.bar, { backgroundColor: t.surface, borderTopColor: t.line }]}>{chartButton(t, onChart)}</View>;
   const starText = barStarText(star);
   const starA11y = star.kind === "watch" ? "관심 종목에 추가" : star.kind === "unwatch" ? `관심 종목에서 빼기, ${star.label}` : "보유 정보 수정";
   const starIcon: keyof typeof Ionicons.glyphMap = star.kind === "watch" ? "star-outline" : star.kind === "unwatch" ? "star" : "create-outline";
@@ -628,18 +712,25 @@ export function DetailBottomBar({ star, onStar, onChart, alert }: { star: BarSta
           ) : null}
         </Pressable>
       ) : null}
-      <Pressable
-        onPress={onChart}
-        accessibilityRole="button"
-        accessibilityLabel="차트 전체 화면"
-        style={({ pressed }) => [styles.barBtn, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderColor: t.lineStrong }]}
-      >
-        <Ionicons name="expand-outline" size={font.title} color={t.ink} />
-        <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700" }} maxFontSizeMultiplier={fontCap.chrome}>
-          차트 크게
-        </Text>
-      </Pressable>
+      {chartButton(t, onChart)}
     </View>
+  );
+}
+
+/** 아래 막대 오른쪽 [차트 크게] */
+function chartButton(t: ReturnType<typeof useTheme>, onChart: () => void) {
+  return (
+    <Pressable
+      onPress={onChart}
+      accessibilityRole="button"
+      accessibilityLabel="차트 전체 화면"
+      style={({ pressed }) => [styles.barBtn, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderColor: t.lineStrong }]}
+    >
+      <Ionicons name="expand-outline" size={font.title} color={t.ink} />
+      <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700" }} maxFontSizeMultiplier={fontCap.chrome}>
+        차트 크게
+      </Text>
+    </Pressable>
   );
 }
 

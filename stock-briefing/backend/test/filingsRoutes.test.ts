@@ -238,27 +238,26 @@ describe("3-38 경로", () => {
   it("/api/widget: 지금 앱(&ms=1)·켬·새 알림이 있을 때만 filingIds, 끄거나 새 알림이 없거나 예전 앱이면 본문·ETag 가 바이트까지 같음", async () => {
     const { at } = await start();
     await app!.filingWatch!.sweep();
-    const before = await get(NEW_URL);
-    expect(before.json()).not.toHaveProperty("filingIds");
-    const beforeOld = await get("/api/widget");
+    // 기준 잡기만 한 뒤에는 새 알림이 없어 칸 없음
+    expect((await get(NEW_URL)).json()).not.toHaveProperty("filingIds");
     at(FIXTURE.clock.sweep);
     await app!.filingWatch!.sweep();
     at(FIXTURE.clock.now);
     const on = await get(NEW_URL);
-    expect(on.json().filingIds).toEqual(["0001193125-26-323660", "0001193125-26-323632"]);
-    // 칸만 더해졌다
-    const { filingIds: _ids, ...rest } = on.json() as Record<string, unknown>;
-    expect(JSON.stringify(rest)).toBe(before.body);
-    expect(on.headers.etag).not.toBe(before.headers.etag);
-    // 예전 앱(표시 없음)은 그대로
     const old = await get("/api/widget");
-    expect(old.body).toBe(beforeOld.body);
-    expect(old.headers.etag).toBe(beforeOld.headers.etag);
-    // 끄면 바이트까지 같다
+    expect(on.json().filingIds).toEqual(["0001193125-26-323660", "0001193125-26-323632"]);
+    // 끄면 바이트까지 같다 — 같은 시각에 견준다 (종목마다 붙는 세션 칸 ss 가 시각을 따라 바뀌므로)
     await off({ filingAlerts: false });
     const offRes = await get(NEW_URL);
-    expect(offRes.body).toBe(before.body);
-    expect(offRes.headers.etag).toBe(before.headers.etag);
+    expect(offRes.json()).not.toHaveProperty("filingIds");
+    // 켜면 칸만 더해졌다
+    const { filingIds: _ids, ...rest } = on.json() as Record<string, unknown>;
+    expect(JSON.stringify(rest)).toBe(offRes.body);
+    expect(on.headers.etag).not.toBe(offRes.headers.etag);
+    // 예전 앱(표시 없음)은 켜도 끈 것과 같다
+    const oldOff = await get("/api/widget");
+    expect(old.body).toBe(oldOff.body);
+    expect(old.headers.etag).toBe(oldOff.headers.etag);
     // 하루 넘게 지나 알림 기간(3일)이 끝나도 칸 없음
     await off({ filingAlerts: true });
     at("2026-08-02T00:00:00Z");

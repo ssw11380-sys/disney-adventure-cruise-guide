@@ -211,6 +211,9 @@ interface Cached<T> {
   value: T;
 }
 
+/** 하나의 수집에서 타이머가 한 번 만료되면 후속 단계도 새 출처 요청을 시작하지 않는다. */
+interface CollectBudget { deadline: number; expired: boolean }
+
 export interface HoldingEventsDeps {
   sources: HoldingEventSources;
   now?: () => Date;
@@ -242,13 +245,13 @@ export class HoldingEventsService {
   }
 
   async collect(input: CollectInput): Promise<CollectedEvents> {
-    const deadline = Date.now() + (input.budgetMs ?? EVENTS_BUDGET_MS);
+    const budget: CollectBudget = { deadline: Date.now() + (input.budgetMs ?? EVENTS_BUDGET_MS), expired: false };
     const from = input.today;
     const to = addDays(from, EVENTS_DAYS);
     const seen = new Set<string>();
     const holdings = input.holdings.filter((h) => !seen.has(h.code) && !!seen.add(h.code));
     const us = holdings.filter((h) => !isKrCode(h.code));
-    const [, earnings] = await Promise.all([this.loadDividends(holdings.map((h) => h.code), deadline), input.earnings ? this.loadEarnings(holdings, from, to, input.asOf, deadline) : Promise.resolve(null)]);
+    const [, earnings] = await Promise.all([this.loadDividends(holdings.map((h) => h.code), budget), input.earnings ? this.loadEarnings(holdings, from, to, input.asOf, budget) : Promise.resolve(null)]);
     // 미국: 토스 창 안에 날짜가 있거나 토스를 받지 못한 종목만 네이버와 맞춰 본다 (토스에 앞날 날짜가 없으면 보일 줄도 없다)
     const toss = new Map(holdings.map((h) => [h.code, this.cachedDividends(h.code)]));
     const naver = await this.loadNaver(
@@ -256,7 +259,7 @@ export class HoldingEventsService {
         const rows = toss.get(h.code);
         return rows === null || rows!.some((r) => r.exDate >= from && r.exDate <= to);
       }),
-      deadline,
+      budget,
     );
     const items: AccountEventItem[] = [];
     const failed: Array<{ code: string; name: string }> = [];
@@ -293,7 +296,7 @@ export class HoldingEventsService {
   }
 
   /** 12시간 안에 받은 값이 없는 종목만 부른다 (동시에 DIVIDEND_CONCURRENCY 개, 시간이 다 되면 새로 부르지 않음) */
-  private async loadDividends(codes: string[], deadline: number): Promise<void> {
+  private async loadDividends(codes: string[], budget: CollectBudget): Promise<void> {
     const t = this.now().getTime();
     const queue = codes.filter((c) => {
       const hit = this.dividends.get(c);
@@ -320,20 +323,20 @@ export class HoldingEventsService {
     const work = Promise.all(
       Array.from({ length: Math.min(DIVIDEND_CONCURRENCY, queue.length) }, async () => {
         for (let c = queue.shift(); c; c = queue.shift()) {
-          if (Date.now() >= deadline) return;
+          if (budget.expired || Date.now() >= budget.deadline) return;
           // 시간이 다 돼 돌아왔으면(타이머가 시계보다 1ms 일찍 울릴 수 있음) 다음 종목을 새로 부르지 않는다
-          if ((await within(one(c), deadline)).kind === "timeout") return;
+          if ((await within(one(c), budget)).kind === "timeout") return;
         }
       }),
     );
-    await within(work, deadline);
+    await within(work, budget);
   }
 
   /**
    * 실적 발표 (holdingEarnings): 창이 걸친 달의 캘린더(6시간 캐시, 못 받으면 24시간 안 옛 값)와 보유 종목의 토스 상품 코드.
    * 한 달이라도 받지 못하면 items null (일부 달만 보이면 목록이 다 있는 것처럼 읽히므로 실적 줄을 모두 뺀다)
    */
-  private async loadEarnings(holdings: readonly EventHolding[], from: string, to: string, asOf: string, deadline: number): Promise<{ items: AccountEventItem[] | null }> {
+  private async loadEarnings(holdings: readonly EventHolding[], from: string, to: string, asOf: string, budget: CollectBudget): Promise<{ items: AccountEventItem[] | null }> {
     const months = monthsBetween(from, to);
     const t = this.now().getTime();
     const oneMonth = (ym: string): Promise<void> => {
@@ -363,7 +366,7 @@ export class HoldingEventsService {
             .then(() => this.deps.sources.productCode(h.code))
             .catch(() => null),
     );
-    const [, pcs] = await Promise.all([within(Promise.all(months.map(oneMonth)), deadline), Promise.all(codes.map((p) => within(p, deadline).then((r) => (r.kind === "ok" ? r.value : null))))]);
+    const [, pcs] = await Promise.all([within(Promise.all(months.map(oneMonth)), budget), Promise.all(codes.map((p) => within(p, budget).then((r) => (r.kind === "ok" ? r.value : null))))]);
     const rows: TossCalendarEarning[] = [];
     const now = this.now().getTime();
     for (const ym of months) {
@@ -375,21 +378,21 @@ export class HoldingEventsService {
   }
 
   /** 네이버 배당락일 (미국, 동시에 NAVER_CONCURRENCY 개). 시간이 다 되거나 받지 못하면 그 종목은 undefined(모름) */
-  private async loadNaver(list: readonly EventHolding[], deadline: number): Promise<Map<string, string | null | undefined>> {
+  private async loadNaver(list: readonly EventHolding[], budget: CollectBudget): Promise<Map<string, string | null | undefined>> {
     const out = new Map<string, string | null | undefined>();
     const src = this.deps.sources.naverExDividend;
-    if (!src || !list.length) return out;
+    if (!src || !list.length || budget.expired) return out;
     const queue = [...list];
     await within(
       Promise.all(
         Array.from({ length: Math.min(NAVER_CONCURRENCY, queue.length) }, async () => {
           for (let h = queue.shift(); h; h = queue.shift()) {
-            if (Date.now() >= deadline) return;
+            if (budget.expired || Date.now() >= budget.deadline) return;
             const r = await within(
               Promise.resolve()
                 .then(() => src(h.code))
                 .catch(() => undefined),
-              deadline,
+              budget,
             );
             out.set(h.code, r.kind === "ok" ? r.value : undefined);
             // 시간이 다 됐으면 다음 종목을 새로 부르지 않는다 (타이머가 시계보다 1ms 일찍 울릴 수 있음)
@@ -397,7 +400,7 @@ export class HoldingEventsService {
           }
         }),
       ),
-      deadline,
+      budget,
     );
     return out;
   }
@@ -417,16 +420,19 @@ export class HoldingEventsService {
 }
 
 /** p 를 deadline(실제 시계)까지 기다린다. 늦거나 실패하면 timeout (p 는 뒤에서 끝나도 무시 — 나중 실패도 처리된 것으로) */
-async function within<T>(p: Promise<T>, deadline: number): Promise<{ kind: "ok"; value: T } | { kind: "timeout" }> {
+async function within<T>(p: Promise<T>, budget: CollectBudget): Promise<{ kind: "ok"; value: T } | { kind: "timeout" }> {
   const settled = p.then(
     (value) => ({ kind: "ok" as const, value }),
     () => ({ kind: "timeout" as const }),
   );
-  const ms = deadline - Date.now();
-  if (ms <= 0) return { kind: "timeout" };
+  const ms = budget.deadline - Date.now();
+  if (budget.expired || ms <= 0) {
+    budget.expired = true;
+    return { kind: "timeout" };
+  }
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<{ kind: "timeout" }>((res) => {
-    timer = setTimeout(() => res({ kind: "timeout" }), ms);
+    timer = setTimeout(() => { budget.expired = true; res({ kind: "timeout" }); }, ms);
   });
   try {
     return await Promise.race([settled, late]);

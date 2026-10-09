@@ -8,6 +8,16 @@ import { seoulIso } from "../lib/time.js";
  *  - 새 기능(3-19·3-24 의 새 동작, P2 전부)은 플래그 뒤에 둔다
  */
 export const FEATURES = {
+  informationFocus: { default: true, description: "잔고 핵심 금액·상태 우선 표시와 기준 펼치기, 관심 희망가 차이 방향 안내. 끄면 기존 전체 기준 설명과 부호 표시" },
+  accountLiveRefresh: { default: true, description: "앱 연결 중 계좌 원본을 완료 후 30초 간격으로 확인. 끄면 기존 정기·체결·수동 동기화만 유지" },
+  widgetLeanLive: { default: true, description: "위젯 핵심 숫자 중심 보기와 앱 실행 중 시세 5초 묶음 전달. 끄면 기존 표시와 1분 간격, 수량 즉시 전달·마지막 시세 전달 보완은 유지" },
+  watchlistSteps: { default: true, description: "별도 관심종목·관심 시작 가격·구매희망 가격, 관심 기준 및 잔고 전일 종가 기준 5% 구간 서버 알림. 끄면 메뉴·조회·알림 중지, 저장값 보존" },
+  settingsSections: { default: true, description: "설정 분류 목록과 선택한 항목만 펼치기. 끄면 기존 전체 설정 화면" },
+  widgetClarity: { default: true, description: "위젯 정보 기준 개선: 앱 실시간 평가·시세와 조회 시각·합계 제외와 지난 값 경고·전일 대비·개인화. 끄면 기존 위젯" },
+  tossAccountSnapshot: { default: true, description: "토스 원본 계좌 평가: 동기화 때 받은 전체 주식 평가를 통화별로 보존하고 잔고의 기본 기준으로 표시. 끄면 기록·조회·표시 없이 기존 실시간 평가" },
+  briefingParallel: { default: true, description: "보고서 속도 개선: 종목 두 개의 자료 수집·분석을 동시에 진행하며 각 종목의 분석 뒤 요약, 저장 순서와 세션 알림을 유지. 끄면 기존 순차 처리" },
+  analysisWaitRecovery: { default: true, description: "분석 대기 개선: 갱신 중 이전 보고서를 유지하고 조회 전용 상태 경로로 서버에서 완성된 결과를 회수. 끄면 기존 대기·오류 화면, 상태 경로 404" },
+  briefingLiveProgress: { default: true, description: "브리핑 진행 표시: 시작부터 준비·처리 개수·마무리 상태를 표시. 끄면 기존 늦음·실패 안내만 표시" },
   tossReconcile: { default: true, description: "토스 계좌 자동 대조: 동기화마다 기록·경고, 설정 화면 '토스 대조' 줄 (3-13)" },
   briefingSources: { default: true, description: "브리핑 상세의 근거(뉴스·공시 출처) 카드 (3-12)" },
   briefingDigest: { default: true, description: "브리핑 알림을 세션당 1건으로 묶고 조용한 시간·끈 종목을 지킴 (3-19). 끄면 종목마다 1건(예전)" },
@@ -189,6 +199,16 @@ export const FEATURES = {
     default: true,
     description:
       "숫자 기준·토스 대조 배지 (3-32): 잔고 계좌 합계 옆 점과 짧은 글(토스와 0.1% 이내·차이 N%·수량 다름·대기), 누르면 '숫자 기준' 창(시세 기준·시각·비용 차감·환율·당일손익·토스 대조·최근 7일 장중 비율), 대조 기록 뒤 실시간 연결로 앱에 알림(reconcile). 잔고·자산 위젯 기준 시각 뒤 '· NXT·주간거래 포함'(자리가 남을 때만, /api/widget &ms=1 응답에 종목 기준 b), 브리핑 탭 계좌 카드·줄 'HH:MM 기준', 계좌 브리핑 상세 '시세 기준' 줄(새 브리핑에 quoteBasis 저장). 끄면 모두 예전 그대로",
+  },
+  flowTab: {
+    default: true,
+    description:
+      "종목 상세 '수급' 탭 (3-33): 한국 종목의 개인·외국인·기관·기타법인 순매수(산 주식 수 − 판 주식 수) 5·20·60일 합계와 날마다 막대(20일 기본), 외국인 보유율 60일 추이·5·20·60일 전과 %p 차이·한도 종목의 한도 소진율. 자료는 토스증권 웹 공개 자료(KRX+NXT 합산, 로그인 없음) → 막히면 네이버 증권(KRX만, 화면에 기준을 밝힘), 메모리 캐시(평일 장 시간 10분·그 밖 60분), 저장 없음. 오늘 값은 저녁(20:30) 확정 전까지 잠정으로만 보이고 합계에 넣지 않음. 토스 Open API 키가 있으면 종목마다 12시간에 한 번 최근 20일을 대조해 개수만 표시(원자료는 관리 경로 GET /api/admin/investor-flow/check). 미국 종목은 '해당 없음'. 새 경로 GET /api/investor-flow/:code(공용). 끄면 탭이 없고 경로 404, 토스 웹·네이버·Open API 수급 호출 0 — 화면이 지금과 한 글자도 같음",
+  },
+  holdingThemes: {
+    default: true,
+    description:
+      "내 종목 테마 (3-35 1단계, 사실만): 보유 종목을 발견 탭과 같은 테마·업종에 묶고(미국 = 토스 '주요 사업' 테마 중 미국 테마북에 있는 것 → 없으면 네이버 업종, 한국 = 네이버 테마를 주 1회 거꾸로 찾는 표 → 없으면 업종, 레버리지 단일 종목은 기초 종목으로, 반도체 지수 상품은 미국 업종 '반도체', 지수 전체 상품은 묶지 않음) 묶음마다 오늘·1주 등락률·오른/내린/보합 수(발견 탭 값 그대로)·거래대금 평소(최근 20거래일, 이 앱이 장 마감 뒤 기록 — 배포 뒤 5거래일부터)의 몇 %·든 내 종목과 정규장 등락률, 계좌 한 줄 '내 종목이 많이 속한 테마'. GET /api/holdings/themes, 잔고 탭 '테마' 버튼 → '내 종목 테마' 화면, 계좌 브리핑 상세 카드(만들 때 저장 data.holdingThemes, 최대 8초). 예약: 한국 테마 표 일요일 05:40 KST, 거래대금 기록 한국 평일 20:10 KST · 미국 평일 16:15 뉴욕. 끄면 버튼·화면·카드가 없고 경로 404, 예약이 돌아도 요청·계산·저장 0건, 계좌 브리핑에 칸 없음, /health 응답 예전과 같음(모은 기록은 지우지 않음)",
   },
   filingAlerts: {
     default: true,

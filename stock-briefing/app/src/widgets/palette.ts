@@ -78,6 +78,9 @@ export const WIDGET_TOTAL_FONTS = [WIDGET_FONT.big, 16, WIDGET_FONT.icon] as con
 /** 누르는 칸 최소 크기 (dp, 안드로이드 권장 48dp) — ↻·손익 전환 (3-23) */
 export const WIDGET_TOUCH = 48;
 
+/** 명확한 위젯 보기: 주요 정보는 12sp 아래로 줄이지 않고 공간에 맞춰 항목을 고른다. */
+export const WIDGET_READABLE = { body: 12, value: 19, small: 11, header: 13 } as const;
+
 /** 위젯 모서리 둥글기 (dp) */
 export const WIDGET_RADIUS = 14;
 /** 장 상태 칩 모서리 둥글기 (dp) */

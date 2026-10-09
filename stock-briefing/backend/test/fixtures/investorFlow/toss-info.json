@@ -1,0 +1,89 @@
+{
+ "A040300": {
+  "result": {
+   "code": "A040300",
+   "symbol": "040300",
+   "name": "YTN",
+   "group": {
+    "code": "ST",
+    "displayName": "주권"
+   },
+   "sharesOutstanding": 47676980
+  }
+ },
+ "A036630": {
+  "result": {
+   "code": "A036630",
+   "symbol": "036630",
+   "name": "세종텔레콤",
+   "group": {
+    "code": "ST",
+    "displayName": "주권"
+   },
+   "sharesOutstanding": 14000000
+  }
+ },
+ "A091810": {
+  "result": {
+   "code": "A091810",
+   "symbol": "091810",
+   "name": "트리니티항공",
+   "group": {
+    "code": "ST",
+    "displayName": "주권"
+   },
+   "sharesOutstanding": 102106091
+  }
+ },
+ "A030200": {
+  "result": {
+   "code": "A030200",
+   "symbol": "030200",
+   "name": "KT",
+   "group": {
+    "code": "ST",
+    "displayName": "주권"
+   },
+   "sharesOutstanding": 252021685
+  }
+ },
+ "A015760": {
+  "result": {
+   "code": "A015760",
+   "symbol": "015760",
+   "name": "한국전력",
+   "group": {
+    "code": "ST",
+    "displayName": "주권"
+   },
+   "sharesOutstanding": 641964077
+  }
+ },
+ "A005930": {
+  "result": {
+   "code": "A005930",
+   "symbol": "005930",
+   "name": "삼성전자",
+   "group": {
+    "code": "ST",
+    "displayName": "주권"
+   },
+   "sharesOutstanding": 5846278608
+  }
+ },
+ "Q520057": {
+  "result": {
+   "code": "Q520057",
+   "symbol": "520057",
+   "name": "미래에셋 인버스 2X 코스닥150 선물 ETN",
+   "group": {
+    "code": "EN",
+    "displayName": "ETN"
+   },
+   "sharesOutstanding": 31500000
+  }
+ },
+ "A520057": {
+  "result": null
+ }
+}

@@ -1,0 +1,25 @@
+{
+  "note": "회원가입·비밀번호 검사 규칙 (계정 A단계, 플래그 accounts). 서버 backend/src/auth/rules.ts 와 앱 app/src/lib/authRules.ts 가 같은 결과를 내는지 backend/test/accounts.test.ts · app/test/authRules.test.ts 가 이 파일로 확인한다. fields 는 칸별 첫 오류 코드 (없으면 통과). 코드: required · login_id_format · password_length · password_mix · password_same_as_id · password_mismatch · email_format",
+  "signup": [
+    { "name": "모두 맞음 (한글 아이디)", "input": { "loginId": "홍길동", "password": "abcd1234", "passwordConfirm": "abcd1234", "email": "Hong@Example.com" }, "fields": {}, "normalized": { "loginId": "홍길동", "loginIdKey": "홍길동", "email": "hong@example.com" } },
+    { "name": "모두 맞음 (영문·밑줄, 앞뒤 공백은 지움)", "input": { "loginId": "  Kim_01 ", "password": "Passw0rdLong", "passwordConfirm": "Passw0rdLong", "email": " kim@test.co.kr " }, "fields": {}, "normalized": { "loginId": "Kim_01", "loginIdKey": "kim_01", "email": "kim@test.co.kr" } },
+    { "name": "NFD 로 넣은 한글 아이디는 NFC 로", "input": { "loginId": "홍길동", "password": "abcd1234", "passwordConfirm": "abcd1234", "email": "a@b.co" }, "fields": {}, "normalized": { "loginId": "홍길동", "loginIdKey": "홍길동", "email": "a@b.co" } },
+    { "name": "빈 칸", "input": { "loginId": "", "password": "", "passwordConfirm": "", "email": "" }, "fields": { "loginId": "required", "password": "required", "passwordConfirm": "required", "email": "required" } },
+    { "name": "아이디 한 글자", "input": { "loginId": "a", "password": "abcd1234", "passwordConfirm": "abcd1234", "email": "a@b.co" }, "fields": { "loginId": "login_id_format" } },
+    { "name": "아이디 21자", "input": { "loginId": "abcdefghijklmnopqrstu", "password": "abcd1234", "passwordConfirm": "abcd1234", "email": "a@b.co" }, "fields": { "loginId": "login_id_format" } },
+    { "name": "아이디 20자는 됨", "input": { "loginId": "abcdefghijklmnopqrst", "password": "abcd1234", "passwordConfirm": "abcd1234", "email": "a@b.co" }, "fields": {} },
+    { "name": "아이디에 빈칸", "input": { "loginId": "홍 길동", "password": "abcd1234", "passwordConfirm": "abcd1234", "email": "a@b.co" }, "fields": { "loginId": "login_id_format" } },
+    { "name": "아이디에 기호", "input": { "loginId": "kim-01", "password": "abcd1234", "passwordConfirm": "abcd1234", "email": "a@b.co" }, "fields": { "loginId": "login_id_format" } },
+    { "name": "아이디에 자모만", "input": { "loginId": "ㄱㄴㄷ", "password": "abcd1234", "passwordConfirm": "abcd1234", "email": "a@b.co" }, "fields": { "loginId": "login_id_format" } },
+    { "name": "비밀번호 7자", "input": { "loginId": "tester", "password": "abc1234", "passwordConfirm": "abc1234", "email": "a@b.co" }, "fields": { "password": "password_length" } },
+    { "name": "비밀번호 65자", "input": { "loginId": "tester", "password": "a1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "passwordConfirm": "a1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "email": "a@b.co" }, "fields": { "password": "password_length" } },
+    { "name": "비밀번호 숫자만", "input": { "loginId": "tester", "password": "12345678", "passwordConfirm": "12345678", "email": "a@b.co" }, "fields": { "password": "password_mix" } },
+    { "name": "비밀번호 영문만", "input": { "loginId": "tester", "password": "abcdefgh", "passwordConfirm": "abcdefgh", "email": "a@b.co" }, "fields": { "password": "password_mix" } },
+    { "name": "비밀번호가 아이디와 같음 (대소문자 무시)", "input": { "loginId": "Tester123", "password": "tester123", "passwordConfirm": "tester123", "email": "a@b.co" }, "fields": { "password": "password_same_as_id" } },
+    { "name": "비밀번호 확인이 다름", "input": { "loginId": "tester", "password": "abcd1234", "passwordConfirm": "abcd12345", "email": "a@b.co" }, "fields": { "passwordConfirm": "password_mismatch" } },
+    { "name": "이메일 형식 (골뱅이 없음)", "input": { "loginId": "tester", "password": "abcd1234", "passwordConfirm": "abcd1234", "email": "tester.example.com" }, "fields": { "email": "email_format" } },
+    { "name": "이메일 형식 (점 없는 도메인)", "input": { "loginId": "tester", "password": "abcd1234", "passwordConfirm": "abcd1234", "email": "tester@localhost" }, "fields": { "email": "email_format" } },
+    { "name": "이메일 형식 (빈칸)", "input": { "loginId": "tester", "password": "abcd1234", "passwordConfirm": "abcd1234", "email": "tes ter@example.com" }, "fields": { "email": "email_format" } },
+    { "name": "여러 칸이 한 번에 틀림", "input": { "loginId": "x", "password": "short", "passwordConfirm": "other", "email": "bad" }, "fields": { "loginId": "login_id_format", "password": "password_length", "passwordConfirm": "password_mismatch", "email": "email_format" } }
+  ]
+}

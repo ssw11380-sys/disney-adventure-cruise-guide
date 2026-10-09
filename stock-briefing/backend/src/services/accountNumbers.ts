@@ -4,6 +4,7 @@ import type { MarketIndex } from "../providers/market/indices.js";
 import { seoulDate } from "../lib/time.js";
 import { isKrTradingDate, isUsTradingDate, krRegularHours, marketContext, usRegularCloseMinutes } from "./marketContext.js";
 import type { Evaluation } from "./stockService.js";
+import type { HoldingThemesSnapshot } from "./holdingThemesService.js";
 
 /**
  * 계좌 한 장 브리핑(3-31)의 숫자와 문장. 숫자는 모두 여기서 코드로 계산하고, 모델은 이 숫자를 옮겨 적기만 한다.
@@ -177,6 +178,11 @@ export interface AccountData extends AccountTotals {
   events?: AccountEvents;
   /** 합계에 넣은 종목 시세의 기준 (3-32, 플래그 numberBasis 를 켰을 때 만든 브리핑만). 예전 기록·플래그 끔은 없음 */
   quoteBasis?: QuoteBasis;
+  /**
+   * 내 종목 테마 (3-35, 플래그 holdingThemes): 많이 속한 테마 · 시장별 등락률 높은·낮은 3개. 만들 때 저장한다(그때 기준 그대로).
+   * 꺼짐·서비스 없음·8초 넘음·예전 기록에는 칸이 없다
+   */
+  holdingThemes?: HoldingThemesSnapshot;
 }
 
 /** 다가오는 일정 한 줄 (브리핑 3차 5) */
@@ -451,9 +457,13 @@ export function computeAccount(list: readonly AccountHolding[], opts: { afterCos
   const topN = opts.topN ?? TOP_N;
   const excluded: AccountTotals["excluded"] = [];
   const rows: RawRow[] = [];
+  let usHoldings = 0;
   for (const s of list) {
     const q = s.quote;
     const ev = s.evaluation;
+    // 시세가 없어도 실제 보유는 남아 있다. positionsOf 와 같은 통화 분류로 계산에서 빠진 미국 보유분을 구분한다.
+    const holdingCurrency = q ? (q.currency ?? "KRW") : /^\d/.test(s.code) ? "KRW" : "USD";
+    if ((s.quantity ?? 0) > 0 && s.avgPrice !== null && holdingCurrency === "USD") usHoldings++;
     // 앱 summarize 와 같이 평가(수량·평단)와 시세가 모두 있는 종목만 합계에 넣는다
     if (!q || !ev) {
       if ((s.quantity ?? 0) > 0 && s.avgPrice !== null) excluded.push({ code: s.code, name: s.name, reason: "시세를 받지 못해 합계에서 뺐습니다" });
@@ -525,7 +535,7 @@ export function computeAccount(list: readonly AccountHolding[], opts: { afterCos
     others: rest.length ? { count: rest.length, amount: sum(rest.map((r) => amount.get(r)!)) } : null,
     markets: { kr: bucket(kr, krDay), us: bucket(us, usDay) },
     excluded,
-    fx: fxImpact(us, usDay, opts.usdKrw ?? null),
+    fx: fxImpact(us, usDay, opts.usdKrw ?? null, us.length < usHoldings),
   };
 }
 
@@ -535,9 +545,10 @@ export function computeAccount(list: readonly AccountHolding[], opts: { afterCos
  *            = 달러 등락 × 적용 환율(가격 효과 = 당일 손익의 미국 몫) + 전일 달러 평가 × 원/달러 변동(환율 효과)
  * 원/달러 변동은 지수 띠와 같은 출처(하나은행 매매기준율 전일 대비)라 적용 환율(토스 표시 환율)과 출처가 다르다 — 변동 폭만 쓴다
  */
-function fxImpact(us: RawRow[], usDay: number, usdKrw: MarketIndex | null): AccountFx {
+function fxImpact(us: RawRow[], usDay: number, usdKrw: MarketIndex | null, missingUs: boolean): AccountFx {
   const idx = usdKrw ? { value: usdKrw.value, change: usdKrw.change, changeRate: usdKrw.changeRate, stale: usdKrw.stale === true } : null;
   const none = { usdHoldingsKrwChange: null, priceEffect: null, fxEffect: null };
+  if (missingUs) return { status: "unavailable", reason: "미국 보유 종목의 시세 또는 환율이 빠져 전체 환율 효과를 계산하지 못했습니다", usdKrw: idx, appliedRate: us[0]?.fx ?? null, ...none };
   if (!us.length) return { status: "none", reason: "미국 종목이 없어 환율 효과가 없습니다", usdKrw: idx, appliedRate: null, ...none };
   const appliedRate = us[0]!.fx;
   if (!usdKrw || !Number.isFinite(usdKrw.change)) {

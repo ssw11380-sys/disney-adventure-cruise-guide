@@ -238,6 +238,35 @@ export interface ValueReferenceTable {
   created_at: string;
 }
 
+export interface GenerationJobTable {
+  job_key: string;
+  run_id: string;
+  owner: string;
+  signature: string;
+  status: string;
+  started_at: string;
+  updated_at: string;
+  lease_until: string;
+  checkpoint: string;
+  result: string | null;
+  error: string | null;
+}
+
+export interface GenerationRequestTable {
+  request_key: string;
+  job_key: string;
+  run_id: string;
+  status: string;
+  result: string | null;
+  updated_at: string;
+}
+
+export interface FundamentalsCacheTable {
+  code: string;
+  payload: string;
+  fetched_at: string;
+}
+
 /**
  * SEC 공시 확인 (3-38, 플래그 filingAlerts): CIK 마다 1줄 — 공용 (SEC 공개 자료, 여러 사람이 같은 CIK 를 가져도 한 번만 받는다).
  * first_ok_at 이 없는 CIK 의 첫 확인은 기준 잡기(그때 받은 줄은 알리지 않음). 백업에 넣지 않는다 (다시 받을 수 있음)
@@ -267,6 +296,12 @@ export interface SecFilingTable {
 }
 
 export interface Database {
+  watch_items: { code: string; name: string; market: string; start_price: number; desired_price: number; alerts: number; revision: string; created_at: string; updated_at: string };
+  movement_marks: { mark_key: string; up: number; down: number; created_at: string };
+  movement_events: { event_key: string; code: string; scope: string; payload: string; created_at: string };
+  generation_jobs: GenerationJobTable;
+  generation_requests: GenerationRequestTable;
+  fundamentals_cache: FundamentalsCacheTable;
   sec_filing_watch: SecFilingWatchTable;
   sec_filings: SecFilingTable;
   value_fundamentals: ValueFundamentalsTable;

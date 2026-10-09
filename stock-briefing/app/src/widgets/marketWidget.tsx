@@ -1,13 +1,14 @@
 import React from "react";
-import { FlexWidget, TextWidget, type FlexWidgetStyle } from "react-native-android-widget";
+import { FlexWidget, ListWidget, TextWidget, type FlexWidgetStyle } from "react-native-android-widget";
 import { sentence } from "@/lib/a11y";
 import { space } from "@/tokens";
 import { BOARD_TITLE, boardColumns, boardTiles, type BoardTile } from "./board";
-import { BOARD_GAP, MARKER_GAP, PAD, planMarket, STALE_TEXT, WIDE, type MarketPlan } from "./layout";
-import { asOfVariants, failureText, HOME_URI, tone } from "./model";
+import { BOARD_GAP, MARKER_GAP, PAD, planMarket, STALE_TEXT, WIDE, clarityLine, lineHeight, readableFont, textWidth, type MarketPlan } from "./layout";
+import { asOfVariants, failureText, HOME_URI, quietState, tone } from "./model";
 import type { WidgetIndex } from "./payload";
 import { WIDGET_BOARD as BOARD, WIDGET_COLORS, WIDGET_FONT as F, WIDGET_TOUCH as TOUCH, type WidgetPalette } from "./palette";
-import { WIDGET_CLICK, type WidgetFrame } from "./widgets";
+import { ClarityWidgetHeader, WIDGET_CLICK, type WidgetFrame } from "./widgets";
+import { widgetTimeVariants } from "./clarity";
 
 /**
  * 지수·환율 위젯 (APK 1.4.0, 플래그 widgetMarket): 국내 | 미국 | 환율 세 구역을 세로 칸으로 나란히.
@@ -154,6 +155,7 @@ function Column({ col, index, count, plan, tiles, c }: { col: MarketPlan["column
 }
 
 export function MarketWidget(props: MarketWidgetProps) {
+  if (props.clarity) return <ClarityMarketWidget {...props} />;
   const c = props.palette ?? WIDGET_COLORS;
   const width = dp(props.width, DEFAULT.width);
   const height = dp(props.height, DEFAULT.height);
@@ -163,7 +165,8 @@ export function MarketWidget(props: MarketWidgetProps) {
   const hasData = props.enabled && tiles.some((t) => t.has);
   const fail = failureText(props.error);
   // 제목 옆: 갱신 중 → 갱신 실패(마지막 값을 두고) → 기준 시각 (판을 받은 시각)
-  const sub = refreshing ? ["갱신 중"] : fail ? [fail, "갱신 실패"] : hasData && props.boardAt ? asOfVariants(props.boardAt, props.now) : [];
+  // 로그인 필요는 실패가 아니다 — 좁아도 '갱신 실패'로 줄이지 않는다 (검증 5차)
+  const sub = refreshing ? ["갱신 중"] : fail ? (quietState(props.error) ? [fail] : [fail, "갱신 실패"]) : hasData && props.boardAt ? asOfVariants(props.boardAt, props.now) : [];
   const byCode = new Map(tiles.map((t) => [t.code, t]));
   // 넓은 위젯 모양(구역 안 옆 칸)은 다듬은 모습일 때만, 폴드 위젯 2차 폭 규칙(wideExtras — widgetFoldFit 이 켜져 있으면 폭 560dp 이상)이 막지 않을 때만
   const plan = planMarket({ width, height, scale, title: BOARD_TITLE, sub, columns: hasData ? boardColumns(tiles) : [], wide: props.polish === true && props.wideExtras !== false });
@@ -199,4 +202,57 @@ export function MarketWidget(props: MarketWidgetProps) {
       ) : null}
     </FlexWidget>
   );
+}
+
+/** 작은 칸에 9개를 압축하지 않는다. 읽을 수 있는 크기로 전부 보존하고 세로로 넘긴다. */
+function ClarityMarketWidget(props: MarketWidgetProps) {
+  const c = props.palette ?? WIDGET_COLORS;
+  const width = dp(props.width, DEFAULT.width), height = dp(props.height, DEFAULT.height), scale = props.fontScale ?? 1;
+  const content = Math.max(0, width - PAD * 2);
+  const original = props.enabled ? boardTiles(props.board) : [];
+  const order = ["KOSPI", "NASDAQ", "USDKRW", "KOSDAQ", "SPX", "JPYKRW", "DJI", "SOX", "CNYKRW"];
+  const tiles = [...original].sort((a, b) => order.indexOf(a.code) - order.indexOf(b.code));
+  const has = tiles.some((t) => t.has);
+  const fail = failureText(props.error);
+  const status = fail ? clarityLine([fail, "갱신 실패", "확인 필요"], content, scale) : props.boardAt ? clarityLine(widgetTimeVariants(props.boardAt, props.now, "received"), content, scale, F.md) : null;
+  const statusH = status ? lineHeight(fail ? F.base : F.md, scale) : 0;
+  const maxValue = Math.max(TOUCH, ...tiles.map((t) => textWidth(t.value, F.base, scale, true)));
+  const columns = content >= (maxValue + space.md) * 3 ? 3 : content >= (maxValue + space.md) * 2 ? 2 : 1;
+  const tileWidth = Math.floor((content - space.md * (columns - 1)) / columns);
+  const hint = clarityLine([`${tiles.length}개 지수·시장 환율 · 아래로 밀어 보기`, "지수·시장 환율 · 아래로 ↓", "시장 환율 포함 ↓"], content, scale, F.md);
+  // 기본 4×2는 시각과 목록 안내를 합친다. 좁거나 큰 글씨에서 안 맞으면 각각 보존한다.
+  const combined = status && !fail ? clarityLine([`${status} · ${tiles.length}개 지수·시장 환율 · 아래로 ↓`, `${status} · 시장 환율 · 아래로 ↓`], content, scale, F.md) : null;
+  const hintH = !combined && hint ? lineHeight(F.md, scale) : 0;
+  const gridRoom = Math.max(0, height - TOUCH - statusH - hintH - space.sm - BOARD.border * 2);
+  const textH = Math.max(TOUCH, lineHeight(F.base, scale) * 2 + lineHeight(F.big, scale));
+  // 글씨와 48dp 터치는 유지한다. 두 행이 들어갈 때 행의 장식 여백만 줄인다.
+  const twoRowsH = Math.floor(gridRoom / 2);
+  const tileH = columns === 3 && twoRowsH >= textH ? Math.min(textH + space.sm, twoRowsH) : textH + space.sm;
+  const showList = has && gridRoom >= tileH;
+  const groups: BoardTile[][] = [];
+  for (let n = 0; n < tiles.length; n += columns) groups.push(tiles.slice(n, n + columns));
+  const fallback = !props.enabled ? MARKET_OFF_TEXT : !has ? MARKET_EMPTY_TEXT : "앱에서 전체 지수 보기";
+  return <FlexWidget style={{ ...rootStyle(c), paddingRight: PAD, paddingBottom: space.sm }}>
+    <ClarityWidgetHeader title="지수·시장 환율" shortTitle="시장정보" width={width} scale={scale} widgetId={props.widgetId} refreshing={props.refreshing} uri={HOME_URI} c={c} />
+    {status ? <TextWidget text={showList && combined ? combined : status} maxLines={1} style={{ color: fail ? c.warn : c.muted, fontSize: fail ? F.base : F.md }} /> : null}
+    {showList ? <FlexWidget style={{ width: "match_parent", height: "match_parent", flexDirection: "column" }}>
+      {!combined && hint ? <TextWidget text={hint} maxLines={1} style={{ color: c.muted, fontSize: F.md }} /> : null}
+      <ListWidget style={{ width: "match_parent", height: "match_parent" }}>
+        {groups.map((group) => <FlexWidget key={group.map((x) => x.code).join("-")} style={{ width: "match_parent", height: tileH, flexDirection: "row", flexGap: space.md }}>
+          {group.map((tile) => {
+            const valueFont = readableFont(tile.value, tileWidth, scale, F.big);
+            const label = clarityLine([`${tile.label}${tile.stale ? " · 지연" : ""}`, tile.stale ? "시세 지연" : tile.label], tileWidth, scale);
+            const change = clarityLine(props.leanLive ? tile.changes.slice(-1) : tile.changes, tileWidth, scale);
+            return <FlexWidget key={tile.code} clickAction="OPEN_URI" clickActionData={{ uri: tile.uri }} accessibilityLabel={sentence([tile.code.endsWith("KRW") ? "시장 환율" : null, tile.speech])} style={{ width: tileWidth, height: tileH, justifyContent: "center", borderTopWidth: BOARD.hairline, borderTopColor: c.line }}>
+              <TextWidget text={label ?? tile.label} maxLines={1} truncate="END" style={{ color: tile.stale ? c.warn : c.sub, fontSize: F.base }} />
+              <TextWidget text={valueFont === null ? "앱에서 확인" : tile.value} maxLines={1} style={{ color: tile.stale ? c.muted : props.leanLive ? c.ink : tone(tile.change, c), fontSize: valueFont ?? F.base, fontWeight: "700" }} />
+              {change ? <TextWidget text={change} maxLines={1} style={{ color: tile.stale ? c.muted : tone(tile.change, c), fontSize: F.base }} /> : null}
+            </FlexWidget>;
+          })}
+        </FlexWidget>)}
+      </ListWidget>
+    </FlexWidget> : <FlexWidget clickAction="OPEN_URI" clickActionData={{ uri: HOME_URI }} accessibilityLabel={fallback} style={{ width: "match_parent", height: "match_parent", justifyContent: "center" }}>
+      <TextWidget text={fallback} maxLines={Math.max(1, Math.floor((height - TOUCH - statusH - space.sm) / lineHeight(F.base, scale)))} truncate="END" style={{ color: c.sub, fontSize: F.base }} />
+    </FlexWidget>}
+  </FlexWidget>;
 }

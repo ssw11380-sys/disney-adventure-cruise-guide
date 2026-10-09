@@ -128,7 +128,7 @@ describe("휴장 건너뛰기와 SEC 접수 시간 (3-38 리뷰 — 미국 휴�
   const closedCache = (now: number) =>
     store.set(
       "widget.payload",
-      JSON.stringify({ at: now - 10 * 60_000, apiUrl: API, path: "/api/widget?indices=1&sessions=1&ui=2&ms=1", etag: '"c"', body: { v: 1, market: { label: "휴장", open: false, nextChangeAt: new Date(now + 2 * 86_400_000).toISOString() }, stocks: held, briefings: [], latestIds: [] } }),
+      JSON.stringify({ at: now - 10 * 60_000, apiUrl: API, path: "/api/widget?indices=1&sessions=1&ui=2&ms=1&account=1", etag: '"c"', body: { v: 1, market: { label: "휴장", open: false, nextChangeAt: new Date(now + 2 * 86_400_000).toISOString() }, stocks: held, briefings: [], latestIds: [] } }),
     );
   beforeEach(() => {
     held = [US, KR];

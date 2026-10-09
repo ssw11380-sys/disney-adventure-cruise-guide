@@ -25,7 +25,11 @@ vi.mock("react-native-android-widget", async () => {
     FlexWidget: flex.FlexWidget,
     TextWidget: text.TextWidget,
     ListWidget: list.ListWidget,
-    getWidgetInfo: async (name: string) => (shared.widgets[name] ?? []).map((b) => ({ widgetName: name, widgetId: 1, ...b })),
+    getWidgetInfo: async (name: string) => (shared.widgets[name] ?? []).map((b, index) => ({ widgetName: name, widgetId: index + 1, ...b })),
+    requestWidgetUpdateById: async ({ widgetName, widgetId, renderWidget }: { widgetName: string; widgetId: number; renderWidget: (i: unknown) => unknown }) => {
+      const box = shared.widgets[widgetName]?.[widgetId - 1];
+      if (box) shared.updates.push({ widgetName, rendered: await renderWidget({ widgetName, widgetId, ...box, screenInfo: {} }) });
+    },
     requestWidgetUpdate: async ({ widgetName, renderWidget }: { widgetName: string; renderWidget: (i: unknown) => unknown }) => {
       for (const box of shared.widgets[widgetName] ?? []) {
         shared.updates.push({ widgetName, rendered: await renderWidget({ widgetName, widgetId: 1, ...box, screenInfo: {} }) });
@@ -86,7 +90,7 @@ const words = (r: unknown) =>
 const FAIL = "갱신 실패 · 연결 안 됨";
 
 const API = "https://server.test";
-const WIDGET_URL = `${API}/api/widget?indices=1&sessions=1&ui=2&ms=1`;
+const WIDGET_URL = `${API}/api/widget?indices=1&sessions=1&ui=2&ms=1&account=1`;
 const BOARD_URL = `${WIDGET_URL}&board=1`;
 const BOX = { width: 420, height: 260 };
 /** 2026-09-26(토) KST 시각 — 두 시장 모두 휴장 (다음 개장 월 08:00) */

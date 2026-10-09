@@ -1,7 +1,7 @@
 import { levInvOf, type LevInv, type ProductFacts } from "../analysis/leveraged.js";
 import type { Db } from "../db/index.js";
 import { isKrCode } from "../lib/codes.js";
-import { NotFoundError } from "../lib/errors.js";
+import { AppError, NotFoundError } from "../lib/errors.js";
 import { seoulIso } from "../lib/time.js";
 import { GenerationError, type TextGenerator } from "../llm/generator.js";
 import { renderTemplate, type PromptStore } from "../llm/prompts.js";
@@ -36,6 +36,8 @@ import {
 import { compareSinceLast, SINCE_LAST_DAYS } from "./accountSinceLast.js";
 import { EVENTS_BUDGET_MS, mondayOf, weekItems, type CollectedEvents, type CollectInput } from "./holdingEvents.js";
 import { groupCodeOf } from "./indicatorScoreService.js";
+import { checkpointGenerator, GenerationJobs, type GenerationContext } from "./generationJobs.js";
+import type { HoldingThemesSnapshot } from "./holdingThemesService.js";
 
 /** 목록·알림에 쓰는 머리 숫자 (data 에서 뽑는다) */
 export interface AccountHeadline {
@@ -84,6 +86,7 @@ export interface AccountBriefingWithData extends AccountBriefing {
 
 export interface AccountBriefingDeps {
   db: Db;
+  jobs?: GenerationJobs;
   /** 잔고 + 현재가 (StockService.listWithFreshQuotes — 앱 잔고 화면과 같은 평가) */
   stocks: { listWithFreshQuotes(): Promise<AccountHolding[]> };
   /** 지수 띠와 같은 목록(30초 캐시) — 새로 부르는 출처 없음 */
@@ -91,7 +94,11 @@ export interface AccountBriefingDeps {
   calendar: { status(): Promise<MarketStatus> } | null;
   generator: TextGenerator;
   prompts: PromptStore;
-  features: { enabled(key: "accountBriefing" | "accountBriefingLlm" | "accountSinceLast" | "accountExposure" | "holdingEvents" | "holdingEarnings" | "numberBasis"): Promise<boolean> };
+  features: { enabled(key: "accountBriefing" | "accountBriefingLlm" | "accountSinceLast" | "accountExposure" | "holdingEvents" | "holdingEarnings" | "numberBasis" | "holdingThemes"): Promise<boolean> };
+  /**
+   * 내 종목 테마 (3-35, 플래그 holdingThemes — services/holdingThemesService.snapshot). 스스로 최대 8초만 기다린다. 없으면(출처를 두지 않은 테스트 기본) 칸 없이 지금 그대로
+   */
+  holdingThemes?: { snapshot(held: Array<{ code: string; name: string; value: number | null }>): Promise<HoldingThemesSnapshot | null> } | null;
   /**
    * 토스 웹 상품 정보 (브리핑 3차 4 비중 한 줄의 레버리지·인버스 — 지표 점수와 같은 출처·같은 24시간 캐시, 시세를 받으며 대부분 이미 캐시에 있음).
    * 없으면 종목 마스터 분류·정적 표·이름 규칙으로만 가린다
@@ -140,13 +147,22 @@ export class AccountBriefingService {
   /** 지금 만드는 중인 한 건 (관리용 수동 실행과 종목 실행 뒤 afterRun 이 겹칠 때 기다리려고) */
   private inflight: Promise<AccountBriefing | null> | null = null;
   private readonly now: () => Date;
+  private readonly jobs: GenerationJobs;
+  private readonly generator: TextGenerator;
 
   constructor(private readonly deps: AccountBriefingDeps) {
     this.now = deps.now ?? (() => new Date());
+    this.jobs = deps.jobs ?? new GenerationJobs(deps.db, { recordNow: this.now });
+    this.generator = checkpointGenerator(deps.generator);
   }
 
   get isRunning(): boolean {
     return this.running;
+  }
+
+  /** 서버 종료 시 진행 중인 계좌 저장·체크포인트를 마치고 DB 연결을 닫는다. */
+  async shutdown(): Promise<void> {
+    while (this.inflight) await this.inflight;
   }
 
   enabled(): Promise<boolean> {
@@ -157,7 +173,7 @@ export class AccountBriefingService {
    * 종목별 브리핑 실행이 끝났을 때 (BriefingService.onRunDone). 일부 종목 실행(상세의 '이 종목 다시 만들기')은 건너뛴다.
    * 이번에 새로 만든 성공 브리핑만 돌려준다 (세션 알림 앞머리용). 오류는 알림을 막지 않게 삼킨다
    */
-  async afterRun(done: { session: AccountSession; date: string; partial: boolean; force: boolean; results?: Array<{ status: string }> }): Promise<AccountBriefing | null> {
+  async afterRun(done: { session: AccountSession; date: string; partial: boolean; force: boolean; eventId?: string; results?: Array<{ status: string }> }): Promise<AccountBriefing | null> {
     // 부른 순간 만드는 중인 것 (관리용 수동 실행 POST /api/account-briefings/run). 아래에서 끝나길 기다린다
     const pending = this.inflight;
     if (done.partial) return null;
@@ -171,7 +187,7 @@ export class AccountBriefingService {
         const prev = await pending;
         if (!done.force && prev?.status === "ok" && prev.date === done.date && prev.session === done.session) return prev;
       }
-      const b = await this.generate(done.session, { date: done.date, force: done.force });
+      const b = await this.generate(done.session, { date: done.date, force: done.force, ...(done.eventId ? { eventId: done.eventId } : {}) });
       return b?.status === "ok" ? b : null;
     } catch (e) {
       this.deps.log?.warn({ session: done.session, err: (e as Error).message }, "계좌 브리핑 생성 오류");
@@ -183,10 +199,13 @@ export class AccountBriefingService {
    * 한 건 만들기. 이미 성공한 건이 있고 force 가 아니면 null(새로 만들지 않음), 보유 종목이 없어도 null.
    * 시세가 하나도 없으면 실패로 저장한다(다음 실행에서 다시 만든다)
    */
-  async generate(session: AccountSession, opts: { date: string; force?: boolean }): Promise<AccountBriefing | null> {
+  async generate(session: AccountSession, opts: { date: string; force?: boolean; eventId?: string }): Promise<AccountBriefing | null> {
     if (this.running) throw new Error("계좌 브리핑을 이미 만드는 중입니다");
     this.running = true;
-    const p = this.build(session, opts);
+    const p = this.jobs.run<AccountBriefing | null>(`account:${opts.date}:${session}`, {
+      signature: JSON.stringify({ force: !!opts.force, eventId: opts.eventId ?? null }),
+      retryUncertain: opts.force === true, reuseCompleted: !!opts.eventId, waitForDifferent: !!opts.eventId,
+    }, (context) => this.build(session, opts, context));
     this.inflight = p.catch(() => null);
     try {
       return await p;
@@ -196,12 +215,28 @@ export class AccountBriefingService {
     }
   }
 
-  private async build(session: AccountSession, opts: { date: string; force?: boolean }): Promise<AccountBriefing | null> {
+  private async build(session: AccountSession, opts: { date: string; force?: boolean }, context: GenerationContext): Promise<AccountBriefing | null> {
     const { date } = opts;
     if (!opts.force) {
       const existing = await this.find(date, session);
       if (existing?.status === "ok") return null;
     }
+    const prepared = await context.step("inputs", () => this.prepareInputs(session, date));
+    if (!prepared) return null;
+    // 뒤에서 설명 출처를 채워도 원 입력 체크포인트 객체를 바꾸지 않는다.
+    const data = structuredClone(prepared);
+    if (data.holdings === 0) {
+      const createdAt = await context.step("createdAt", async () => seoulIso(this.now()));
+      return context.commit((db) => this.save(date, session, { status: "failed", summary: "시세를 받지 못해 계좌 브리핑을 만들지 못했습니다", detail: "", data, model: "template" }, db, createdAt));
+    }
+    const n = await context.step("narrative", () => this.narrative(data, context));
+    data.narrative = { source: n.source, reason: n.reason };
+    const createdAt = await context.step("createdAt", async () => seoulIso(this.now()));
+    return context.commit((db) => this.save(date, session, { status: "ok", summary: summaryText(data), detail: n.text, data, model: n.model }, db, createdAt));
+  }
+
+  /** 기존 병렬 조회·시간 예산·전체 계산을 유지한 입력 묶음. 모델 호출 전에 영구 보존한다. */
+  private async prepareInputs(session: AccountSession, date: string): Promise<AccountData | null> {
     const list = await this.deps.stocks.listWithFreshQuotes();
     const holdings = list.filter((s) => (s.quantity ?? 0) > 0 && s.avgPrice !== null);
     if (!holdings.length) {
@@ -213,6 +248,11 @@ export class AccountBriefingService {
     // 꺼지면 부르지 않는다(배당·캘린더·네이버 호출 0). 실패해도 계좌 브리핑은 그대로 (칸 없이)
     const eventsP = this.upcoming(holdings, date, now).catch((e: unknown) => {
       this.deps.log?.warn({ session, date, err: (e as Error).message }, "다가오는 일정을 받지 못해 칸 없이 저장");
+      return null;
+    });
+    // 3-35 (플래그 holdingThemes): 내 종목 테마도 시세와 따로 먼저 부르고 아래에서 기다린다 (스스로 최대 8초). 꺼지면 부르지 않는다
+    const themesP = this.themes(holdings).catch((e: unknown) => {
+      this.deps.log?.warn({ session, date, err: (e as Error).message }, "내 종목 테마를 받지 못해 칸 없이 저장");
       return null;
     });
     const [indexList, status, disclosures] = await Promise.all([
@@ -241,7 +281,11 @@ export class AccountBriefingService {
     if (data.usPreviousDay) data.usHolidayDate = usSkippedSession(now)!;
     if (data.holdings === 0) {
       data.narrative.reason = "시세를 받지 못함";
-      return await this.save(date, session, { status: "failed", summary: "시세를 받지 못해 계좌 브리핑을 만들지 못했습니다", detail: "", data, model: "template" });
+      // 실패로 판정한 빈 자료를 복구용 입력으로 남기면 이후 시세가 회복되어도 재생성이 계속 실패한다.
+      if ((await this.find(date, session))?.status === "ok") {
+        throw new AppError(503, "ACCOUNT_DATA_UNAVAILABLE", "시세를 받지 못해 다시 만들지 못했습니다. 이전 계좌 브리핑은 그대로 둡니다.");
+      }
+      return data;
     }
     // 브리핑 3차 3 (플래그 accountSinceLast): 종목별 값을 저장하고 지난 같은 세션 브리핑과 비교해 둔다. 꺼지면 칸도 조회도 없다
     if (await this.deps.features.enabled("accountSinceLast").catch(() => false)) {
@@ -273,28 +317,31 @@ export class AccountBriefingService {
       });
       data.events = { ...events, week };
     }
-    const n = await this.narrative(data);
-    data.narrative = { source: n.source, reason: n.reason };
-    return await this.save(date, session, { status: "ok", summary: summaryText(data), detail: n.text, data, model: n.model });
+    const themes = await themesP;
+    if (themes) data.holdingThemes = themes;
+    return data;
   }
 
   /** 모델 설명. 모델이 없거나 실패·시간 초과·검사 불합격이면 기본 문장 */
-  private async narrative(data: AccountData): Promise<{ text: string; model: string; source: "llm" | "template"; reason: string | null }> {
+  private async narrative(data: AccountData, context: GenerationContext): Promise<{ text: string; model: string; source: "llm" | "template"; reason: string | null }> {
     const template = (reason: string) => ({ text: templateNarrative(data), model: "template", source: "template" as const, reason });
-    const gen = this.deps.generator;
+    const gen = this.generator;
     // 모델 설명은 플래그 accountBriefingLlm 을 켰을 때만 (기본 꺼짐 — 숫자는 늘 코드가 쓴다)
-    if (!(await this.deps.features.enabled("accountBriefingLlm").catch(() => false))) return template("모델 설명 꺼짐");
+    if (!(await context.step("llmEnabled", () => this.deps.features.enabled("accountBriefingLlm").catch(() => false)))) return template("모델 설명 꺼짐");
     if (gen.model === "disabled") return template("브리핑 모델이 설정되지 않음");
     const facts = factsText(data);
     try {
-      const p = await this.deps.prompts.load("account_briefing");
-      const call = gen.generate({
-        system: p.system,
-        user: renderTemplate(p.userTemplate, { date: data.date, session_label: `${sessionKo(data.session)} 브리핑`, facts }),
-        maxTokens: 1024,
-        effort: "low",
-        label: "account_briefing",
+      const request = await context.step("modelRequest", async () => {
+        const p = await this.deps.prompts.load("account_briefing");
+        return {
+          system: p.system,
+          user: renderTemplate(p.userTemplate, { date: data.date, session_label: `${sessionKo(data.session)} 브리핑`, facts }),
+          maxTokens: 1024,
+          effort: "low" as const,
+          label: "account_briefing",
+        };
       });
+      const call = gen.generate(request);
       const out = await settleWithin(call, LLM_WAIT_MS);
       if (out.kind === "timeout") return template(`모델 응답 시간 초과(${LLM_WAIT_MS / 1000}초)`);
       if (out.kind === "error") throw out.error;
@@ -307,6 +354,7 @@ export class AccountBriefingService {
       }
       return { text, model: r.model, source: "llm", reason: null };
     } catch (e) {
+      if (e instanceof AppError && e.code.startsWith("GENERATION_")) throw e;
       const msg = e instanceof GenerationError ? `${e.kind}: ${e.message}` : (e as Error).message;
       this.deps.log?.warn({ err: msg }, "계좌 브리핑 모델 호출 실패 — 기본 문장으로");
       return template(`모델 호출 실패 (${msg})`);
@@ -356,6 +404,18 @@ export class AccountBriefingService {
       earnings,
       ...(this.deps.eventsBudgetMs !== undefined ? { budgetMs: this.deps.eventsBudgetMs } : {}),
     });
+  }
+
+  /**
+   * 내 종목 테마 (3-35): 플래그 holdingThemes 가 켜져 있고 서비스가 있을 때만. 보유 종목과 원화 평가(비중 한 줄과 같은 positionsOf) — 그때 값 그대로 저장.
+   * 서비스가 스스로 최대 8초만 기다리고 넘으면 null (칸 없이)
+   */
+  private async themes(holdings: AccountHolding[]): Promise<HoldingThemesSnapshot | null> {
+    const src = this.deps.holdingThemes;
+    if (!src || !(await this.deps.features.enabled("holdingThemes").catch(() => false))) return null;
+    const snap = await src.snapshot(positionsOf(holdings, { afterCost: true }).map((p) => ({ code: p.code, name: p.name, value: p.value })));
+    if (!snap) this.deps.log?.warn({}, "내 종목 테마가 제한 시간 안에 오지 않아 칸 없이 저장");
+    return snap;
   }
 
   /**
@@ -430,22 +490,32 @@ export class AccountBriefingService {
     date: string,
     session: AccountSession,
     v: { status: "ok" | "failed"; summary: string; detail: string; data: AccountData; model: string },
+    db: Db,
+    createdAt: string,
   ): Promise<AccountBriefing> {
-    const values = { briefing_date: date, session, status: v.status, summary: v.summary, detail: v.detail, data: JSON.stringify(v.data), model: v.model, created_at: seoulIso(this.now()) };
-    await this.deps.db
+    const values = { briefing_date: date, session, status: v.status, summary: v.summary, detail: v.detail, data: JSON.stringify(v.data), model: v.model, created_at: createdAt };
+    await db
       .insertInto("account_briefings")
       .values(values)
-      .onConflict((oc) => oc.columns(["briefing_date", "session"]).doUpdateSet(values))
+      .onConflict((oc) => {
+        const update = oc.columns(["briefing_date", "session"]).doUpdateSet(values);
+        // 다시 만들기 실패가 같은 회차의 성공 본문을 지우지 않게 한다.
+        return v.status === "ok" ? update : update.where("account_briefings.status", "<>", "ok");
+      })
       .execute();
-    const saved = await this.find(date, session);
+    const saved = await this.find(date, session, db);
+    // 남겨 둔 이전 본문을 이번에 새로 만든 성공으로 알리거나 알림에 넣지 않는다.
+    if (v.status === "failed" && saved?.status === "ok") {
+      throw new AppError(503, "ACCOUNT_DATA_UNAVAILABLE", "시세를 받지 못해 다시 만들지 못했습니다. 이전 계좌 브리핑은 그대로 둡니다.");
+    }
     this.deps.log?.info({ date, session, status: v.status, model: v.model }, "계좌 브리핑 저장");
     return saved!;
   }
 
   // ── 조회 ──────────────────────────────────────────────────────
 
-  async find(date: string, session: AccountSession): Promise<AccountBriefing | null> {
-    const r = await this.deps.db.selectFrom("account_briefings").selectAll().where("briefing_date", "=", date).where("session", "=", session).executeTakeFirst();
+  async find(date: string, session: AccountSession, db = this.deps.db): Promise<AccountBriefing | null> {
+    const r = await db.selectFrom("account_briefings").selectAll().where("briefing_date", "=", date).where("session", "=", session).executeTakeFirst();
     return r ? toBriefing(r) : null;
   }
 

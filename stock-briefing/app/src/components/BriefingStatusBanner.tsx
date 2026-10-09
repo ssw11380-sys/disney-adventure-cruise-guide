@@ -1,9 +1,10 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import React, { useEffect } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { useBriefingStatus } from "@/api/hooks";
+import { useBriefingStatus, useFeature } from "@/api/hooks";
 import type { BriefingStatusProblem } from "@/api/types";
-import { problemSpeech, statusView, type StatusView } from "@/lib/briefingStatus";
+import { problemSpeech, progressView, statusView, type StatusView } from "@/lib/briefingStatus";
+import { gated } from "@/lib/features";
 import { useNow } from "@/lib/useNow";
 import { font, slopFor, space, touch, useTheme } from "@/theme";
 import { Card } from "./ui";
@@ -11,6 +12,7 @@ import { Card } from "./ui";
 /**
  * 브리핑 탭의 안내 자리 (플래그 briefingStatus 가 켜졌을 때만 탭이 그린다 — 꺼지면 탭이 예전 안내를 그대로 둔다).
  * 서버 상태를 받으면 새 안내(문제가 없으면 아무것도 안 보임), 받는 중이면 비움, 못 받으면(404·연결 오류) 예전 안내(fallback).
+ * briefingLiveProgress 가 켜지면 현재 실행을 시작부터 표시한다. 지연은 경고하고, 갱신 실패 시 캐시는 마지막 확인 상태로 구분한다.
  * refetchRef: 탭의 당겨서 새로고침이 이 상태도 다시 받게 (탭이 훅을 부르지 않아도 되게)
  */
 export function BriefingStatusSlot({
@@ -27,7 +29,8 @@ export function BriefingStatusSlot({
   /** 브리핑이 하나도 없어 빈 화면의 '지금 만들기'가 수동 생성을 맡는다 (emptyGuide) — 안내가 그 버튼을 가리킨다 */
   nowButton?: boolean;
 }) {
-  const q = useBriefingStatus(true);
+  const liveProgress = useFeature("briefingLiveProgress", false);
+  const q = useBriefingStatus(true, liveProgress);
   // '다음 브리핑(16:00)'·'내일 08:30' 을 고르는 시각 (1분마다)
   const now = useNow(60_000);
   const { refetch } = q;
@@ -39,7 +42,9 @@ export function BriefingStatusSlot({
     };
   }, [refetchRef, refetch]);
   if (q.data === null || (q.data === undefined && q.isError)) return <>{fallback}</>;
-  const view = statusView(q.data, now, { nowButton });
+  const activeRun = gated(liveProgress, q.data?.activeRun);
+  const slow = q.data?.state === "slow" && q.data.session === activeRun?.session && q.data.date === activeRun?.date;
+  const view = progressView(activeRun, now, { slow, unconfirmed: q.isError, lastCheckedAt: q.dataUpdatedAt }) ?? statusView(q.data, now, { nowButton });
   return view ? <BriefingStatusBanner view={view} onOpen={onOpen} role={role} /> : null;
 }
 
@@ -53,7 +58,7 @@ export function BriefingStatusSlot({
  */
 export function BriefingStatusBanner({ view, onOpen, role = "link" }: { view: StatusView; onOpen: (p: BriefingStatusProblem) => void; role?: "link" | "button" }) {
   const t = useTheme();
-  const bar = view.tone === "danger" ? t.danger : t.warn;
+  const bar = view.tone === "progress" ? t.accent : view.tone === "danger" ? t.danger : t.warn;
   return (
     <Card style={{ borderLeftWidth: 3, borderLeftColor: bar }}>
       <View style={styles.row}>

@@ -24,7 +24,7 @@ export interface NotificationRouteDeps {
   /** 앱이 로컬 알림(백그라운드 확인)도 같은 규칙으로 묶게 briefingDigest·accountBriefing 상태를 같이 준다 */
   features?: { enabled(key: "briefingDigest" | "accountBriefing"): Promise<boolean> };
   /** 브리핑 실행 중인지 (앱 백그라운드 알림이 실행 도중엔 알리지 않고 기다리게) */
-  isRunning?: () => boolean;
+  isRunning?: () => boolean | Promise<boolean>;
 }
 
 export const deviceRoutes: FastifyPluginAsync<NotificationRouteDeps> = async (app, { devices }) => {
@@ -46,7 +46,7 @@ export const notificationRoutes: FastifyPluginAsync<NotificationRouteDeps> = asy
     digest: features ? await features.enabled("briefingDigest") : true,
     // 3-31: 앱 백그라운드 알림도 세션 알림 앞머리를 계좌 요약으로 (예전 앱은 모르는 칸이라 무시)
     accountBriefing: features ? await features.enabled("accountBriefing") : false,
-    running: isRunning?.() ?? scheduler?.status().running ?? false,
+    running: await isRunning?.() ?? scheduler?.status().running ?? false,
     schedule: scheduler?.status() ?? null,
   });
   /** 알림/브리핑 시간 설정 (+ digest: 세션당 1건으로 묶는지, running: 브리핑·계좌 브리핑 만드는 중, 3-19 · accountBriefing: 3-31) */

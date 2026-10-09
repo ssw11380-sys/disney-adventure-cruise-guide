@@ -42,6 +42,8 @@ describe("briefing pipeline", () => {
     await app.inject({ method: "POST", url: "/api/stocks", payload: { code: "005930" } });
     // 브리핑 2차 6: 이 describe 는 예전 프롬프트·3줄 요약(플래그 briefingSafeWording 끔)의 증거다 — 켠 동작은 briefingSafe.test.ts
     await app.inject({ method: "PUT", url: "/api/admin/features", payload: { briefingSafeWording: false } });
+    // 속도 개선 전 순차 호출 순서를 그대로 검증한다. 동시 실행은 briefingConcurrency.test.ts에서 확인한다.
+    await app.inject({ method: "PUT", url: "/api/admin/features", payload: { briefingParallel: false } });
   });
 
   afterEach(async () => {

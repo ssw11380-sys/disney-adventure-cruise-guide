@@ -402,6 +402,36 @@ describe("HoldingEventsService.collect", () => {
     expect(svc.health()).toEqual({ lastOk: null, warning: "실적 발표일(토스 캘린더)을 받지 못함 ([toss] 캘린더 응답 모양이 바뀌었습니다)" });
   });
 
+  it("시간 제한 타이머가 벽시계보다 1ms 먼저 울려도 다음 출처 조회를 시작하지 않는다", async () => {
+    vi.useFakeTimers();
+    const start = Date.parse("2026-09-28T08:38:00+09:00");
+    vi.setSystemTime(start);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    try {
+      const { sources, calls } = fakeSources({ dividends: async (code) => { await gate; return DIV[code] ?? []; }, calendar: () => new Promise<TossCalendarEarning[]>(() => undefined) });
+      const svc = new HoldingEventsService({ sources, ...at("2026-09-28T08:38:00+09:00") });
+      const collecting = svc.collect({ holdings: [H("O", "리얼티인컴"), H("005930", "삼성전자"), H("MSFT", "마이크로소프트")], today: "2026-09-28", asOf: "2026-09-28T08:38:00+09:00", earnings: true, budgetMs: 60 });
+      await vi.advanceTimersByTimeAsync(0);
+      // OS 타이머와 Date.now 경계가 어긋나는 경우를 반복 실행에 의존하지 않고 고정한다.
+      clock.mockReturnValue(start + 59);
+      await vi.advanceTimersByTimeAsync(60);
+      const result = await collecting;
+      expect(calls.dividends).toEqual(["O", "005930"]);
+      expect(calls.naver).toEqual([]);
+      expect(result.items).toEqual([]);
+      expect(result.failed.map((holding) => holding.code)).toEqual(["O", "005930", "MSFT"]);
+      expect(result.earningsFailed).toBe(true);
+      release();
+      await vi.advanceTimersByTimeAsync(0);
+    } finally {
+      release();
+      clock.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("시간 제한: 출처가 멈춰도 budget 안에 돌아오고(받지 못한 것은 failed), 나가 있는 요청은 뒤에서 끝나면 다음 번에 캐시로 쓴다", async () => {
     let release: (() => void) | null = null;
     const gate = new Promise<void>((res) => (release = res));

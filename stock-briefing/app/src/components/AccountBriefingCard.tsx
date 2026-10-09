@@ -17,7 +17,7 @@ import { Badge, Card, Muted } from "./ui";
 
 /**
  * 브리핑 탭 맨 위 '내 계좌 브리핑' 카드 (3-31): 가장 최근 계좌 브리핑의 당일 손익·총 평가금액·기여 1위.
- * 누르면 계좌 브리핑 화면. 숫자는 서버가 계산한 값 그대로 (앱 잔고 화면과 같은 기준).
+ * 누르면 계좌 브리핑 화면. 숫자는 서버가 계산한 값 그대로 (작성 당시 종목 시세 기준 추정).
  * trim(브리핑 2차 4, 플래그 briefingTrim — 탭에서 읽어 넘김): 한국 휴장 줄에 브리핑 날짜('9/25(금) 한국 휴장 · …'), 끝줄 '숫자로 만든 요약 · …'
  * contributors(브리핑 2차 3, 플래그 moversMerge — 탭이 '합치기 가능'일 때만 넘김): '기여 1위 …' 줄 대신 기여 상위 묶음(ContributorsBlock)
  * timeMark(3-32, 플래그 numberBasis — 탭이 읽어 넘김): '당일 손익' 이름 뒤 ' · 08:38 기준' (실패·기여 상위 묶음이 있으면 더하지 않음 — 묶음 머리에 이미 시각)
@@ -58,6 +58,7 @@ export function AccountBriefingCard({
         {...(selected ? { accessibilityState: { selected: true } } : {})}
         accessibilityRole="link"
         accessibilityLabel={accountCardSpeech(briefing, { ...(block ? { trim, contributors: true } : hhmm ? { trim, time: true } : { trim }), ...(since ? { since: true } : {}), ...(week ? { week: true } : {}) })}
+        accessibilityHint={failed ? undefined : "작성 당시 종목 시세 기준 추정입니다. 현재 토스 계좌 금액과 다를 수 있습니다."}
         style={styles.press}
       >
         <View style={styles.head}>
@@ -75,6 +76,7 @@ export function AccountBriefingCard({
           </View>
         ) : (
           <>
+            <Muted style={{ fontSize: font.tiny }}>작성 당시 종목 시세 기준 추정</Muted>
             <View style={styles.nums}>
               <View style={styles.col}>
                 <Muted>{hhmm ? `당일 손익 · ${hhmm} 기준` : "당일 손익"}</Muted>
@@ -172,6 +174,7 @@ export function AccountBriefingRow({
       onPress={onPress}
       accessibilityRole={role}
       accessibilityLabel={accountCardSpeech(briefing, speechOpts)}
+      accessibilityHint={failed ? undefined : "작성 당시 종목 시세 기준 추정입니다. 현재 토스 계좌 금액과 다를 수 있습니다."}
       // 카드 격자(link)에서도 고른 줄이면 '선택됨'을 알린다 (같은 격자의 카드·폰 카드와 같게)
       accessibilityState={role === "button" ? { selected } : selected ? { selected: true } : undefined}
       style={({ pressed }) => [styles.row, { borderBottomColor: t.line, backgroundColor: selected || pressed ? t.surfaceAlt : t.surface }]}
@@ -226,6 +229,7 @@ export function AccountBriefingRow({
           ) : null}
         </View>
       )}
+      {!failed ? <Text style={{ color: t.muted, fontSize: font.tiny }} maxFontSizeMultiplier={fontCap.row}>작성 당시 종목 시세 기준 추정</Text> : null}
       {block && !failed ? <ContributorsBlock briefing={briefing} /> : null}
       {/* 기여 묶음 뒤, 휴장 줄 앞 (당일 손익 묶음을 가르지 않게) */}
       {since && !failed ? <SinceLineText briefing={briefing} cap={fontCap.row} /> : null}

@@ -499,6 +499,24 @@ describe("상세 화면 /briefings/market/<id>", () => {
     expect(live).not.toContain("16:30 마감");
   });
 
+  it.each(["intraday", "prelim", "final"].flatMap((phase) => [false, true].map((compact) => ({ phase, compact }))))(
+    "주요 지수 표 $phase · 좁은 표 $compact: 장중 값을 확정 종가로 이름 붙이지 않는다",
+    ({ phase, compact }) => {
+      h.flags = { marketSummary: true, foldLayout: compact };
+      if (compact) h.win = { width: 704, height: 933, scale: 2.625, fontScale: 1 };
+      const data = { ...shared.cases[1]!.data, phase: phase as MarketSummaryData["phase"] };
+      h.detail = item(7, data);
+      const r = render(<MarketSummaryScreen />);
+      const label = phase === "intraday" ? "장중 값" : "종가";
+      expect(headsOf(r).find((head) => head[0] === "지수")).toEqual(compact
+        ? ["지수", `${label} · 전일 대비`, "등락률"]
+        : ["지수", label, "전일 대비", "등락률"]);
+      // 표 이름을 바꾸더라도 실제 지수 숫자와 자료 시각 안내는 그대로다.
+      expect(texts(r)).toContain("7,080.92");
+      if (phase === "intraday") expect(texts(r).some((text) => text.includes("장중 값 (마감 전)"))).toBe(true);
+    },
+  );
+
   it("보유 종목 표 아래 안내: 시세 없음은 까닭을 단정하지 않고('조회 실패 등'), 금현물 같은 원자재 ETF 는 '해외 지수·원자재 ETF'", () => {
     h.flags = { marketSummary: true };
     const d = shared.cases[0]!.data;

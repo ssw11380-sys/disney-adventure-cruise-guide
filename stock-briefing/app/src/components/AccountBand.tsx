@@ -3,7 +3,7 @@ import { StyleSheet, Text, View } from "react-native";
 import type { Currency } from "@/api/types";
 import { Button } from "@/components/ui";
 import { sentence, speakAmount, speakProfit, speakRate } from "@/lib/a11y";
-import { bandBasisFit } from "@/lib/basisFit";
+import { bandActionWidth, bandBasisFit } from "@/lib/basisFit";
 import { formatPct, formatPrice, formatQuote, shownSign } from "@/lib/format";
 import type { Bucket as Totals } from "@/lib/portfolio";
 import { changeColor, font, fontCap, layout, space, useFontScale, useTheme } from "@/theme";
@@ -105,12 +105,16 @@ export function fxNote(d: AccountData): string | null {
  *  끄고도 칸이 다음 줄로 넘어가는 띠는 켜도 그대로 줄바꿈 (글자를 줄이지 않는다 — 3-39 규칙).
  *  좁은 한 줄 띠(rates 거짓)는 늘 점만. width 는 띠 폭(표 폭) — 배치를 어림하는 데만 쓴다
  */
+/** 이 글자 배율부터 비중·테마 두 버튼을 위아래로 쌓는다 (줄바꿈 띠 — 704×933·200% 에서 '매입금액' 칸이 셋째 줄로 밀리지 않게) */
+export const STACK_ACTIONS_SCALE = 1.3;
+
 export function AccountBand({
   data,
   oneLine,
   rates = true,
   pad,
   onAllocation,
+  onThemes,
   dense = false,
   basis,
   width,
@@ -120,6 +124,8 @@ export function AccountBand({
   rates?: boolean;
   pad: number;
   onAllocation?: () => void;
+  /** 내 종목 테마 화면 열기 (3-35, 플래그 holdingThemes). 없으면 지금 나무 그대로 */
+  onThemes?: () => void;
   dense?: boolean;
   /** 숫자 기준 점 그리기 (dotOnly: 글 없이 점만) */
   basis?: (dotOnly: boolean) => React.ReactNode;
@@ -155,13 +161,18 @@ export function AccountBand({
       : null;
   // 숫자 기준 점 배치 (3-32 '큰 글씨면 점만'): 점과 같은 줄의 칸 글(두 줄 띠는 둘째 줄, 촘촘은 첫 줄)로 어림한다.
   // 한 줄 띠는 칸이 다음 줄로 넘어가지 않고 글자가 줄어드는 띠라 지금처럼 rates 로만 (좁은 한 줄 띠는 점만)
+  // 3-35 비중·테마 두 버튼: 큰 글씨(130% 이상)의 줄바꿈 띠는 위아래로 쌓는다 — 옆으로 두면 칸 자리가 버튼 하나만큼 줄어 '매입금액'이 셋째 줄로 밀린다.
+  // 옆으로 둘 때는 둘째 버튼 폭만큼 좁은 띠로 어림한다 (테마 버튼이 없으면 지금 그대로)
+  const twoActions = !!onThemes && !!onAllocation;
+  const stackActions = twoActions && !oneLine && fontScale >= STACK_ACTIONS_SCALE;
+  const extraActionW = twoActions && !stackActions ? bandActionWidth(fontScale) - space.sm + space.md : 0;
   const fit =
     basis && !oneLine
       ? bandBasisFit({
-          width: width ?? 0,
+          width: (width ?? 0) - extraActionW,
           pad,
           fontScale,
-          action: !!onAllocation,
+          action: !!onAllocation || !!onThemes,
           cells: dense
             ? [
                 { label: totalLabel, value: totalValue, unit: "원", big: true, first: true },
@@ -179,7 +190,13 @@ export function AccountBand({
   // 끄고도 다음 줄로 넘어가는 칸(큰 글씨·좁은 폭·큰 금액)은 그대로 줄바꿈. 점이 없으면 지금 그대로
   const wrap = fit?.noWrap ? null : styles.wrap;
   const label = accountSpeech(data);
-  const button = onAllocation ? (
+  const button = onThemes ? (
+    // 3-35: 비중 오른쪽에 테마 (버튼 사이 12), 큰 글씨의 줄바꿈 띠는 위아래 (사이 12)
+    <View style={[styles.action, stackActions ? styles.actionsStack : styles.actions]}>
+      {onAllocation ? <Button title="비중" icon="pie-chart-outline" variant="secondary" compact accessibilityLabel="비중 보기" onPress={onAllocation} /> : null}
+      <Button title="테마" icon="pricetags-outline" variant="secondary" compact accessibilityLabel="내 종목 테마 보기" onPress={onThemes} />
+    </View>
+  ) : onAllocation ? (
     <View style={styles.action}>
       <Button title="비중" icon="pie-chart-outline" variant="secondary" compact accessibilityLabel="비중 보기" onPress={onAllocation} />
     </View>
@@ -285,5 +302,8 @@ const styles = StyleSheet.create({
   cell: { flexGrow: 1, flexShrink: 1, flexBasis: "auto", justifyContent: "center", gap: space.xxs, paddingVertical: space.xs, paddingRight: space.sm },
   value: { fontVariant: ["tabular-nums"] },
   action: { paddingLeft: space.sm },
+  // 3-35 비중·테마 두 버튼 (누르는 칸 44 가 겹치지 않게 사이 12)
+  actions: { flexDirection: "row", columnGap: space.md },
+  actionsStack: { flexDirection: "column", rowGap: space.md, alignItems: "stretch" },
   notes: { paddingBottom: space.s, gap: space.xxs },
 });

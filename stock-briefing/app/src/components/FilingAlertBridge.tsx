@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { AppState } from "react-native";
 import { useApi, useFeature } from "@/api/hooks";
+import { useAccountView } from "@/lib/account";
 import { isLocalModeEnabled } from "@/lib/backgroundBriefings";
 import { notifyFilings } from "@/lib/filingNotify";
 import { ensureFilingChannel } from "@/lib/notifications";
@@ -22,14 +23,16 @@ export function forgetFilingForeground(): void {
 /**
  * 앱이 앞에 있을 때의 새 공시 확인 (3-38, 플래그 filingAlerts): 앱이 앞으로 올 때와 앞에 있는 동안 5분마다 /api/filings/alerts → 알림 규칙
  * (lib/filingNotify — 백그라운드 확인과 같은 기록·잠금이라 두 번 울리지 않는다). '브리핑 알림' 로컬 모드일 때만 (서버 푸시 기기는 서버가 보낼 몫).
- * 권한이 없으면 알림 규칙이 아무것도 적지 않는다. 플래그가 꺼져 있거나 모르면 아무 요청도 하지 않는다
+ * 권한이 없으면 알림 규칙이 아무것도 적지 않는다. 플래그가 꺼져 있거나 모르면 아무 요청도 하지 않는다.
+ * 주인 아닌 계정(계정 A단계)은 주인의 보유 종목 공시를 묻지 않는다 (가격 사건 알림 MovementAlertBridge 와 같은 규칙)
  */
 export function FilingAlertBridge() {
   const on = useFeature("filingAlerts", false);
   const { ready } = useSettings();
   const api = useApi();
+  const { member } = useAccountView();
   useEffect(() => {
-    if (!on || !ready) return;
+    if (!on || !ready || member) return;
     let alive = true;
     const run = async () => {
       const now = Date.now();
@@ -57,6 +60,6 @@ export function FilingAlertBridge() {
       clearInterval(timer);
       sub.remove();
     };
-  }, [on, ready, api]);
+  }, [on, ready, member, api]);
   return null;
 }

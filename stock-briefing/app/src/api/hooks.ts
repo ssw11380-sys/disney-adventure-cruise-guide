@@ -3,6 +3,7 @@ import { featureOn } from "@/lib/features";
 import { focusManager, keepPreviousData, queryOptions, useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type Query } from "@tanstack/react-query";
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { markRunSeen } from "@/lib/briefingSeen";
+import { analysisBusy, analysisRecoveryFor, invalidateAnalysisRecoveryScope } from "@/lib/analysisRecovery";
 import { isTradingHoursKst } from "@/lib/format";
 import { candleRefresh, pollInterval, refetchDue, streamFresh } from "@/lib/freshness";
 import { capToBoundary, marketBoundary, marketChip, nextBoundary, quotesOf, sessionOpen } from "@/lib/liveDot";
@@ -12,13 +13,17 @@ import { RECONCILE_OFF, RECONCILE_POLL_MS } from "@/lib/numberBasis";
 import { saverInterval, unchangedStreak } from "@/lib/pollSaver";
 import { checkRankPage, nextRankPage, restartRankPages, type RankPageParam } from "@/lib/rankPages";
 import { loadedCredentials, useSettings } from "@/lib/settings";
+import { loginRequiredFor, personalBlocked, sessionFor, sessionIdentityVersion, sessionVersion, subscribeSession } from "@/lib/session";
+import { TOSS_SNAPSHOT_OFF, TOSS_SNAPSHOT_POLL_MS } from "@/lib/tossAccountSnapshot";
 import { ApiRequestError, createApi, type Api } from "./client";
 import { SCORE_WAIT_REFETCH_MS, valueWaiting } from "@/lib/scoreView";
-import type { AnalysisKind, BriefingSession, CandlePeriod, DiscoverMarket, DiscoverRank, FeatureFlags, NotificationSettings, NotificationSettingsPatch, RankCategory, ThemeKind, ThemePeriod } from "./types";
+import { holdingThemesEvery } from "@/lib/holdingThemes";
+import type { Analysis, AnalysisKind, BriefingSession, CandlePeriod, DiscoverMarket, DiscoverRank, FeatureFlags, NotificationSettings, NotificationSettingsPatch, RankCategory, ThemeKind, ThemePeriod } from "./types";
 
 export function useApi(): Api {
   const { apiUrl, apiToken, ready } = useSettings();
   const qc = useQueryClient();
+  useEffect(() => invalidateAnalysisRecoveryScope(qc, apiUrl, apiToken), [qc, apiUrl, apiToken]);
   // 끊겼을 때 데이터 절약(pollSaver): 요청할 때마다 마지막으로 받은 플래그를 본다 (받기 전·예전 서버면 꺼짐 → 예전 요청 그대로)
   return useMemo(
     () => (ready ? createApi(apiUrl, apiToken, { saver: () => featureOn(qc.getQueryData<FeatureFlags>([apiUrl, "features"]), "pollSaver", false) }) : deferredApi()),
@@ -173,9 +178,31 @@ export function useStock(code: string) {
 /**
  * 기능 플래그: 30초마다, 앱으로 돌아올 때마다 다시 받는다 (관리 API 로 바꾸면 1분 안에 반영). 마지막 값은 기기에 저장해 켤 때 바로 쓴다
  */
+/**
+ * 서버 기능 플래그. opts.fresh: 이 화면이 처음 그려질 때 기기 저장 캐시(최대 30초 안 된 값)를 믿지 않고 한 번 새로 받는다 —
+ * 로그인 관문(lib/authGate)이 앱을 켤 때마다 서버의 지금 계정 모드를 보게 (예전 서버로 바꾼 뒤 옛 'accounts 켬'으로 로그인 화면이 남지 않게).
+ * 다른 화면은 그대로 (화면을 열 때마다 요청하지 않게)
+ */
 export function useFeatures() {
   const api = useApi();
-  return useQuery({ queryKey: useKey("features"), queryFn: api.features, staleTime: 30_000, refetchInterval: 30_000, refetchIntervalInBackground: false, refetchOnWindowFocus: true, retry: 0 });
+  const { apiUrl } = useSettings();
+  return useQuery(featuresQuery(api, apiUrl));
+}
+
+/**
+ * useFeatures 의 쿼리 옵션 (테스트·로그인 관문이 같은 옵션을 쓴다). 30초마다 묻되, 로그인 화면이 떠 있는 동안(계정 모드 · 이 서버 세션 없음)은 묻지 않는다
+ * (검증 4차 — 앱으로 돌아올 때 한 번은 묻는다. 로그인하면 캐시를 비우고 다시 받으며 30초 묻기가 다시 걸린다)
+ */
+export function featuresQuery(api: Pick<Api, "features">, apiUrl: string) {
+  return queryOptions({
+    queryKey: [apiUrl, "features"],
+    queryFn: api.features,
+    staleTime: 30_000,
+    refetchInterval: () => (loginRequiredFor(apiUrl) ? false : 30_000),
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
+    retry: 0,
+  });
 }
 
 /**
@@ -231,6 +258,7 @@ export function useTossImport() {
       void qc.invalidateQueries({ queryKey: [apiUrl, "stocks"] });
       void qc.invalidateQueries({ queryKey: [apiUrl, "briefings"] });
       void qc.invalidateQueries({ queryKey: [apiUrl, "tossStatus"] });
+      void qc.invalidateQueries({ queryKey: [apiUrl, "tossAccountSnapshot"] });
     },
   });
 }
@@ -257,7 +285,69 @@ export function useSearch(q: string) {
     staleTime: 5 * 60_000,
     placeholderData: keepPreviousData,
   });
-  return pickSearch(query, full, local);
+  return {
+    ...pickSearch(query, full, local),
+    isFetching: full.isFetching || local.isFetching,
+    // 오류 뒤 사용자가 요청할 때만 두 기존 조회를 다시 보낸다. 연타 중 진행 중인 요청은 취소·중복 생성하지 않는다.
+    refetch: () => query.length ? Promise.all([full.refetch({ cancelRefetch: false }), local.refetch({ cancelRefetch: false })]) : Promise.resolve([]),
+  };
+}
+
+/** 캐시는 메모리에만 두고 서버·계정·인증 변경을 구분한다. API 토큰은 키에 넣지 않는다. */
+export function tossAccountSnapshotQuery(api: Pick<Api, "tossAccountSnapshot">, apiUrl: string, scope: string, focused = true) {
+  return queryOptions({
+    subscribed: focused,
+    enabled: !personalBlocked(apiUrl),
+    queryKey: [apiUrl, "tossAccountSnapshot", scope],
+    queryFn: async () => {
+      if (personalBlocked(apiUrl)) return TOSS_SNAPSHOT_OFF;
+      try { return await api.tossAccountSnapshot(); }
+      catch (e) {
+        if (e instanceof ApiRequestError && e.status === 404) return TOSS_SNAPSHOT_OFF;
+        throw e;
+      }
+    },
+    staleTime: TOSS_SNAPSHOT_POLL_MS,
+    refetchInterval: TOSS_SNAPSHOT_POLL_MS,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
+    retry: 0,
+  });
+}
+
+let tossCredentialSequence = 0;
+const tossCredentialScopes = new WeakMap<object, { apiUrl: string; apiToken: string; id: number }>();
+/** 같은 인증으로 화면을 다시 열면 캐시를 재사용한다. 인증값은 메모리 비교에만 쓴다. */
+export function tossSnapshotCredentialScope(client: object, apiUrl: string, apiToken: string): number {
+  const previous = tossCredentialScopes.get(client);
+  if (previous?.apiUrl === apiUrl && previous.apiToken === apiToken) return previous.id;
+  const next = { apiUrl, apiToken, id: ++tossCredentialSequence };
+  tossCredentialScopes.set(client, next);
+  return next.id;
+}
+/** 화면과 위젯 관찰자가 같은 서버·세션·인증 영역만 구독한다. */
+function useTossAccountSnapshotOptions() {
+  const api = useApi();
+  const qc = useQueryClient();
+  const { apiUrl, apiToken } = useSettings();
+  useSyncExternalStore(subscribeSession, sessionVersion, sessionVersion);
+  const credentialScope = tossSnapshotCredentialScope(qc, apiUrl, apiToken);
+  const scope = `${sessionFor(apiUrl)?.user.id ?? "legacy"}:${sessionIdentityVersion()}:${credentialScope}`;
+  return tossAccountSnapshotQuery(api, apiUrl, scope);
+}
+
+/** 켜진 주인 화면에서만 호출한다. 종목 조회·보고서 생성과 독립된 서버 저장 기록 조회다. */
+export function useTossAccountSnapshot() {
+  return useQuery({ ...useTossAccountSnapshotOptions(), subscribed: useScreenFocused() });
+}
+
+/** 앱 맨 위 위젯 연결은 화면이 받은 캐시만 관찰한다. 추가 조회·폴링·무효화 재요청 없음. */
+export function tossAccountSnapshotCacheQuery(o: ReturnType<typeof tossAccountSnapshotQuery>) {
+  return { ...o, enabled: false as const, subscribed: true, refetchInterval: false as const,
+    refetchOnMount: false as const, refetchOnWindowFocus: false as const, refetchOnReconnect: false as const };
+}
+export function useTossAccountSnapshotCache() {
+  return useQuery(tossAccountSnapshotCacheQuery(useTossAccountSnapshotOptions()));
 }
 
 /**
@@ -457,6 +547,23 @@ export function useAnalysis(code: string, kind: AnalysisKind, enabled = true) {
   });
 }
 
+/** 새 대기 화면 전용. 본문 캐시와 진행 상태를 분리해 갱신 중에도 본문을 유지한다. */
+export function useAnalysisRecovery(code: string, kind: AnalysisKind, requested: boolean) {
+  const api = useApi();
+  const qc = useQueryClient();
+  const { apiUrl, apiToken } = useSettings();
+  const sessionIdentity = useSyncExternalStore(subscribeSession, () => sessionFor(apiUrl)?.token ?? "", () => sessionFor(apiUrl)?.token ?? "");
+  const recovery = useMemo(() => analysisRecoveryFor(qc, api, apiUrl, apiToken, sessionIdentity), [qc, api, apiUrl, apiToken, sessionIdentity]);
+  const wait = useSyncExternalStore(recovery.subscribe, () => recovery.snapshot(code, kind), () => recovery.snapshot(code, kind));
+  const query = useQuery<Analysis>({ queryKey: useKey("analysis", code, kind), enabled: false });
+  useEffect(() => { if (requested || recovery.snapshot(code, kind).phase !== "idle") recovery.ensure(code, kind); }, [recovery, code, kind, requested]);
+  return {
+    data: query.data, wait, busy: analysisBusy(wait),
+    refresh: () => void recovery.start(code, kind, true),
+    check: () => void recovery.start(code, kind, false, true),
+  };
+}
+
 /**
  * 지표 점수 (3-44, 플래그 indicatorScores — 부르는 화면이 켜져 있을 때만 enabled). 점수는 장 마감 뒤 하루 한 번 바뀌므로 30분 동안 새로 묻지 않는다.
  * 404(플래그 꺼짐·예전 서버·모르는 종목)는 오류가 아니라 없음(null) → 카드를 그리지 않는다
@@ -478,6 +585,28 @@ export function useIndicatorScores(code: string, enabled: boolean) {
     retry: 0,
     // 가치 지표가 서버 백그라운드 받기(SEC 재무·첫 비교 기준)를 기다리는 동안만 1분마다 다시 (화면을 보고 있을 때만)
     refetchInterval: (q) => (valueWaiting(q.state.data) ? SCORE_WAIT_REFETCH_MS : false),
+  });
+}
+
+/**
+ * 수급 탭 (3-33, 플래그 flowTab — 탭을 연 한국 종목만 enabled). 서버가 장 시간 10분·그 밖 60분 캐시하므로 5분 동안 새로 묻지 않는다.
+ * 404(플래그 꺼짐·예전 서버)는 오류가 아니라 없음(null)
+ */
+export function useInvestorFlow(code: string, enabled: boolean) {
+  const api = useApi();
+  return useQuery({
+    queryKey: useKey("investorFlow", code),
+    queryFn: async () => {
+      try {
+        return await api.investorFlow(code);
+      } catch (e) {
+        if (e instanceof ApiRequestError && e.status === 404) return null;
+        throw e;
+      }
+    },
+    enabled: enabled && !!code,
+    staleTime: 5 * 60_000,
+    retry: 0,
   });
 }
 
@@ -582,14 +711,14 @@ export function useMarketSummary(id: number, enabled: boolean) {
  * 브리핑 늦음·실패 안내 (브리핑 3차 2, 플래그 briefingStatus — 서버가 켤 때만 부른다). 404(꺼짐·예전 서버)는 null → 탭은 예전 안내.
  * 탭이 보일 때 60초마다, 탭·앱으로 돌아올 때 30초 지났으면 다시 받는다. 쿼리 키가 "briefings" 아래라 브리핑 알림을 받거나 누르면·수동 생성이 끝나면 함께 다시 받는다
  */
-export function briefingStatusQuery(api: Pick<Api, "briefingStatus">, apiUrl: string, focused: boolean, enabled: boolean) {
+export function briefingStatusQuery(api: Pick<Api, "briefingStatus">, apiUrl: string, focused: boolean, enabled: boolean, liveProgress = false) {
   return queryOptions({
     subscribed: focused,
     gcTime: KEEP_WHILE_AWAY,
     queryKey: [apiUrl, "briefings", "status"],
     queryFn: () => orNullOn404(api.briefingStatus()),
-    staleTime: 30_000,
-    refetchInterval: 60_000,
+    staleTime: liveProgress ? 5_000 : 30_000,
+    refetchInterval: liveProgress ? (q) => q.state.data?.activeRun ? 5_000 : 15_000 : 60_000,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
     retry: 0,
@@ -597,10 +726,10 @@ export function briefingStatusQuery(api: Pick<Api, "briefingStatus">, apiUrl: st
   });
 }
 
-export function useBriefingStatus(enabled: boolean) {
+export function useBriefingStatus(enabled: boolean, liveProgress = false) {
   const api = useApi();
   const { apiUrl } = useSettings();
-  return useQuery(briefingStatusQuery(api, apiUrl, useScreenFocused(), enabled));
+  return useQuery(briefingStatusQuery(api, apiUrl, useScreenFocused(), enabled, liveProgress));
 }
 
 /** 예전 서버·꺼진 기능의 경로(404)는 null 로 */
@@ -718,6 +847,9 @@ export function useStockMutations() {
       mutationFn: ({ session, codes, force }: { session: BriefingSession; codes?: string[]; force?: boolean }) => api.runBriefings(session, codes, force),
       onSuccess: (r, v) => {
         invalidate();
+        // 같은 날짜·세션의 재생성은 ID를 유지하므로, 열린 상세도 새 본문을 받는다. 성공한 ID만 다시 확인한다.
+        const ids = new Set(r.results.filter((result) => result.status === "ok" && result.briefingId !== null).map((result) => result.briefingId));
+        for (const id of ids) void qc.invalidateQueries({ queryKey: [apiUrl, "briefing", id], exact: true });
         // 일부 종목 수동 실행(상세의 다시 만들기)으로 만든 브리핑은 백그라운드 확인이 다시 알리지 않게 — 서버도 알리지 않는다 (BH-67)
         void markRunSeen(v.codes, r);
       },
@@ -727,4 +859,29 @@ export function useStockMutations() {
       onSuccess: (data) => qc.setQueryData([apiUrl, "analysis", data.code, data.kind], data),
     }),
   };
+}
+/**
+ * 내 종목 테마 (3-35, 플래그 holdingThemes). enabled 가 거짓(플래그 꺼짐)이면 요청 0건. 꺼진 서버·예전 서버의 404 는 null (오류 아님).
+ * 화면이 보이는 동안만: 어느 시장이든 값이 바뀌는 시간이면 60초, 첫 준비 중이면 30초마다 다시 (그 밖은 받은 값 그대로)
+ */
+export function useHoldingThemes(enabled: boolean) {
+  const api = useApi();
+  const focused = useScreenFocused();
+  return useQuery({
+    subscribed: focused,
+    queryKey: useKey("holdingThemes"),
+    queryFn: async () => {
+      try {
+        return await api.holdingThemes();
+      } catch (e) {
+        if (e instanceof ApiRequestError && e.status === 404) return null;
+        throw e;
+      }
+    },
+    enabled,
+    staleTime: 30_000,
+    retry: 0,
+    refetchInterval: (q) => holdingThemesEvery(q.state.data ?? null),
+    refetchIntervalInBackground: false,
+  });
 }

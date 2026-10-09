@@ -11,6 +11,7 @@ import { briefingMarketDate, type BriefingSession, type RunDoneListener, type Ru
  *    정기 실행 최근 4건은 늘 남김 — 서버를 다시 켜도 남는다). 기록이 없어도(그날 플래그를 켬·저장 실패) 그 회차 줄이 있으면 줄로만 판단한다
  *  - 못 만든 종목은 지금 briefings 표에서 센다 — 수동으로 다시 만들어 성공하면 안내에서 빠진다. 시각은 실행 기록에서
  *  - 오류 원문은 보내지 않는다: 저장된 오류 글에서 종류만 뽑는다 (failureKind — 앱도 같은 표를 쓴다, shared/fixtures/briefingFailure.json)
+ *  - briefingLiveProgress 가 켜지면 현재 실행을 activeRun 에 따로 붙인다. 예약 회차의 기존 판정·20분 기준은 바꾸지 않는다
  *  - 스케줄러는 실패 종목을 다시 만들지 않고 놓친 회차를 따라잡지 않는다 → '잠시 뒤 다시 만들어집니다'라고 말하지 않는다 (retryAt 은 늘 null)
  * 플래그가 꺼지면 경로는 404, 실행 기록을 쓰지 않고 계산·달력 조회도 하지 않는다
  */
@@ -74,6 +75,8 @@ export interface RunLogEntry {
   skippedCodes: string[];
   /** 한 종목 다시 만들기(partial)가 다룬 종목 — 그 줄을 정기 실행이 만든 줄로 세지 않게 (전체 실행은 없음) */
   codes?: string[];
+  /** 수집·저장 예외로 회차가 끝난 경우. 개별 failed 수와 분리한 안전한 안내 문구 */
+  runError?: string;
 }
 
 export interface StatusProblem {
@@ -88,6 +91,8 @@ export interface StatusProblem {
 
 /** GET /api/briefings/status 응답 */
 export interface BriefingStatus {
+  /** 시작부터 보이는 현재 실행 (briefingLiveProgress). 꺼져 있으면 필드 생략, 실행이 없으면 null */
+  activeRun?: RunProgress | null;
   session: BriefingSession | null;
   date: string;
   scheduledAt: string | null;
@@ -281,12 +286,13 @@ export function runLogEntry(done: Parameters<RunDoneListener>[0], finishedAt: st
     firedAt: done.firedAt ?? null,
     startedAt: done.startedAt ?? finishedAt,
     finishedAt,
-    total: r.length,
+    total: done.total ?? r.length,
     ok: r.filter((x) => x.status === "ok").length,
     failed: r.filter((x) => x.status === "failed").length,
     skipped: r.filter((x) => x.status === "skipped").length,
     skippedCodes: r.filter((x) => x.status === "skipped").map((x) => x.code),
     ...(done.partial ? { codes: r.map((x) => x.code) } : {}),
+    ...(done.runError ? { runError: done.runError } : {}),
   };
 }
 
@@ -305,12 +311,12 @@ export function trimRunLog(list: RunLogEntry[]): RunLogEntry[] {
 
 export interface BriefingStatusDeps {
   db: Db;
-  /** 플래그 briefingStatus · briefingManualRun (FeatureService) */
-  features: { enabled(key: "briefingStatus" | "briefingManualRun"): Promise<boolean> };
+  /** 플래그 briefingStatus · briefingManualRun · briefingLiveProgress (FeatureService) */
+  features: { enabled(key: "briefingStatus" | "briefingManualRun" | "briefingLiveProgress"): Promise<boolean> };
   settings: () => Promise<ScheduleSettings>;
   calendar: { isTradingDate(market: "KR" | "US", date: string): Promise<boolean> } | null;
   /** 지금 도는 실행 (BriefingService.progress) */
-  progress: () => RunProgress | null;
+  progress: () => RunProgress | null | Promise<RunProgress | null>;
   llmConfigured: () => boolean;
   now: () => Date;
   log?: { warn(obj: Record<string, unknown>, msg: string): void };
@@ -358,13 +364,19 @@ export class BriefingStatusService {
   /** 지금 안내 (플래그 확인은 부르는 쪽 — 경로) */
   async status(): Promise<BriefingStatus> {
     const now = this.deps.now();
-    const [settings, runs, manualRun] = await Promise.all([this.deps.settings(), this.runs(), this.deps.features.enabled("briefingManualRun").catch(() => false)]);
+    const [settings, runs, manualRun, liveProgress, progress] = await Promise.all([
+      this.deps.settings(),
+      this.runs(),
+      this.deps.features.enabled("briefingManualRun").catch(() => false),
+      this.deps.features.enabled("briefingLiveProgress").catch(() => false),
+      this.deps.progress(),
+    ]);
     const llmConfigured = this.deps.llmConfigured();
     const pick = pickSession(now, settings, runs);
     const next = nextRunAt(now, settings);
     const empty = { stocks: [], rows: [], trading: { KR: false, US: false } };
     if (!llmConfigured || !pick) {
-      return judgeStatus({ now, llmConfigured, pick, running: null, bootAt: this.bootAt, runs, nextRunAt: next, manualRun, ...empty });
+      return this.withProgress(judgeStatus({ now, llmConfigured, pick, running: null, bootAt: this.bootAt, runs, nextRunAt: next, manualRun, ...empty }), liveProgress, progress);
     }
     const db = this.deps.db;
     const [stockRows, rows] = await Promise.all([
@@ -384,7 +396,7 @@ export class BriefingStatusService {
       now,
       llmConfigured,
       pick,
-      running: this.deps.progress(),
+      running: progress,
       bootAt: this.bootAt,
       stocks,
       rows: rows.map((r) => ({ id: r.id, code: r.code, status: r.status, error: r.error, createdAt: r.created_at })),
@@ -399,6 +411,15 @@ export class BriefingStatusService {
       const recent = await db.selectFrom("briefings").select(["id", "session"]).where("code", "=", p.code).orderBy("briefing_date", "desc").orderBy("created_at", "desc").limit(10).execute();
       p.briefingId = (recent.find((r) => r.session === pick.session) ?? recent[0])?.id ?? null;
     }
-    return judged;
+    return this.withProgress(judged, liveProgress, progress);
+  }
+
+  /** 20분 지연 판정과 별개로 현재 실행을 붙인다. 예약 전·다른 회차·일부 종목 실행도 포함한다 */
+  private withProgress(status: BriefingStatus, enabled: boolean, run: RunProgress | null): BriefingStatus {
+    if (!enabled) return status;
+    if (!run) return { ...status, activeRun: null };
+    // 실행 중 바뀌는 원본과 응답을 분리하고 공개할 필드만 복사한다
+    const { session, date, trigger, partial, startedAt, total, done } = run;
+    return { ...status, activeRun: { session, date, trigger, partial, startedAt, total, done } };
   }
 }

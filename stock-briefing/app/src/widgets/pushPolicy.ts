@@ -6,12 +6,15 @@
  *    (휴장 중처럼 시세가 1분에 한 번 오는 때도 설정을 바꾸고 홈으로 나가면 바로 반영되게)
  */
 export const PUSH_EVERY_MS = 60_000;
+/** 간소한 위젯은 앱이 받은 가격을 최대 5초 간격으로 모아 전달한다. 외부 조회 주기가 아니다. */
+export const QUICK_PUSH_EVERY_MS = 5_000;
 
-export function widgetPushDue(o: { now: number; fetchedThisSession: boolean; lastAt: number; lastKey: string; key: string; leaving?: boolean }): boolean {
+export function widgetPushDue(o: { now: number; fetchedThisSession: boolean; lastAt: number; lastKey: string; key: string; leaving?: boolean; everyMs?: number }): boolean {
   if (!o.fetchedThisSession) return false;
   if (o.leaving || o.key !== o.lastKey) return true;
-  return o.now - o.lastAt >= PUSH_EVERY_MS;
+  return o.now - o.lastAt >= (o.everyMs ?? PUSH_EVERY_MS);
 }
 
 /** 설정 화면 위젯 도움말 (3-26 실측과 맞춘다) */
 export const WIDGET_REFRESH_HELP = "앱을 열면 즉시 · 닫혀 있으면 장중 약 15분, 휴장 2~4시간마다 · 위젯의 ↻ 로 즉시";
+export const WIDGET_LIVE_HELP = "앱에서 받은 시세는 최대 5초 간격으로 전달 · 앱을 닫으면 자동 갱신이 늦어질 수 있어요 · ↻로 지금 조회";

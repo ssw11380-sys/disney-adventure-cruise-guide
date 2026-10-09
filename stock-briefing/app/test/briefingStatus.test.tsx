@@ -252,8 +252,8 @@ describe("안내 글 (상태별 · 고정 시계 월 9/28 08:40)", () => {
 
   it("늦음 · 만드는 중 · 빠짐 · 모델 없음", () => {
     const late = statusView(S({ state: "late", late: true, finishedAt: iso("2026-09-28T09:12:00") }), h.now)!;
-    expect([late.title, late.line, late.small?.note]).toEqual(["오전 브리핑이 평소보다 늦게 만들어졌습니다", "예정 08:30 → 09:12 완료", "숫자는 09:12 기준입니다."]);
-    expect(late.speech).toBe("브리핑 안내, 오전 브리핑이 평소보다 늦게 만들어졌습니다, 예정 8시 30분, 9시 12분 완료, 숫자는 9시 12분 기준입니다");
+    expect([late.title, late.line, late.small?.note]).toEqual(["오전 브리핑이 평소보다 늦게 만들어졌습니다", "예정 08:30 → 09:12 완료", "완료 시각은 생성이 끝난 때입니다. 자료 기준 시각은 각 보고서에서 확인해 주세요."]);
+    expect(late.speech).toBe("브리핑 안내, 오전 브리핑이 평소보다 늦게 만들어졌습니다, 예정 8시 30분, 9시 12분 완료, 완료 시각은 생성이 끝난 때입니다. 자료 기준 시각은 각 보고서에서 확인해 주세요.");
     const slow = statusView(S({ state: "slow", total: 17, done: 9, finishedAt: null }), h.now)!;
     expect([slow.title, slow.line, slow.small]).toEqual(["오전 브리핑을 아직 만드는 중입니다", "예정 08:30 · 지금 17종목 중 9종목 끝남", null]);
     const missed = statusView(S({ state: "missed", finishedAt: null, startedAt: null }), h.now)!;
@@ -458,6 +458,34 @@ describe("켬: 접은 화면 475×751 · 폰 360×752", () => {
     const [, opts] = h.mutate.mock.calls[0]! as [unknown, { onSuccess: (r: unknown) => void }];
     opts.onSuccess({ results: [{ code: "005930", name: "삼성전자", status: "ok", error: null }, { code: "TSLA", name: "테슬라", status: "failed", error: RATE_LIMIT }] });
     expect(h.alert).toHaveBeenLastCalledWith("브리핑 생성 완료", `2개 중 1개 생성, ${line}`);
+  });
+});
+
+describe("계정 A단계: 주인 아닌 계정", () => {
+  it("늦음·실패 안내를 그리지 않고 상태도 묻지 않는다 (주인 브리핑 실행 상태 — 서버도 403) · 켬·끔 모두, 맨 위 차분한 안내만. 주인은 그대로", async () => {
+    const { resetSessionForTests, saveSession } = await import("@/lib/session");
+    const { MEMBER_NOTICE } = await import("@/lib/account");
+    // 서버가 주인 아닌 계정에게 주는 모습: 개인 목록은 빈 값, /health 는 공유 모습(실행 기록 없음 — 모델 설정만)
+    h.latest = [];
+    h.health = { llmConfigured: false };
+    await saveSession({ apiUrl: "https://prod.test", token: "gzs1_m", remember: true, user: { id: 7, loginId: "newbie", email: null, isOwner: false, usingInitialPassword: false } });
+    try {
+      for (const on of [true, false]) {
+        h.flags = { accounts: true, briefingStatus: on };
+        h.statusCalls = 0;
+        const r = await tab();
+        expect(bannerOf(r), `briefingStatus ${on}`).toBeNull();
+        expect(r.text()).not.toContain("브리핑 모델이 설정되지 않았습니다");
+        expect(r.text()).toContain(MEMBER_NOTICE);
+        expect(h.statusCalls).toBe(0);
+      }
+      // 주인(세션 없음 — 계정 전과 같음)은 예전 안내 그대로
+      resetSessionForTests();
+      h.flags = { briefingStatus: false };
+      expect((await tab()).text()).toContain("브리핑 모델이 설정되지 않았습니다");
+    } finally {
+      resetSessionForTests();
+    }
   });
 });
 

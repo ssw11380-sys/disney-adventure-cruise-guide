@@ -1,3 +1,4 @@
+import { checkMovementNotifications } from "@/lib/movementNotifications";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as BackgroundTask from "expo-background-task";
 import * as Notifications from "expo-notifications";
@@ -8,10 +9,12 @@ import { DEFAULT_PREFS, planNotifications, type NotifyPrefs } from "@/lib/briefi
 import { loadMarketSummaries } from "@/lib/marketSummaryLoad";
 import { INIT_KEY, initialized, saveSeen, SEEN_KEY, seenIds, withSeen } from "@/lib/briefingSeen";
 import { ANDROID_CHANNEL, ensureAndroidChannel } from "@/lib/notifications";
+import { inspectLocalDeliveries, LocalDeliveryRecordError } from "@/lib/localNotificationDelivery";
+import { assertSessionIdentity, sessionIdentityVersion } from "@/lib/session";
 import { logWidgetRefresh } from "@/lib/widgetRefreshLog";
 import { checkFilingIds, filingWatchDue } from "@/lib/filingNotify";
-import { loadAccountBriefings, loadFilingAlerts, loadLatestBriefings, loadNotifyPrefs, loadWidgetData, pendingRetry, readCachedPayload, type WidgetData } from "@/widgets/data";
-import { failureText } from "@/widgets/model";
+import { lastWidgetState, loadAccountBriefings, loadFilingAlerts, loadLatestBriefings, loadNotifyPrefs, loadWidgetData, pendingRetry, readCachedPayload, type WidgetData } from "@/widgets/data";
+import { failureText, quietState } from "@/widgets/model";
 import { payloadMarket, shouldSkipFetch } from "@/widgets/payload";
 import { redrawAllWidgets } from "@/widgets/redraw";
 import { marketWidgetPlaced, refreshWidgets } from "@/widgets/refresh";
@@ -48,6 +51,14 @@ const ACCOUNTS_FAIL_KEY = "notify.accountsFail";
 const BG_FAIL_KEY = "widget.bgFail";
 export const BG_FAIL_REDRAW = 2;
 
+/**
+ * 조용한 상태(로그인 필요·준비 중)로 바뀌었는지 (검증 6차): 마지막으로 그린 것이 없거나(지워짐 — 무엇이 그려져 있는지 모름), 개인 데이터(잔고·브리핑)가
+ * 있었거나, 다른 안내·오류였으면 true. 같은 조용한 안내가 이미 그려져 있으면 false (15분마다 다시 그리지 않게)
+ */
+export function quietChanged(before: { error: string | null; stocks: number; briefings: number } | null, now: Pick<WidgetData, "error">): boolean {
+  return !before || before.stocks > 0 || before.briefings > 0 || before.error !== now.error;
+}
+
 /** 실패 한 번 더: 연달아 BG_FAIL_REDRAW 번 이상이면 받은 값(마지막 숫자 + 오류)으로 위젯을 다시 그린다 */
 async function noteWidgetFailure(data: WidgetData): Promise<void> {
   const fails = Number((await AsyncStorage.getItem(BG_FAIL_KEY).catch(() => null)) ?? 0) + 1;
@@ -60,8 +71,8 @@ async function noteWidgetFailure(data: WidgetData): Promise<void> {
  * accountIds(3-31): 위젯 응답의 최근 계좌 브리핑 id — 종목 브리핑이 모두 실패하고 계좌 브리핑만 생긴 세션도 알아보게 (서버 푸시와 같게)
  */
 export async function hasUnseen(ids: number[], accountIds: readonly number[] = []): Promise<boolean> {
-  const seen = await seenIds();
-  return !(await initialized(seen)) || ids.some((id) => !seen.has(id)) || accountIds.some((id) => !seen.has(-id));
+  const seen = await seenIds(true);
+  return !(await initialized(seen, true)) || ids.some((id) => !seen.has(id)) || accountIds.some((id) => !seen.has(-id));
 }
 
 /**
@@ -102,10 +113,12 @@ export function notifyNewBriefings(latest: LatestBriefing[], opts: NotifyOpts = 
 }
 
 async function notifyUnseen(latest: LatestBriefing[], opts: NotifyOpts): Promise<number> {
-  const seen = await seenIds();
-  const isFirst = opts.first ?? !(await initialized(seen));
+  const identity = sessionIdentityVersion();
+  // 켜기 직후의 명시적 기준 설정은 알림을 보내지 않으며, 예전처럼 현재 목록으로 다시 시작한다.
+  const seen = await seenIds(opts.first !== true);
+  const isFirst = opts.first ?? !(await initialized(seen, true));
   const now = opts.now ?? new Date();
-  const fresh = [];
+  const fresh: Parameters<typeof planNotifications>[0] = [];
   for (const item of latest) {
     const b = item.latest;
     if (!b || b.status !== "ok" || seen.has(b.id)) continue;
@@ -117,7 +130,7 @@ async function notifyUnseen(latest: LatestBriefing[], opts: NotifyOpts): Promise
   }
   // 3-31: 아직 알리지 않은 계좌 브리핑. 계좌 브리핑 기준을 처음 적을 때는 알리지 않는다(옛 계좌 브리핑이 따로 울리지 않게)
   const accountInfo = opts.accounts !== undefined || opts.accountIds !== undefined;
-  const accountFirst = isFirst || (accountInfo && (await AsyncStorage.getItem(ACCOUNT_INIT_KEY).catch(() => null)) !== "1");
+  const accountFirst = isFirst || (accountInfo && (await AsyncStorage.getItem(ACCOUNT_INIT_KEY)) !== "1");
   const newAccountIds: number[] = [];
   for (const a of opts.accounts ?? []) {
     if (a.status !== "ok" || seen.has(-a.id)) continue;
@@ -128,19 +141,51 @@ async function notifyUnseen(latest: LatestBriefing[], opts: NotifyOpts): Promise
   }
   for (const id of opts.accountIds ?? []) seen.add(-id);
   // 같은 세션의 계좌 브리핑이 있으면 그 세션 알림 앞머리를 계좌 요약으로, 새 계좌 브리핑만 있는 세션도 1건 (여전히 세션당 1건)
+  const prefs = opts.prefs ?? DEFAULT_PREFS;
   const messages =
     fresh.length || newAccountIds.length
-      ? planNotifications(fresh, opts.prefs ?? DEFAULT_PREFS, now, opts.accounts ?? [], { newAccountIds, ...(opts.codes?.length ? { codes: opts.codes } : {}), ...(opts.markets?.length ? { markets: opts.markets } : {}) })
+      ? planNotifications(fresh, prefs, now, opts.accounts ?? [], { newAccountIds, ...(opts.codes?.length ? { codes: opts.codes } : {}), ...(opts.markets?.length ? { markets: opts.markets } : {}) })
       : [];
-  for (const m of messages) {
-    await Notifications.scheduleNotificationAsync({ content: { title: m.title, body: m.body, data: m.data, sound: "default" }, trigger: briefingTrigger() });
+  // 한 건을 보낸 뒤 다음 예약이 실패해도 앞서 보낸 알림을 되풀이하지 않는다.
+  // 보낼 대상만 성공할 때까지 보류하고, 조용한 시간·끈 종목 등 알리지 않을 기록은 유지한다.
+  const deliveries = messages.map((message) => ({
+    message,
+    ids: prefs.digest
+      ? [
+        ...fresh.filter((b) => b.date === message.data.date && b.session === message.data.session && !prefs.mutedCodes.includes(b.code)).map((b) => b.briefingId),
+        ...(opts.accounts ?? []).filter((a) => newAccountIds.includes(a.id) && a.date === message.data.date && a.session === message.data.session).map((a) => -a.id),
+      ]
+      : fresh.filter((b) => b.briefingId === message.data.briefingId).map((b) => b.briefingId),
+  }));
+  for (const { ids } of deliveries) for (const id of ids) seen.delete(id);
+  const book = deliveries.length ? await inspectLocalDeliveries(now.getTime()) : null;
+  assertSessionIdentity(identity);
+  let sent = 0;
+  try {
+    for (const { message: m, ids } of deliveries) {
+      const identifier = book!.identifier(ids, m.data.date, m.data.session);
+      assertSessionIdentity(identity);
+      if (!book!.known.has(identifier)) {
+        await Notifications.scheduleNotificationAsync({ identifier, content: { title: m.title, body: m.body, data: m.data, sound: "default" }, trigger: briefingTrigger() });
+        book!.accepted(identifier);
+        sent++;
+      }
+      assertSessionIdentity(identity);
+      for (const id of ids) seen.add(id);
+      try { await saveSeen(seen, true); }
+      catch { await book!.recordFailure(identifier); }
+      await book!.completed(identifier);
+    }
+    if (!deliveries.length) await saveSeen(seen);
+  } catch (error) {
+    if (!(error instanceof LocalDeliveryRecordError) && sessionIdentityVersion() === identity) await saveSeen(seen);
+    throw error;
   }
-  await saveSeen(seen);
   // 빈 목록이어도 기준을 적은 것으로 — 다음에 생기는 첫 브리핑을 알린다
   if (isFirst) await AsyncStorage.setItem(INIT_KEY, "1").catch(() => undefined);
   // 계좌 브리핑은 실제로 살펴본 뒤에만 기준을 적는다 (알림을 켤 때는 목록을 받지 않으므로 첫 확인에서 적는다)
   if (accountInfo) await AsyncStorage.setItem(ACCOUNT_INIT_KEY, "1").catch(() => undefined);
-  return messages.length;
+  return sent;
 }
 
 /**
@@ -148,6 +193,8 @@ async function notifyUnseen(latest: LatestBriefing[], opts: NotifyOpts): Promise
  * 돌 때마다 자동 갱신 기록(lib/widgetRefreshLog — 설정 화면 '마지막 자동 갱신')에 성공·건너뜀·실패를 적는다 (위젯 리뷰 2)
  */
 export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskResult> {
+  // 위젯 휴장 캐시와 관계없이 가격 사건은 확인한다. 실패가 기존 브리핑·위젯을 막지 않는다.
+  const movement = checkMovementNotifications().catch(() => 0);
   try {
     // 두 시장이 모두 닫혀 있으면 2시간에 한 번만 서버에 묻는다 (휴장 중 위젯 트래픽을 줄이려고, 3-16).
     // 보유 종목의 연장 세션(미국 프리·애프터·주간거래 등, 칩의 ext — widgetExtended)이 열려 있으면 장중처럼 묻는다 (위젯 리뷰 1).
@@ -157,12 +204,25 @@ export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskR
     const local = (await AsyncStorage.getItem(LOCAL_MODE_KEY).catch(() => null)) === "1";
     const cached = await readCachedPayload();
     const now = Date.now();
-    if ((await pendingRetry()) === null && shouldSkipFetch(cached ? { at: cached.at, market: payloadMarket(cached.body) } : null, now) && !(local && (await filingWatchDue(now, cached?.body.stocks)))) {
+    if ((await pendingRetry()) === null && shouldSkipFetch(cached ? { at: cached.at, market: payloadMarket(cached.body) } : null, now, cached?.body.features?.widgetLeanLive === true) && !(local && (await filingWatchDue(now, cached?.body.stocks)))) {
       await logWidgetRefresh("background", "skipped");
       return BackgroundTask.BackgroundTaskResult.Success;
     }
+    // 조회 전에 마지막으로 그린 상태를 읽어 둔다 (조회가 '로그인 필요'면 적어 둔 것을 지우고 새로 적으므로)
+    const before = await lastWidgetState();
     // 지수·환율 위젯이 홈 화면에 있을 때만 판 9개를 함께 묻는다 (같은 요청 한 번, 없으면 응답이 예전과 같다)
     const data = await loadWidgetData({ stocks: true, briefings: true, board: await marketWidgetPlaced() });
+    if (quietState(data.error)) {
+      // 로그인 필요(자동 로그인 끔·로그인 전·세션 끊김)·주인 아닌 계정: 실패가 아니다 — 실패로 세지 않는다 (검증 5차). 개인 데이터가 없으니 알림도 없다.
+      // 다만 **조용한 상태로 바뀐 순간**에는 위젯 4종을 한 번 다시 그린다 (검증 6차): 이 작업은 앱과 다른 JS 에서 돌아 앱 루트의 onAccountChange
+      // (지우고 다시 그리기)가 없다. 다른 기기에서 '모든 기기에서 로그아웃'·비밀번호 변경·OWNER_RESET_PASSWORD 로 세션이 끝난 것을 이 작업이 처음
+      // 알게 되면, 적어 둔 개인 데이터는 지웠어도 홈 화면에 이미 그려진 잔고·자산 위젯(수량·손익)이 각 위젯의 주기 갱신(30분)까지 남았다.
+      // 같은 안내가 이미 그려져 있으면 다시 그리지 않고, 주인 아닌 계정의 지수·환율 판을 새로 받았으면 그 판을 그린다
+      if (quietChanged(before, data) || data.boardFresh === true) await redrawAllWidgets(data);
+      await AsyncStorage.removeItem(BG_FAIL_KEY).catch(() => undefined);
+      await logWidgetRefresh("background", "skipped");
+      return BackgroundTask.BackgroundTaskResult.Success;
+    }
     if (data.error) {
       // 연달아 두 번째 실패부터는 위젯에도 보이게 (위젯이 스스로 갱신하다 실패했을 때와 같은 '갱신 실패 · …') — 위젯 리뷰 6
       await noteWidgetFailure(data);
@@ -228,9 +288,11 @@ export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskR
     // 위젯을 다시 그린 뒤에 한다 — 느린 요청이 위젯 갱신을 늦추지 않게. 이 부분의 오류는 여기서 멈춘다 (위젯 갱신·브리핑 알림에 영향 없음)
     if (local && data.filingIds?.length) await checkFilingIds(data.filingIds, { prefs: loadNotifyPrefs, alerts: loadFilingAlerts }).catch(() => 0);
     return BackgroundTask.BackgroundTaskResult.Success;
-  } catch {
-    await logWidgetRefresh("background", "failed");
+  } catch (error) {
+    await logWidgetRefresh("background", "failed", error instanceof LocalDeliveryRecordError ? { error: error.message } : undefined);
     return BackgroundTask.BackgroundTaskResult.Failed;
+  } finally {
+    await movement;
   }
 }
 
@@ -250,8 +312,9 @@ export async function enableLocalBriefingAlerts(): Promise<void> {
   await AsyncStorage.removeItem(SEEN_KEY).catch(() => undefined);
   await AsyncStorage.removeItem(INIT_KEY).catch(() => undefined);
   await AsyncStorage.removeItem(ACCOUNT_INIT_KEY).catch(() => undefined);
-  await AsyncStorage.setItem(LOCAL_MODE_KEY, "1");
   await BackgroundTask.registerTaskAsync(BRIEFING_TASK, { minimumInterval: BG_INTERVAL_MIN });
+  // 작업 등록이 실패하면 다음 화면에서도 켜짐으로 오인하지 않게 성공 뒤에만 저장한다.
+  await AsyncStorage.setItem(LOCAL_MODE_KEY, "1");
   await AsyncStorage.setItem(INTERVAL_KEY, String(BG_INTERVAL_MIN)).catch(() => undefined);
   // 현재 브리핑 목록 전체를 "이미 본 것"으로 기록해 켜자마자 옛 브리핑이 쏟아지지 않게 한다
   // (위젯 응답의 브리핑은 상위 3종목뿐이라 전체 목록을 따로 받는다)
@@ -261,7 +324,12 @@ export async function enableLocalBriefingAlerts(): Promise<void> {
 
 /** 백그라운드 확인 알림만 끈다. 같은 태스크가 위젯도 15분마다 갱신하므로 Android 에서는 태스크를 남긴다 (N2) */
 export async function disableLocalBriefingAlerts(): Promise<void> {
-  await AsyncStorage.removeItem(LOCAL_MODE_KEY).catch(() => undefined);
+  try {
+    await AsyncStorage.removeItem(LOCAL_MODE_KEY);
+  } catch {
+    // 공용 위젯 작업은 계속 돌기 때문에 이 표시가 남으면 실제로 알림도 계속된다.
+    throw new Error("알림을 끄지 못해 아직 켜져 있습니다. 기기 저장 상태를 확인하고 다시 꺼 주세요.");
+  }
   if (Platform.OS === "android") return ensureBackgroundTaskRegistered();
   // 위젯이 없는 기기는 알림 때문에만 등록했으므로 해제
   try {

@@ -6,7 +6,7 @@ vi.mock("expo-device", () => ({ isDevice: true, modelName: "test" }));
 vi.mock("react-native", () => ({ Platform: { OS: "android" } }));
 vi.mock("expo-constants", () => ({ default: { expoConfig: { extra: {} } } }));
 
-const { isInputScreen, notificationNav, routeForNotification } = await import("@/lib/notifications");
+const { isInputScreen, memberNotificationNav, notificationNav, routeForNotification } = await import("@/lib/notifications");
 
 /**
  * 브리핑 3차 1 — 알림 뒤로 가기 (플래그 notifBack): 알림을 누르면 어디로, 어떻게 가는지 (순수 함수 표).
@@ -157,5 +157,31 @@ describe("pickNotified · holdNotified: 2단에서 알림으로 고른 것은 �
     p.pickNotified(S);
     p.forgetPick();
     expect(p.holdNotified(S, true, true)).toBe(false);
+  });
+});
+
+describe("계정 A단계: 주인 아닌 계정의 알림 이동 (memberNotificationNav)", () => {
+  it("브리핑 알림(계좌·묶음·종목)은 어느 창·화면·플래그에서든 브리핑 탭만 — 상세·2단 고르기 없음. 가격 알림·이동할 곳 없음은 그대로", () => {
+    for (const n of Object.keys(N) as Kind[])
+      for (const w of Object.keys(W) as Win[])
+        for (const p of Object.keys(P) as Where[])
+          for (const back of [true, false]) {
+            const data = N[n] as Record<string, unknown>;
+            const nav = notificationNav(data, { back, twoPane: W[w], path: P[p] });
+            const seen = memberNotificationNav(nav, data);
+            if (n === "price") expect(seen, `${n}/${w}/${p}/${back}`).toEqual(nav);
+            else expect(seen, `${n}/${w}/${p}/${back}`).toEqual({ kind: "tab" });
+          }
+    expect(memberNotificationNav(null, { type: "briefing" })).toBeNull();
+  });
+
+  it("새 공시 알림(3-38 → '일정·공시')도 주인 아닌 계정은 브리핑 탭만 — 접수 번호가 있든 없든", () => {
+    for (const data of [{ type: "filing", focus: "0001193125-26-323632" }, { type: "filing" }] as Record<string, unknown>[])
+      for (const back of [true, false])
+        for (const twoPane of [true, false]) {
+          const nav = notificationNav(data, { back, twoPane, path: "/" });
+          expect(nav).not.toBeNull();
+          expect(memberNotificationNav(nav, data)).toEqual({ kind: "tab" });
+        }
   });
 });

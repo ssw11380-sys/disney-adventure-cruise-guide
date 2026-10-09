@@ -125,9 +125,9 @@ describe("한국 세션 (서울 시각, 거래일은 토스 달력)", () => {
     expect(cal.KR.isTradingDay).toBe(true); // 받은 날(9/23) 기준 값 — 9/25 에 그대로 쓰면 틀린다
     expect(sessionAt("035420", at("2026-09-25T10:00:00+09:00"), { calendar: cal, stock: NXT })).toMatchObject({ phase: "holiday", open: false });
     expect(sessionAt("035420", at("2026-09-28T09:30:00+09:00"), { calendar: cal, stock: NXT })).toMatchObject({ phase: "regular", eligible: true }); // 다음 세션 날
-    // 9/22 장중에 받은 달력은 9/25 를 모른다 → 평일로 짐작하되 대상은 모름
+    // 9/22 장중에 받은 달력은 9/25 를 모르지만 한국 휴장일 목록으로 휴장을 안다
     const old = calendar(at("2026-09-22T10:00:00+09:00"), ["2026-09-22T11:00:00Z", "2026-09-22T23:00:00Z"], null);
-    expect(sessionAt("035420", at("2026-09-25T10:00:00+09:00"), { calendar: old, stock: NXT })).toMatchObject({ phase: "regular", eligible: null });
+    expect(sessionAt("035420", at("2026-09-25T10:00:00+09:00"), { calendar: old, stock: NXT })).toMatchObject({ phase: "holiday", open: false, eligible: null });
   });
 
   it("달력 조회가 실패하면(fallback) 시장별로 마지막 토스 달력을 그대로 쓴다", () => {
@@ -710,9 +710,9 @@ describe("세션 표 — 한국 (토스 웹이 모든 종목 가격을 줌)", ()
     expect(await table({ now: "2026-09-25T10:00:00+09:00", asOf, ws, facts, krBefore: KR_CHUSEOK, kr: "fallback", us: US_924 })).toEqual({ [NAVER]: { phase: "holiday", realtime: false } });
   });
 
-  it("토스 달력을 한 번도 못 받았으면(요일로 짐작) 휴장일일 수 있어 이 세션 체결이 있었던 종목만 켠다", async () => {
+  it("토스 달력을 한 번도 못 받아도 목록의 휴장일은 닫고, 모르는 평일은 이 세션 체결이 있었던 종목만 켠다", async () => {
     const holiday = await table({ now: "2026-09-25T10:00:00+09:00", asOf: { [NAVER]: "2026-09-23T19:59:58+09:00" }, facts, kr: "fallback", us: US_924 });
-    expect(holiday).toEqual({ [NAVER]: { phase: "regular", realtime: false } }); // 추석인데 평일로 짐작 — 체결이 없으니 점은 없다
+    expect(holiday).toEqual({ [NAVER]: { phase: "holiday", realtime: false } }); // 한국 휴장일 목록으로 추석을 안다
     const trading = await table({ now: "2026-09-22T10:00:00+09:00", asOf: { [NAVER]: "2026-09-22T09:59:30+09:00", "900340": "2026-09-21T15:30:00+09:00" }, facts, kr: "fallback", us: US_922 });
     expect(trading).toEqual({ [NAVER]: { phase: "regular", realtime: true }, "900340": { phase: "regular", realtime: false } });
   });

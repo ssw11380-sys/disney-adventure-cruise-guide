@@ -55,10 +55,82 @@ interface MessageLike {
 }
 
 /**
+ * SDK의 제한 시간은 헤더 수신 때 끝나므로 남은 예산을 본문에도 적용한다.
+ * 헤더는 즉시 SDK에 돌려준다. 성공 응답의 본문 오류가 SDK의 fetch 재시도로
+ * 들어가 이미 시작한 유료 생성을 다시 호출하지 않게 하는 경계다.
+ */
+function withBodyDeadline(fetchFn: typeof fetch, timeoutMs: number): typeof fetch {
+  return async (input, init) => {
+    const startedAt = Date.now();
+    const controller = new AbortController();
+    const upstream = init?.signal;
+    const onAbort = () => controller.abort(upstream?.reason);
+    upstream?.addEventListener("abort", onAbort, { once: true });
+    if (upstream?.aborted) onAbort();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = () => {
+      clearTimeout(timer);
+      upstream?.removeEventListener("abort", onAbort);
+    };
+    let response: Response;
+    try {
+      response = await fetchFn(input, { ...init, signal: controller.signal });
+    } catch (error) {
+      cleanup();
+      throw error;
+    }
+    if (!response.body) {
+      cleanup();
+      return response;
+    }
+    const reader = response.body.getReader();
+    let done = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(output) {
+        timer = setTimeout(() => {
+          if (done) return;
+          done = true;
+          cleanup();
+          const error = new DOMException(`모델 응답 수신 시간 초과 (${timeoutMs}ms)`, "TimeoutError");
+          output.error(error);
+          controller.abort(error);
+          void reader.cancel(error).catch(() => undefined);
+        }, Math.max(0, timeoutMs - (Date.now() - startedAt)));
+      },
+      async pull(output) {
+        try {
+          const next = await reader.read();
+          if (done) return;
+          if (next.done) {
+            done = true;
+            cleanup();
+            output.close();
+          } else {
+            output.enqueue(next.value);
+          }
+        } catch (error) {
+          if (done) return;
+          done = true;
+          cleanup();
+          output.error(error);
+        }
+      },
+      cancel(reason) {
+        done = true;
+        cleanup();
+        controller.abort(reason);
+        return reader.cancel(reason);
+      },
+    });
+    return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+  };
+}
+
+/**
  * Claude 호출 래퍼. 두 경로를 지원한다.
  *  - anthropic: 첫 번째 파티 API. 서버측 refusal fallback 을 켠다 (beta).
  *  - bedrock:   Claude in Amazon Bedrock (Messages API 엔드포인트). fallback 파라미터는 지원되지 않아 뺀다.
- * 공통: 시스템 프롬프트는 1시간 캐싱, stop_reason 검사 (refusal / max_tokens 는 오류).
+ * 공통: 시스템 프롬프트는 1시간 캐싱, 거절·토큰/컨텍스트 한도로 중단된 응답은 오류.
  */
 export class ClaudeGenerator implements TextGenerator {
   readonly model: string;
@@ -68,7 +140,8 @@ export class ClaudeGenerator implements TextGenerator {
   constructor(opts: ClaudeGeneratorOptions) {
     const b = opts.backend;
     this.model = b.model;
-    const common = { maxRetries: opts.maxRetries ?? 2, timeout: opts.timeoutMs ?? 5 * 60_000 };
+    const timeout = opts.timeoutMs ?? 5 * 60_000;
+    const common = { maxRetries: opts.maxRetries ?? 2, timeout, fetch: withBodyDeadline(fetch, timeout) };
     if (b.kind === "anthropic") {
       if (!b.apiKey) throw new GenerationError("ANTHROPIC_API_KEY 가 설정되지 않았습니다", "config");
       this.anthropic = new Anthropic({ apiKey: b.apiKey, ...common });
@@ -120,8 +193,8 @@ export class ClaudeGenerator implements TextGenerator {
       .map((b) => b.text as string)
       .join("")
       .trim();
-    if (response.stop_reason === "max_tokens") {
-      throw new GenerationError(`응답이 max_tokens 에서 잘렸습니다 (${text.length}자)`, "truncated");
+    if (response.stop_reason === "max_tokens" || response.stop_reason === "model_context_window_exceeded") {
+      throw new GenerationError(`응답이 ${response.stop_reason} 에서 잘렸습니다 (${text.length}자)`, "truncated");
     }
     if (!text) throw new GenerationError("모델이 빈 응답을 반환했습니다", "api");
     const u = response.usage;

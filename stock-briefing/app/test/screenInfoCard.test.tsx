@@ -43,6 +43,7 @@ vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => h.in
 vi.mock("@expo/vector-icons/Ionicons", () => ({ default: "Ionicons" }));
 vi.mock("expo-device", () => ({ manufacturer: "samsung", modelName: "SM-F966N", osVersion: "16", platformApiLevel: 36 }));
 vi.mock("@/lib/appUpdate", () => ({ currentVersion: "1.4.0", describeRunningUpdate: () => ({ channel: "기본", updateId: "내장 번들", createdAt: null }) }));
+vi.mock("@/releaseVersion.json", () => ({ version: "1.4.1" }));
 vi.mock("@/theme", async () => {
   const tokens = await import("@/tokens");
   return { ...tokens, useTheme: () => tokens.light };
@@ -141,7 +142,7 @@ describe("화면 정보 카드", () => {
     await vi.waitFor(() => expect(h.share).toHaveBeenCalledTimes(1));
     const { message, title } = h.share.mock.calls[0][0];
     expect(title).toBe("화면 정보");
-    expect(message).toMatch(/^\[화면 정보\] \d{4}-\d{2}-\d{2} \d{2}:\d{2} 한국 시각 · 앱 1\.4\.0 \(내장 번들\)\n/);
+    expect(message).toMatch(/^\[화면 정보\] \d{4}-\d{2}-\d{2} \d{2}:\d{2} 한국 시각 · 앱 1\.4\.1 \(내장 번들\)\n/);
     expect(message).toContain("\n모델명: samsung SM-F966N\n");
     expect(message).toContain("\n앱 창 크기: 411×914 dp\n");
     expect(message).toContain("\n안드로이드 버전: 16 (API 36)\n");

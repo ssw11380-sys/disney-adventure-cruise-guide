@@ -6,11 +6,14 @@ import { loadConfig } from "../src/config.js";
 import { createDb, migrate, type Db } from "../src/db/index.js";
 import { BACKUP_TABLES, BackupService, decodeBackup, restoreBackup } from "../src/services/backupService.js";
 import { FeatureService } from "../src/services/featureService.js";
+import { AccountBriefingService } from "../src/services/accountBriefingService.js";
+import { evaluate } from "../src/services/stockService.js";
+import { PromptStore } from "../src/llm/prompts.js";
 import { TradeRecordService } from "../src/services/tradeRecordService.js";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FakeGenerator, fakeProviders, SAMPLE_MASTER } from "./helpers.js";
+import { FakeGenerator, fakeProviders, makeQuote, SAMPLE_MASTER } from "./helpers.js";
 import { IndicatorScoreService } from "../src/services/indicatorScoreService.js";
 import { benchOf, candlesOf } from "./fixtures/indicatorScores/load.js";
 
@@ -55,7 +58,10 @@ describe.skipIf(!url)("postgres dialect", () => {
   it("마이그레이션이 두 번 실행돼도 안전하다", async () => {
     await migrate(db, "postgres");
     const rows = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
-    expect(rows.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    expect(rows.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+    const idx12 = await sql<{ indexdef: string }>`select indexdef from pg_indexes where schemaname = current_schema() and indexname = 'idx_briefings_date_created'`.execute(db);
+    expect(idx12.rows).toHaveLength(1);
+    expect(idx12.rows[0]!.indexdef).toContain("(briefing_date DESC, created_at DESC)");
     // 7 = 시장 전체 요약 표 (날짜·세션 하나에 한 건)
     const idx = await sql<{ indexname: string }>`select indexname from pg_indexes where tablename = 'market_summaries'`.execute(db);
     expect(idx.rows.map((r) => r.indexname)).toContain("uq_market_summaries_date_session");
@@ -157,7 +163,7 @@ describe.skipIf(!url)("postgres dialect", () => {
       await migrate(db, "postgres");
       expect(await read()).toEqual({ quantity: 16.123455, avg_price: 1234.5677 });
       const versions = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
-      expect(versions.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+      expect(versions.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
       const doubles = await sql<{ n: number }>`select count(*) as n from information_schema.columns where table_name = 'registered_stocks' and data_type = 'double precision'`.execute(db);
       expect(Number(doubles.rows[0]!.n)).toBe(2);
     } finally {
@@ -323,4 +329,43 @@ describe.skipIf(!url)("postgres dialect", () => {
     await db.deleteFrom("account_snapshots").execute();
     await db.deleteFrom("trade_executions").execute();
   });
+
+  it("계좌 보고서의 실패 upsert는 기존 성공 행을 보존한다 (Postgres 조건부 충돌 처리)", async () => {
+    const at = new Date("2026-12-28T08:45:00+09:00");
+    const date = "2026-12-28";
+    let available = true;
+    const stock = { code: "005930", name: "삼성전자", market: "KOSPI" as const, quantity: 10, avgPrice: 90_000, memo: null, createdAt: at.toISOString(), updatedAt: at.toISOString() };
+    const svc = new AccountBriefingService({
+      db, indices: null, calendar: null, generator: new FakeGenerator(), prompts: new PromptStore(),
+      features: { enabled: async (key) => key === "accountBriefing" }, now: () => at,
+      stocks: { listWithFreshQuotes: async () => {
+        const quote = available ? makeQuote(stock.code, "가짜시세") : null;
+        return [{ ...stock, quote, evaluation: evaluate(stock, quote) }];
+      } },
+    });
+    try {
+      const old = await svc.generate("morning", { date, force: true });
+      expect(old?.status).toBe("ok");
+      available = false;
+      await expect(svc.generate("morning", { date, force: true })).rejects.toMatchObject({ code: "ACCOUNT_DATA_UNAVAILABLE" });
+      expect(await svc.find(date, "morning")).toEqual(old);
+      available = true;
+      expect((await svc.generate("morning", { date, force: true }))?.status).toBe("ok");
+    } finally {
+      await db.deleteFrom("account_briefings").where("briefing_date", "=", date).where("session", "=", "morning").execute();
+    }
+  });
+  it("관심종목 가격과 구간 사건을 Postgres에 저장하고 잔고와 분리한다", async () => {
+    await app.stockService.refreshMaster();
+    const before = await db.selectFrom("registered_stocks").selectAll().orderBy("code").execute();
+    const saved = await app.inject({ method: "PUT", url: "/api/watchlist/005930", payload: { startPrice: 70000, desiredPrice: 65000, alerts: true } });
+    expect(saved.statusCode).toBe(200);
+    expect(await db.selectFrom("watch_items").selectAll().where("code", "=", "005930").executeTakeFirst()).toMatchObject({ start_price: 70000, desired_price: 65000, alerts: 1 });
+    expect(await db.selectFrom("registered_stocks").selectAll().orderBy("code").execute()).toEqual(before);
+    await db.insertInto("movement_marks").values({ mark_key: "pg-test", up: 5, down: 10, created_at: "2026-10-05T01:00:00Z" }).onConflict(c => c.column("mark_key").doNothing()).execute();
+    expect(await db.selectFrom("movement_marks").selectAll().where("mark_key", "=", "pg-test").executeTakeFirst()).toMatchObject({ up: 5, down: 10 });
+    expect((await app.inject({ method: "DELETE", url: "/api/watchlist/005930" })).statusCode).toBe(204);
+    expect(await db.selectFrom("watch_items").selectAll().where("code", "=", "005930").executeTakeFirst()).toBeUndefined();
+  });
+
 });

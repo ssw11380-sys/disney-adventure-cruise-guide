@@ -152,7 +152,7 @@ export interface Badge {
 }
 
 /** 점 옆 짧은 글: 마지막 토스 대조 기록 그대로 (위에서부터 처음 맞는 줄) */
-export function reconcileBadge(body: ReconcileBadgeBody | null | undefined, now: number): Badge {
+export function reconcileBadge(body: ReconcileBadgeBody | null | undefined, now: number, options: { showComparedScope?: boolean } = {}): Badge {
   const status = body?.on ? body.status : null;
   if (!status) return { kind: "none", text: "숫자 기준", tone: "muted", speech: "토스 대조 없음" };
   const last = status.last;
@@ -165,12 +165,13 @@ export function reconcileBadge(body: ReconcileBadgeBody | null | undefined, now:
   if (last.qtyMismatch?.length) return { kind: "qty", text: "토스와 수량 다름", tone: "warn", speech: `보유 수량이 토스와 다른 종목 ${last.qtyMismatch.length}개, ${when} 대조` };
   if (last.missing > 0) return { kind: "missing", text: "토스 대조 대기", tone: "muted", speech: `시세 지연 등으로 비교 못 함, ${when} 대조` };
   const compared = last.n && last.n > 0 ? `같은 종목 ${last.n}개 비교, ` : "";
+  const scoped = options.showComparedScope === true && !!compared;
   const abs = Math.abs(last.diffPct);
   if (abs > WARN_PCT) {
     const pct = diffPctText(abs);
-    return { kind: "over", text: `토스와 차이 ${pct}%`, tone: "warn", speech: `토스 계좌와 ${pct}% 차이, ${compared}${when} 대조` };
+    return { kind: "over", text: `${scoped ? "동일 종목" : "토스와"} 차이 ${pct}%`, tone: "warn", speech: `토스 계좌와 ${pct}% 차이, ${compared}${when} 대조` };
   }
-  return { kind: "ok", text: "토스와 0.1% 이내", tone: "ok", speech: `토스 계좌와 0.1% 이내, ${compared}${when} 대조` };
+  return { kind: "ok", text: `${scoped ? "동일 종목" : "토스와"} 0.1% 이내`, tone: "ok", speech: `토스 계좌와 0.1% 이내, ${compared}${when} 대조` };
 }
 
 export interface BasisRow {

@@ -4,6 +4,7 @@ import type { MarketIndex } from "../providers/market/indices.js";
 import type { Briefing } from "./briefingService.js";
 import type { MarketSummary } from "./marketSummaryService.js";
 import type { RegisteredWithQuote } from "./stockService.js";
+import type { TossAccountSnapshotBody } from "../routes/admin.js";
 
 /**
  * 홈 화면 위젯 한 번에 필요한 것만 (3-16). 위젯 3종이 이 응답 하나를 같이 쓴다.
@@ -72,6 +73,8 @@ export interface WidgetStock {
   e: [number, number, number | null, number | null, "exact" | "estimated" | null] | null;
   /** 시세 기준 원문(quote.priceBasis — 'KRX+NXT 통합' 등). &ms=1 이고 numberBasis 켬일 때만, 기준이 있는 종목만 (3-32) */
   b?: string;
+  /** 새 위젯에서 개별 거래 대상·세션 경계를 판단할 때만 전달한다. 자료 재조회는 하지 않는다. */
+  ss?: QuoteSession;
 }
 
 /**
@@ -119,6 +122,11 @@ export interface WidgetFeatures {
   marketSummary?: boolean;
   /** 숫자 기준 (3-32) — 지금 앱(&ms=1)이 물을 때 · 켬일 때만 true 칸을 넣는다 (끄면 칸 없음 — 응답·ETag 가 예전과 같게) */
   numberBasis?: boolean;
+  /** 위젯 정보 기준 개선. &ms=1 요청이고 켜졌을 때만 넣어 예전 응답을 보존한다 */
+  widgetClarity?: boolean;
+  widgetLeanLive?: boolean;
+  /** 계좌 기준 합계(account=1 요청만). 꺼짐과 사용 불가를 구분한다. */
+  tossAccountSnapshot?: boolean;
 }
 
 /**
@@ -217,6 +225,8 @@ export interface WidgetPayload {
   brief?: WidgetBrief;
   /** 브리핑 위젯 첫 줄 — 가장 최근 시장 요약의 숫자 (새 앱 &ms=1 만, 플래그 marketSummary 가 켜져 있고 성공한 요약이 있을 때만) */
   ms?: WidgetSummary;
+  /** 같은 동기화의 평가·원금·시각. 종목 시세·분석 자료는 그대로 함께 전달한다. */
+  tossAccount?: TossAccountSnapshotBody;
   /**
    * 새 공시 알림 (3-38, 플래그 filingAlerts): 알림 대상 새 SEC 공시의 접수 번호 (최근 3일, 최신 10개). 앱 백그라운드 확인이 모르는 번호가 있을 때만 목록을 받게.
    * 지금 앱(&ms=1)이 물었고 켜져 있고 있을 때만 — 없거나 끄면 칸이 없어 응답·ETag 가 바이트까지 예전과 같다
@@ -405,6 +415,7 @@ export function buildWidgetPayload(
     summary?: WidgetSummary | null | undefined;
     /** 지금 앱(&ms=1)이고 numberBasis 가 켜져 있음: 종목에 시세 기준 원문(b)을 넣는다 (3-32). 튜플 q 의 모양은 그대로 */
     basis?: boolean | undefined;
+    tossAccount?: TossAccountSnapshotBody | null | undefined;
     /** 새 공시 알림 접수 번호 (3-38 — 지금 앱 &ms=1 이고 filingAlerts 가 켜져 있을 때 부르는 쪽이 넘긴다) */
     filingIds?: readonly string[] | null | undefined;
   } = {},
@@ -433,7 +444,8 @@ export function buildWidgetPayload(
     market,
     stocks: stocks.map((s) => {
       const w = slim(s, sharedFx);
-      return extra.basis && s.quote?.priceBasis ? { ...w, b: s.quote.priceBasis } : w;
+      return { ...w, ...(extra.basis && s.quote?.priceBasis ? { b: s.quote.priceBasis } : {}),
+        ...(extra.features?.widgetClarity && s.quote?.session ? { ss: s.quote.session } : {}) };
     }),
     latestIds: ok.map((b) => b.latest!.id).sort((a, b) => a - b),
     briefings: ok.slice(0, 3).map((b) => ({ id: b.latest!.id, code: b.code, name: b.name, session: b.latest!.session, date: b.latest!.date, summary: b.latest!.summary.split("\n").find((l) => l.trim()) ?? "", createdAt: b.latest!.createdAt })),
@@ -446,6 +458,7 @@ export function buildWidgetPayload(
   if (extra.accountIds?.length) payload.accountIds = [...extra.accountIds];
   if (extra.brief) payload.brief = extra.brief;
   if (extra.summary) payload.ms = extra.summary;
+  if (extra.tossAccount) payload.tossAccount = extra.tossAccount;
   if (extra.filingIds?.length) payload.filingIds = [...extra.filingIds];
   return payload;
 }
