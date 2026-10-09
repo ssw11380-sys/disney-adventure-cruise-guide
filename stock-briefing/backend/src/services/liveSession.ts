@@ -2,7 +2,7 @@ import type { QuoteSession } from "../domain/types.js";
 import { isKrCode } from "../lib/codes.js";
 import { knownTradingDays, type MarketState, type MarketStatus } from "../providers/market/calendar.js";
 import type { StockSessionFacts } from "../providers/market/tossRealtime.js";
-import { krRegularHours, US_HOLIDAYS, usRegularCloseMinutes } from "./marketContext.js";
+import { isKrTradingDate, KR_HOLIDAYS, krRegularHours, US_HOLIDAYS, usRegularCloseMinutes } from "./marketContext.js";
 
 /**
  * 종목 하나의 "지금 거래 세션"과 초록 점(실시간) 판단 — 순수 함수 (단위 테스트: test/liveSession.test.ts).
@@ -10,7 +10,7 @@ import { krRegularHours, US_HOLIDAYS, usRegularCloseMinutes } from "./marketCont
  * 체결이 아직 없어도, 세션이 열려 있고 이 종목이 그 세션의 거래 대상이며 서버가 값을 받고 있으면 켠다.
  * (예전에는 "스냅샷과 다른 가격의 체결이 왔다"여서 거래가 뜸한 종목은 같은 세션에서도 점이 없었다)
  *
- * 한국 (서울 시각. 거래일은 토스 달력 — 한국 평일 휴장일 목록은 따로 없어, 달력으로 확인하지 못한 날은 체결 증거가 있는 종목만)
+ * 한국 (서울 시각. 한국 휴장일 목록·토스 달력으로 거래일 확인, 둘 다 모르는 평일은 체결 증거가 있는 종목만)
  *   08:00~08:50 NXT 프리마켓(NXT 대상만) · 08:50~09:00 동시호가 · 09:00~15:20 정규장(모든 종목)
  *   · 15:20~15:30 동시호가 · 15:30~15:40 장 마감 · 15:40~16:00 NXT 애프터마켓(NXT 대상만 — 한국거래소는 시간외 종가라 가격이 안 바뀜)
  *   · 16:00~20:00 애프터마켓(한국거래소 애프터마켓 2026-09-14~ + NXT. 한국거래소는 ETF·ETN·관리·투자경고 종목 등이 빠지고 목록이 없어,
@@ -113,20 +113,21 @@ type KrOpenPhase = "nxt_pre" | "regular" | "nxt_after" | "after";
 const KR_LABEL: Record<KrOpenPhase, string> = { nxt_pre: "한국 NXT 프리마켓", regular: "한국 정규장", nxt_after: "한국 NXT 애프터마켓", after: "한국 애프터마켓" };
 
 /**
- * 한국 거래일: 토스 달력(삼성전자 거래 시간)이 아는 날이면 그대로(known). 모르는 날(달력을 못 받았거나 범위 밖)은 평일로 짐작한다 —
- * 한국 평일 휴장일(추석 등) 목록이 없어 짐작한 날은 known=false (점은 체결 증거가 있는 종목만)
+ * 한국 거래일: 달력의 다른 경로와 같이 목록의 휴장일을 먼저 지킨다. 그 밖은 토스 달력(삼성전자 거래 시간)이 아는 날이면 그대로(known).
+ * 모르는 날(달력을 못 받았거나 범위 밖)은 평일로 짐작하되 known=false (점은 체결 증거가 있는 종목만).
  */
 function krTradingDay(date: string, cal: MarketState | null): { day: boolean; known: boolean } {
+  if (date in KR_HOLIDAYS) return { day: false, known: true };
   const k = knownTradingDays("KR", cal).get(date);
   return k === undefined ? { day: weekday(date), known: false } : { day: k, known: true };
 }
 
-/** 다음 한국 개장(08:00): 달력의 다음 개장, 없으면 다음 평일 */
+/** 다음 한국 개장(08:00): 달력의 다음 개장, 없으면 주말·목록의 휴장일을 건너뛴다 */
 function nextKrOpen(t: number, date: string, cal: MarketState | null): number {
   const opens = cal?.opensAt ? Date.parse(cal.opensAt) : NaN;
-  if (Number.isFinite(opens) && opens > t) return opens;
+  if (Number.isFinite(opens) && opens > t && !(zoned(opens, TZ.KR).date in KR_HOLIDAYS)) return opens;
   let d = addDays(date, 1);
-  for (let i = 0; i < 7 && !weekday(d); i++) d = addDays(d, 1);
+  for (let i = 0; i < 7 && !isKrTradingDate(d); i++) d = addDays(d, 1);
   return localToUtc(d, KR_NXT_PRE, TZ.KR);
 }
 

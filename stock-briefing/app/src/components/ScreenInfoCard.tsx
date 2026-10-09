@@ -4,7 +4,8 @@ import React, { useEffect, useState } from "react";
 import { Alert, Dimensions, PixelRatio, Pressable, Share, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFeature } from "@/api/hooks";
-import { currentVersion, describeRunningUpdate } from "@/lib/appUpdate";
+import { describeRunningUpdate } from "@/lib/appUpdate";
+import { version as appVersion } from "@/releaseVersion.json";
 import { screenInfoRows, screenInfoText, type ScreenInfoInput } from "@/lib/screenInfo";
 import { font, space, touch, useTheme } from "@/theme";
 import { Button, Card, Muted, Row, SectionTitle } from "./ui";
@@ -61,7 +62,7 @@ function useScreenInfo(): ScreenInfoInput {
     modelName: Device.modelName,
     osVersion: Device.osVersion,
     apiLevel: Device.platformApiLevel,
-    appVersion: currentVersion,
+    appVersion,
     build: describeRunningUpdate().updateId,
   };
 }

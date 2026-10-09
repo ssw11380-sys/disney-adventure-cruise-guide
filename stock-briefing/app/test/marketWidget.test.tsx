@@ -27,6 +27,10 @@ vi.mock("react-native-android-widget", async () => {
     TextWidget: text.TextWidget,
     ListWidget: list.ListWidget,
     getWidgetInfo: async (name: string) => (shared.widgets[name] ?? []).map((box, n) => ({ widgetName: name, widgetId: n + 1, ...box, screenInfo: {} })),
+    requestWidgetUpdateById: async ({ widgetName, widgetId, renderWidget }: { widgetName: string; widgetId: number; renderWidget: (i: unknown) => unknown }) => {
+      const box = shared.widgets[widgetName]?.[widgetId - 1];
+      if (box) shared.updates.push({ widgetName, rendered: await renderWidget({ widgetName, widgetId, ...box, screenInfo: {} }) });
+    },
     requestWidgetUpdate: async ({ widgetName, renderWidget }: { widgetName: string; renderWidget: (i: unknown) => unknown }) => {
       for (const box of shared.widgets[widgetName] ?? []) {
         shared.updates.push({ widgetName, rendered: await renderWidget({ widgetName, widgetId: 1, ...box, screenInfo: {} }) });
@@ -418,7 +422,7 @@ describe("데이터: 서버 판(&board=1) · 앱 지수 띠 · 마지막 값", (
   it("지수·환율 위젯을 추가하면 판을 함께 묻고(&board=1) 두 벌로 그린다", async () => {
     const urls = serve();
     const r = await run({ widgetAction: "WIDGET_ADDED" });
-    expect(urls).toEqual([`${API}/api/widget?indices=1&sessions=1&ui=2&ms=1&board=1`]);
+    expect(urls).toEqual([`${API}/api/widget?indices=1&sessions=1&ui=2&ms=1&account=1&board=1`]);
     expect(tileCodes(build(r[0]!.dark))).toHaveLength(9);
     expect(build(r[0]!.light).props.backgroundColor).toBe(light.surface);
     expect(words(build(r[0]!.dark))).toContain("14:40 기준");
@@ -451,12 +455,12 @@ describe("데이터: 서버 판(&board=1) · 앱 지수 띠 · 마지막 값", (
     vi.setSystemTime(NOW + 20 * 60_000);
     const holdingsCalls = serve(payload({ board: undefined }));
     await loadWidgetData({ stocks: true, briefings: false });
-    expect(holdingsCalls).toEqual([`${API}/api/widget?indices=1&sessions=1&ui=2&ms=1`]);
+    expect(holdingsCalls).toEqual([`${API}/api/widget?indices=1&sessions=1&ui=2&ms=1&account=1`]);
     // 잔고 쪽 조회가 판을 지우지 않는다 (마지막 값)
     expect((await loadCachedWidgetData()).board).toHaveLength(9);
     const again = serve();
     await run({ widgetAction: "WIDGET_UPDATE" });
-    expect(again).toEqual([`${API}/api/widget?indices=1&sessions=1&ui=2&ms=1&board=1`]);
+    expect(again).toEqual([`${API}/api/widget?indices=1&sessions=1&ui=2&ms=1&account=1&board=1`]);
   });
 
   it("widgetMarket 을 모르는 서버(롤백한 서버 등): 짧은 안내, 주기 갱신은 받아 둔 응답을 다시 쓴다 (판을 달라고 계속 묻지 않음)", async () => {
@@ -512,7 +516,7 @@ describe("데이터: 서버 판(&board=1) · 앱 지수 띠 · 마지막 값", (
       return new Response("", { status: 404 });
     });
     const r = await run({ widgetAction: "WIDGET_ADDED" });
-    expect(urls).toEqual([`${API}/api/widget?indices=1&sessions=1&ui=2&ms=1&board=1`]);
+    expect(urls).toEqual([`${API}/api/widget?indices=1&sessions=1&ui=2&ms=1&account=1&board=1`]);
     expect(words(build(r[0]!.dark))).toContain(MARKET_OFF_TEXT);
   });
 

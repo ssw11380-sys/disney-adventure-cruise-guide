@@ -8,6 +8,8 @@ import type { RegisteredWithQuote } from "@/api/types";
 import { AccountBand, accountFigures, accountSpeech, fxNote, lineProfit, type AccountData } from "@/components/AccountBand";
 import { LiveStatus, StaleBanner, useFeedState, usePull } from "@/components/Freshness";
 import { TableHeadRow } from "@/components/HoldingsTableHead";
+import { MemberNotice } from "@/components/MemberNotice";
+import { MEMBER_EMPTY_HOLDINGS, useAccountView } from "@/lib/account";
 import { MarketStrip } from "@/components/MarketStrip";
 import { BasisMark } from "@/components/NumberBasis";
 import { useReturnMark } from "@/components/ReturnMark";
@@ -17,6 +19,7 @@ import { StockRow } from "@/components/StockRow";
 import { PRICE_HEAD, useLineCols } from "@/components/StockLine";
 import { closeOpenRow, SwipeRow, type SwipeAction } from "@/components/SwipeRow";
 import { TossImportButton } from "@/components/TossImportButton";
+import { TossAccountSummary } from "@/components/TossAccountSummary";
 import { Button, ErrorView, TableHead } from "@/components/ui";
 import { panelBasisFit } from "@/lib/basisFit";
 import { gated } from "@/lib/features";
@@ -56,8 +59,12 @@ export default function StocksScreen() {
   // 비중 보기 (새 기능): 서버가 켤 때만 계좌 평가 패널에 '비중' 버튼
   const allocationOn = useFeature("allocationView", false);
   const openAllocation = useCallback(() => router.push("/portfolio/allocation"), []);
+  // 계정 A단계 (플래그 accounts): 주인 아닌 계정 (꺼져 있으면 늘 false — 지금 화면 그대로)
+  const { member } = useAccountView();
   // 숫자 기준 점 (3-32, 플래그 numberBasis): 켜졌을 때만 계좌 패널·띠에 점 + 토스 대조 글 (훅이므로 아래 이른 return 보다 위)
   const basisOn = useFeature("numberBasis", false);
+  const tossSnapshotOn = useFeature("tossAccountSnapshot", false);
+  const informationFocus = useFeature("informationFocus", false);
   // 촘촘 모드 (3-39): 서버 플래그 + 설정 '잔고 표시 촘촘'. 불러오는 중 화면도 쓰므로 일찍 돌아가는 줄보다 위에서 정한다
   const densityOn = useFeature("densityMode", false);
   const dense = densityOn && density === "dense";
@@ -90,7 +97,7 @@ export default function StocksScreen() {
   //   (접은 화면에서 본 종목을 펼친 뒤 이어 보려면 접힌 동안에도 재야 한다). 플래그 값을 처음 받는 순간 목록을 한 번 새로 그린다 (아래 key)
   const anchor = useHoldingsAnchor(fold.on ? holdingsLayoutKey({ wide, oneLineBand, rail: fold.rail, cols: heldPlan?.cols.length ?? 0 }) : null);
 
-  // 합계는 토스 앱과 같은 기준: 평가금액은 (설정 시) 수수료·세금 차감 후, 해외 종목 원화 손익은 매수 당시 환율의 원화 매입금액 기준
+  // 종목 시세 추정: 정렬·비중·추정 펼치기에 쓴다. 계좌 대표 금액은 토스 수신값을 표시한다.
   const summary = useMemo(() => summarize(data ?? [], afterCost), [data, afterCost]);
   // 넓은 창 계좌 띠의 당일 등락률 기준: 비용 차감 전 평가금액 (당일손익이 비용 차감 전 금액이라 — AccountBand dayRateOf). 차감이 꺼져 있으면 같은 값
   const grossValue = useMemo(() => {
@@ -287,9 +294,12 @@ export default function StocksScreen() {
 
   // 넓은 한 줄 계좌 띠에 국내·해외 수익률까지 넣는 폭인지 (좁은 한 줄 띠는 숫자 기준 점만 — 글 없음)
   const rates = bandRates(tableW, fontScale);
+  // 계정 A단계: 주인 아닌 계정은 맨 위에 '개인 종목 기능은 준비 중' 안내 (주인·플래그 꺼짐이면 없음)
+  const wrapAccount = (content: React.ReactNode) => gated(tossSnapshotOn && !member, true) ? <TossAccountSummary focused={gated(informationFocus, true)} onAllocation={gated(allocationOn && summary.held > 0, openAllocation)}>{content}</TossAccountSummary> : content;
   const header = wide ? (
     <View>
-      {summary.held > 0 && heldPlan ? (
+      <MemberNotice />
+      {wrapAccount(summary.held > 0 && heldPlan ? (
         <AccountBand
           data={account}
           oneLine={oneLineBand}
@@ -299,12 +309,13 @@ export default function StocksScreen() {
           {...(dense ? { dense: true } : null)}
           {...(basisOn ? { basis: basisMark, width: tableW } : null)}
         />
-      ) : null}
+      ) : null)}
     </View>
   ) : (
     <View>
       <MarketStrip {...(dense ? { dense: true } : null)} />
-      {summary.held > 0 ? (
+      <MemberNotice />
+      {wrapAccount(summary.held > 0 ? (
         <AccountPanel
           data={account}
           onAllocation={gated(allocationOn, openAllocation)}
@@ -313,7 +324,7 @@ export default function StocksScreen() {
           // 휴대폰 목록은 창 폭을 다 쓴다 (좌우 여백은 패널 안에서)
           {...(basisOn ? { basis: basisMark, width: winW, fontScale } : null)}
         />
-      ) : null}
+      ) : null)}
     </View>
   );
 
@@ -351,12 +362,12 @@ export default function StocksScreen() {
         </View>
       )}
       <TableHead>
-        <HeadCell label="종목명" a11y="이름순 정렬" active={sort === "name"} onPress={() => pickSort("name")} flex />
-        <HeadCell label={PRICE_HEAD} a11y="등락률순 정렬" active={sort === "changeRate"} onPress={() => pickSort("changeRate")} width={col.price} />
+        <HeadCell focused={gated(informationFocus, true)} label="종목명" a11y="이름순 정렬" active={sort === "name"} onPress={() => pickSort("name")} flex />
+        <HeadCell focused={gated(informationFocus, true)} label={PRICE_HEAD} a11y="등락률순 정렬" active={sort === "changeRate"} onPress={() => pickSort("changeRate")} width={col.price} />
         {section.key === "held" ? (
-          <HeadCell label="평가손익·수익률" a11y="평가손익순 정렬" active={sort === "profit"} onPress={() => pickSort("profit")} width={col.right} />
+          <HeadCell focused={gated(informationFocus, true)} label="평가손익·수익률" a11y="평가손익순 정렬" active={sort === "profit"} onPress={() => pickSort("profit")} width={col.right} />
         ) : (
-          <HeadCell label="전일대비·거래량" width={col.right} />
+          <HeadCell focused={gated(informationFocus, true)} label="전일대비·거래량" width={col.right} />
         )}
       </TableHead>
     </View>
@@ -365,7 +376,18 @@ export default function StocksScreen() {
   const tableHeader = (section: (typeof sections)[number]) => (
     <TableHeadRow plan={(section.key === "held" ? heldPlan : watchPlan)!} title={section.title} sort={sort} sortLabel={sortLabel} onSort={pickSort} onOpenSort={() => setSortOpen(true)} />
   );
-  const empty = ux.emptyGuide ? (
+  // 계정 A단계: 주인 아닌 계정은 종목을 아직 추가할 수 없으므로(서버가 막는다) '종목 검색' 대신 차분한 안내 + [시장·종목 둘러보기] (발견 탭 — 검증 4차)
+  const empty = member ? (
+    <View style={[styles.empty, { borderColor: t.line, backgroundColor: t.surface }]}>
+      <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700" }} accessibilityRole="header">
+        {MEMBER_EMPTY_HOLDINGS.title}
+      </Text>
+      <Text style={{ color: t.muted, fontSize: font.small }}>{MEMBER_EMPTY_HOLDINGS.hint}</Text>
+      <View style={{ flexDirection: "row", marginTop: space.sm, width: "100%", maxWidth: layout.readableMax, alignSelf: "center" }}>
+        <Button title={MEMBER_EMPTY_HOLDINGS.action} icon="compass-outline" variant="secondary" onPress={() => router.navigate("/discover")} style={{ flex: 1 }} />
+      </View>
+    </View>
+  ) : ux.emptyGuide ? (
     // 3-24 빈 화면 (플래그 emptyGuide): 무엇을 하면 되는지 한 문단 + 행동 버튼 하나 (토스 계좌는 설정의 칸 이름으로 알려 준다)
     <View style={[styles.empty, { borderColor: t.line, backgroundColor: t.surface }]}>
       <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700" }} accessibilityRole="header">
@@ -533,11 +555,11 @@ function StripEnd({ status }: { status: React.ReactNode }) {
   );
 }
 
-function HeadCell({ label, a11y, active, onPress, width, flex }: { label: string; a11y?: string; active?: boolean; onPress?: () => void; width?: number; flex?: boolean }) {
+function HeadCell({ label, a11y, active, onPress, width, flex, focused = false }: { label: string; a11y?: string; active?: boolean; onPress?: () => void; width?: number; flex?: boolean; focused?: boolean }) {
   const t = useTheme();
   const body = (
     <View style={{ flexDirection: "row", alignItems: "center", justifyContent: flex ? "flex-start" : "flex-end", gap: space.xxs }}>
-      <Text style={{ color: active ? t.ink : t.muted, fontSize: font.tiny, fontWeight: active ? "700" : "500", textAlign: flex ? "left" : "right", flexShrink: 1 }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+      <Text style={{ color: active ? t.ink : t.muted, fontSize: font.tiny, fontWeight: active ? "700" : "500", textAlign: flex ? "left" : "right", flexShrink: 1 }} {...(focused ? { maxFontSizeMultiplier: fontCap.row } : {})} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
         {label}
       </Text>
       {active ? <Ionicons name="caret-down" size={font.tiny} color={t.ink} /> : null}

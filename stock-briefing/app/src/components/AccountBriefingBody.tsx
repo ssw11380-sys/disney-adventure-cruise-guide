@@ -1,6 +1,6 @@
 import { router } from "expo-router";
 import React, { useState } from "react";
-import { Linking, Pressable, StyleSheet, Text, useWindowDimensions, View, type StyleProp, type TextStyle, type ViewStyle } from "react-native";
+import { Pressable, StyleSheet, Text, useWindowDimensions, View, type StyleProp, type TextStyle, type ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAccountBriefing, useFeature, useFeatures } from "@/api/hooks";
 import type { AccountBriefingWithData, AccountData, AccountEvents, AccountExposure, AccountSchedule } from "@/api/types";
@@ -22,6 +22,7 @@ import { accountColumns } from "@/lib/briefingPick";
 import { gated } from "@/lib/features";
 import { formatDateKo, formatIndexValue, formatPct, formatWon, SESSION_LABEL, shownSign } from "@/lib/format";
 import { viewState } from "@/lib/freshness";
+import { openSourceLink } from "@/lib/openSourceLink";
 import { quoteBasisChunks, quoteBasisSpeech } from "@/lib/numberBasis";
 import { changeColor, font, fontCap, space, touch, useTheme } from "@/theme";
 import { foldBriefings as FB, layout as L } from "@/tokens";
@@ -84,8 +85,8 @@ export function AccountBriefingBody({ numId, layout, title }: { numId: number | 
   const view = viewState(q);
   if (view === "error") return <Screen disclaimer={paneNote}><ErrorView error={q.error} onRetry={() => void q.refetch()} {...guide} /></Screen>;
   if (view === "loading" || !data) return <Screen disclaimer={paneNote}><CardsSkeleton count={3} /></Screen>;
-  // 2단 오른쪽 칸은 끊김·지연 띠를 탭 위쪽에 한 번만 둔다
-  return <AccountBriefingView b={data} top={layout === "pane" ? null : <StaleBanner query={q} {...guide} />} layout={layout} title={title} trim={trim} since={since} exposure={exposure} events={events} quoteBasisOn={quoteBasisOn} />;
+  // 목록 조회가 성공해도 선택한 계좌 본문만 실패할 수 있으므로 각 본문의 상태를 알린다.
+  return <AccountBriefingView b={data} top={<StaleBanner query={q} {...guide} />} layout={layout} title={title} trim={trim} since={since} exposure={exposure} events={events} quoteBasisOn={quoteBasisOn} />;
 }
 
 /**
@@ -169,7 +170,8 @@ function AccountBriefingView({
   );
   const basisLine = d ? (
     <Muted style={styles.basis}>
-      기준: {d.basis} · {formatDateKo(d.asOf, true)} 계산
+      {/* 저장한 숫자·본문은 그대로 두고, 현재 잔고와 같다는 과거 설명만 표시할 때 바로잡는다. */}
+      기준: {d.basis.replaceAll("앱 잔고 화면과 같은 기준", "작성 당시 종목 시세 기준 추정")} · {formatDateKo(d.asOf, true)} 계산
     </Muted>
   ) : null;
   // 브리핑 3차 4 (플래그 accountExposure): 비중 두 줄이 있으면 맨 아래 기준 줄 밑에 '비중'·'미국 상장'의 뜻 한 줄 (첫 화면 밖 — 총 평가 카드를 늘리지 않게). 꺼지면 지금 그대로
@@ -355,7 +357,7 @@ function TotalsCard({ d, exposure = false, quoteBasisOn = false }: { d: AccountD
           <Kpi label="평가손익" value={formatWon(d.totalProfit, { sign: true })} sub={d.totalProfitRate !== null ? formatPct(d.totalProfitRate) : null} tone={d.totalProfit} rate={d.totalProfitRate} />
         </View>
       </View>
-      <Muted>보유 {d.holdings}종목 합계 · 앱 잔고 화면과 같은 기준</Muted>
+      <Muted>보유 {d.holdings}종목 합계 · 작성 당시 종목 시세 기준 추정</Muted>
       {quoteBasisOn ? <QuoteBasisRow d={d} /> : null}
       {d.excluded.length ? <Muted>합계에서 뺀 종목: {d.excluded.map((e) => `${e.name}(${e.reason})`).join(", ")}</Muted> : null}
       {exposure && d.exposure ? <ExposureLines e={d.exposure} /> : null}
@@ -381,7 +383,7 @@ function TotalsBand({ d, exposure = false, quoteBasisOn = false }: { d: AccountD
         <BandKpi label="당일 손익" value={formatWon(d.dayPnl, { sign: true })} sub={d.dayRate !== null ? formatPct(d.dayRate) : null} tone={d.dayPnl} rate={d.dayRate} />
         <BandKpi label="평가손익" value={formatWon(d.totalProfit, { sign: true })} sub={d.totalProfitRate !== null ? formatPct(d.totalProfitRate) : null} tone={d.totalProfit} rate={d.totalProfitRate} />
       </View>
-      <Muted>보유 {d.holdings}종목 합계 · 앱 잔고 화면과 같은 기준</Muted>
+      <Muted>보유 {d.holdings}종목 합계 · 작성 당시 종목 시세 기준 추정</Muted>
       {quoteBasisOn ? <QuoteBasisRow d={d} /> : null}
       {d.excluded.length ? <Muted>합계에서 뺀 종목: {d.excluded.map((e) => `${e.name}(${e.reason})`).join(", ")}</Muted> : null}
       {exposure && d.exposure ? <ExposureLines e={d.exposure} /> : null}
@@ -628,7 +630,7 @@ function ContributionCard({ d, wide = false, trim }: { d: AccountData; wide?: bo
       <Muted style={styles.cardFoot}>
         {table.matches ? "줄의 합이 당일 손익과 같습니다(원 단위로 나눔)." : "줄의 합이 당일 손익과 다릅니다. 다시 만들면 바로잡힙니다."}
         {d.fx.appliedRate ? ` 미국 종목은 적용 환율 ${formatIndexValue(d.fx.appliedRate)}원으로 원화 환산.` : ""}
-        {d.krPreviousDay ? (trim ? ` ${mdw(d.date)} 한국 휴장이라 국내 종목은 직전 거래일 등락입니다(앱 잔고 화면과 같은 기준).` : " 오늘 한국은 휴장이라 국내 종목은 직전 거래일 등락입니다(앱 잔고 화면과 같은 기준).") : ""}
+        {d.krPreviousDay ? (trim ? ` ${mdw(d.date)} 한국 휴장이라 국내 종목은 직전 거래일 등락입니다(작성 당시 종목 시세 기준 추정).` : " 오늘 한국은 휴장이라 국내 종목은 직전 거래일 등락입니다(작성 당시 종목 시세 기준 추정).") : ""}
         {d.usPreviousDay ? ` ${usHolidayWhen(d.date, d.usHolidayDate)} 미국은 휴장이라 미국 종목은 직전 거래일 등락입니다(앞 브리핑에 이미 담긴 움직임).` : ""}
       </Muted>
     </Card>
@@ -667,7 +669,7 @@ function ImpactCard({ d, trim }: { d: AccountData; trim: boolean }) {
           </Line>
           <View accessible accessibilityLabel={fxEquationSpeech(fx) ?? undefined}>
             <Muted>
-              미국 보유분 원화 평가 변화 {formatWon(fx.usdHoldingsKrwChange!, { sign: true })} = 가격 효과 {formatWon(fx.priceEffect!, { sign: true })} + 환율 효과 {formatWon(fx.fxEffect!, { sign: true })}. 환율 효과는 원/달러 전일 대비 변동으로 계산하며, 당일 손익(앱 잔고 화면과 같은 기준)에는 넣지 않습니다.
+              미국 보유분 원화 평가 변화 {formatWon(fx.usdHoldingsKrwChange!, { sign: true })} = 가격 효과 {formatWon(fx.priceEffect!, { sign: true })} + 환율 효과 {formatWon(fx.fxEffect!, { sign: true })}. 환율 효과는 원/달러 전일 대비 변동으로 계산하며, 당일 손익(작성 당시 종목 시세 기준 추정)에는 넣지 않습니다.
             </Muted>
           </View>
         </>
@@ -693,7 +695,7 @@ function ScheduleCard({ s, asOf }: { s: AccountSchedule; asOf: string }) {
           x.url ? (
             <Pressable
               key={`${x.code}-${x.title}-${x.filedAt}`}
-              onPress={() => void Linking.openURL(x.url!)}
+              onPress={() => void openSourceLink(x.url!)}
               accessibilityRole="link"
               accessibilityLabel={sentence([x.name, "공시", x.title, formatDateKo(x.filedAt), "DART 에서 열기"])}
               style={({ pressed }) => [styles.disclosure, { backgroundColor: pressed ? t.surfaceAlt : "transparent" }]}

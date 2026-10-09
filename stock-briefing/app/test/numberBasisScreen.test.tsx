@@ -86,6 +86,7 @@ vi.mock("@/components/AccountBand", async (orig) => {
 });
 
 const { default: StocksScreen } = await import("@/app/(tabs)/index");
+const { BasisMark } = await import("@/components/NumberBasis");
 const { forgetWindowClass } = await import("@/lib/useFoldLayout");
 const { forgetHoldingsAnchor } = await import("@/lib/holdingsAnchor");
 const { dark, space, touch } = await import("@/tokens");
@@ -176,6 +177,17 @@ describe("끔 — 지금 그대로", () => {
 });
 
 describe("켬 — 폰·접은 화면 475×751", () => {
+  it("토스 계좌 탭과 함께 쓰는 배지는 전체 계좌가 아니라 동일 종목 비교임을 닫힌 상태에서도 알린다", () => {
+    h.flags = { tossAccountSnapshot: true };
+    h.badge = { ...BADGE_OK, status: { ...BADGE_OK.status!, last: { ...BADGE_OK.status!.last!, n: 19, diffPct: 0.24 } } };
+    const r = render(<BasisMark stocks={STOCKS} account={{ afterCost: true } as never} />);
+    const mark = marks(r)[0]!;
+    expect(textIn(mark)).toBe("동일 종목 차이 0.24%");
+    expect(mark.props.accessibilityLabel).toContain("같은 종목 19개 비교");
+    h.badge = BADGE_OK;
+    r.rerender();
+    expect(textIn(marks(r)[0]!)).toBe("동일 종목 0.1% 이내");
+  });
   it("총액 줄 오른쪽 끝에 점 + '토스와 0.1% 이내' (새 줄 없음), 요약 문장 밖, 누르는 칸 44×44", () => {
     h.flags = { allocationView: true, numberBasis: true };
     const r = draw();

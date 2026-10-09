@@ -347,6 +347,72 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>, dialect: D
       await sql`create unique index if not exists uq_value_references_market_date on value_references (market, ref_date)`.execute(db);
     },
   },
+  {
+    version: 12,
+    up: async (db) => {
+      // 종목을 지정하지 않은 최신 목록도 전체 보고서를 정렬하지 않고 조회한다. 기존 내용과 이력은 보존한다.
+      await sql`create index if not exists idx_briefings_date_created on briefings (briefing_date desc, created_at desc)`.execute(db);
+    },
+  },
+  {
+    version: 13,
+    up: async (db) => {
+      // 기존 보고서·계좌 자료는 그대로 두고 작업 소유권·완료 단계·원 재무값을 별도 보존한다.
+      await db.schema.createTable("generation_jobs").ifNotExists()
+        .addColumn("job_key", "text", (c) => c.primaryKey())
+        .addColumn("run_id", "text", (c) => c.notNull())
+        .addColumn("owner", "text", (c) => c.notNull())
+        .addColumn("signature", "text", (c) => c.notNull())
+        .addColumn("status", "text", (c) => c.notNull())
+        .addColumn("started_at", "text", (c) => c.notNull())
+        .addColumn("updated_at", "text", (c) => c.notNull())
+        .addColumn("lease_until", "text", (c) => c.notNull())
+        .addColumn("checkpoint", "text", (c) => c.notNull())
+        .addColumn("result", "text")
+        .addColumn("error", "text").execute();
+      await sql`create index if not exists idx_generation_jobs_status_lease on generation_jobs (status, lease_until)`.execute(db);
+      await sql`create index if not exists idx_generation_jobs_status_updated on generation_jobs (status, updated_at)`.execute(db);
+      await db.schema.createTable("generation_requests").ifNotExists()
+        .addColumn("request_key", "text", (c) => c.primaryKey())
+        .addColumn("job_key", "text", (c) => c.notNull())
+        .addColumn("run_id", "text", (c) => c.notNull())
+        .addColumn("status", "text", (c) => c.notNull())
+        .addColumn("result", "text")
+        .addColumn("updated_at", "text", (c) => c.notNull()).execute();
+      await sql`create index if not exists idx_generation_requests_run on generation_requests (job_key, run_id)`.execute(db);
+      await sql`create index if not exists idx_generation_requests_updated on generation_requests (updated_at)`.execute(db);
+      await db.schema.createTable("fundamentals_cache").ifNotExists()
+        .addColumn("code", "text", (c) => c.primaryKey())
+        .addColumn("payload", "text", (c) => c.notNull())
+        .addColumn("fetched_at", "text", (c) => c.notNull()).execute();
+    },
+  },
+  {
+    version: 14,
+    up: async (db) => {
+      // 관심 가격은 보유 수량·평단과 독립해 보존한다.
+      await db.schema.createTable("watch_items").ifNotExists()
+        .addColumn("code", "text", c => c.primaryKey())
+        .addColumn("name", "text", c => c.notNull())
+        .addColumn("market", "text", c => c.notNull())
+        .addColumn("start_price", "double precision", c => c.notNull())
+        .addColumn("desired_price", "double precision", c => c.notNull())
+        .addColumn("alerts", "integer", c => c.notNull())
+        .addColumn("revision", "text", c => c.notNull())
+        .addColumn("created_at", "text", c => c.notNull())
+        .addColumn("updated_at", "text", c => c.notNull()).execute();
+      await db.schema.createTable("movement_marks").ifNotExists()
+        .addColumn("mark_key", "text", c => c.primaryKey())
+        .addColumn("up", "integer", c => c.notNull().defaultTo(0))
+        .addColumn("down", "integer", c => c.notNull().defaultTo(0))
+        .addColumn("created_at", "text", c => c.notNull()).execute();
+      await db.schema.createTable("movement_events").ifNotExists()
+        .addColumn("event_key", "text", c => c.primaryKey()).addColumn("code", "text", c => c.notNull())
+        .addColumn("scope", "text", c => c.notNull()).addColumn("payload", "text", c => c.notNull())
+        .addColumn("created_at", "text", c => c.notNull()).execute();
+      await sql`create index if not exists idx_movement_events_created on movement_events (created_at)`.execute(db);
+    },
+  },
 ];
 
 export async function migrate(db: Kysely<Database>, dialect: Dialect = "sqlite"): Promise<void> {

@@ -107,6 +107,24 @@ describe("잔고 탭 '비중' 버튼", () => {
 });
 
 describe("비중 보기 화면", () => {
+  it("주인 아닌 계정(계정 A단계)이 딥링크로 열면 준비 중 안내만 — 잔고를 받지 않고, 수량·평균 단가를 넣으라거나 '잔고로' 버튼이 없다", async () => {
+    const { resetSessionForTests, saveSession } = await import("@/lib/session");
+    h.flags = { allocationView: true, accounts: true, emptyGuide: true };
+    await saveSession({ apiUrl: "https://prod.test", token: "gzs1_m", remember: false, user: { id: 7, loginId: "newbie", email: null, isOwner: false, usingInitialPassword: false } });
+    // 앞 테스트가 그려 둔 잔고 탭도 세션 바뀜에 다시 그려지므로 여기서부터 센다
+    h.stocksCalls = 0;
+    try {
+      const r = render(<AllocationScreen />);
+      expect(h.stocksCalls).toBe(0);
+      const empty = byType(r, "Empty");
+      expect(empty.map((e) => e.props.title)).toEqual(["개인 종목 기능은 준비 중이에요"]);
+      expect(String(empty[0]!.props.hint)).not.toContain("수량");
+      expect(empty[0]!.props.action).toBeUndefined();
+    } finally {
+      resetSessionForTests();
+    }
+  });
+
   it("플래그가 꺼져 있으면 잔고를 받지도 계산하지도 않고 안내만 (화면 작업 0건)", () => {
     const r = render(<AllocationScreen />);
     expect(h.stocksCalls).toBe(0);

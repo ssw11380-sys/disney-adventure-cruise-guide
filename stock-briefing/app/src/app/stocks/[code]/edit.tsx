@@ -3,7 +3,7 @@ import React, { useState } from "react";
 import { Alert, StyleSheet, Text, TextInput, View } from "react-native";
 import { useQueryClient } from "@tanstack/react-query";
 import { ApiRequestError } from "@/api/client";
-import { useApi, useStock, useStockMutations } from "@/api/hooks";
+import { useApi, useFeature, useStock, useStockMutations } from "@/api/hooks";
 import type { Evaluation, RegisteredStock } from "@/api/types";
 import { useSettings } from "@/lib/settings";
 import { Screen } from "@/components/Screen";
@@ -93,6 +93,7 @@ function formatTradeAvg(avg: number, cur: "KRW" | "USD"): string {
 
 function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluation | null } }) {
   const t = useTheme();
+  const tossSnapshotOn = useFeature("tossAccountSnapshot", false);
   const api = useApi();
   const qc = useQueryClient();
   const { apiUrl } = useSettings();
@@ -102,8 +103,9 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
   const krwCost = krw.value;
   const [savingKrw, setSavingKrw] = useState(false);
   const saveKrwCost = async () => {
-    const v = Number(krwCost.replace(/[^0-9.]/g, ""));
-    if (!(v > 0)) {
+    // 다른 금액 칸과 같은 방식으로 쉼표만 제거한다. 음수 부호나 잘못된 글자를 지워 금액을 바꾸지 않는다.
+    const v = parseNum(krwCost);
+    if (v === null || !(v > 0) || !Number.isFinite(v)) {
       Alert.alert("입력 확인", "원화 매입금액을 숫자로 입력하세요.");
       return;
     }
@@ -117,7 +119,9 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
       await qc.invalidateQueries({ queryKey: [apiUrl, "stocks"] });
       await qc.invalidateQueries({ queryKey: [apiUrl, "stock", stock.code] });
       if (deferred) Alert.alert("저장됨 (동기화 뒤 적용)", MANUAL_KRW_NOTE);
-      else Alert.alert("저장됨", "원화 손익이 토스 앱과 같은 기준으로 계산됩니다.");
+      else Alert.alert("저장됨", tossSnapshotOn
+        ? "원화 매입금액을 실시간 평가에 반영했습니다. 토스 계좌 손익에는 다음 계좌 동기화 뒤 반영됩니다."
+        : "원화 손익이 토스 앱과 같은 기준으로 계산됩니다.");
     } catch (e) {
       Alert.alert("저장 실패", e instanceof Error ? e.message : String(e));
     } finally {
@@ -167,6 +171,10 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
     if (side === "sell" && q > (num(quantity) ?? 0)) return { error: "보유 수량보다 많이 매도할 수 없습니다" as const };
     // 평단 칸을 고치지 않았으면 화면에 줄여 보인 값이 아니라 저장된 원래 값으로 계산한다
     const avg0 = avgPrice.trim() === initial.avgPrice.trim() ? stock.avgPrice : num(avgPrice);
+    // 기존 보유분의 원가를 모르면 새 체결가만으로 전체 평단을 계산할 수 없다.
+    if (side === "buy" && (num(quantity) ?? 0) > 0 && (avg0 === null || !(avg0 > 0) || !Number.isFinite(avg0))) {
+      return { error: "추가 매수 후 평균 단가를 계산하려면 기존 보유 종목의 평균 단가를 먼저 입력하세요." };
+    }
     return applyTrade({ quantity: num(quantity), avgPrice: avg0 }, side, q, p, cur);
   })();
 
@@ -229,7 +237,7 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
         <Card>
           <SectionTitle>원화 매입금액</SectionTitle>
           <Muted>
-            토스 앱 원화 보기에서 이 종목의 평가금액 − 평가손익 값을 넣으면 원화 손익이 토스와 똑같아집니다.{" "}
+            토스 앱 원화 보기에서 이 종목의 평가금액 − 평가손익 값을 넣으면 원화 매입금액 기준을 맞출 수 있습니다. 시세·비용 기준이 다르면 손익에는 차이가 남을 수 있습니다.{" "}
             {ev.costBasisKrw ? `현재 ${Math.round(ev.costBasisKrw).toLocaleString("ko-KR")}원 (${ev.krwCostSource === "exact" ? "토스 값" : "체결 환율 추정"})` : ""}
           </Muted>
           <View style={{ flexDirection: "row", gap: space.sm }}>

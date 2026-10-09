@@ -20,6 +20,13 @@ describe("켜자마자 보일 캐시: 저장할 쿼리 고르기", () => {
   it("새로고침이 실패 중이어도 받은 값은 계속 저장 (다음 오프라인 실행 때 보이게)", () => {
     expect(shouldPersist([url, "stocks"], ok({ error: new Error("Network request failed") }), NOW)).toBe(true);
   });
+  it("자동 로그인을 끈 세션(계정 A단계): 잔고(개인)는 기기에 적지 않고 지수·플래그는 그대로 — 앱을 닫으면 잔고도 사라지게", () => {
+    const off = (u: string) => u !== url;
+    expect(shouldPersist([url, "stocks"], ok(), NOW, off)).toBe(false);
+    expect(shouldPersist([url, "indices"], ok(), NOW, off)).toBe(true);
+    expect(shouldPersist([url, "features"], ok(), NOW, off)).toBe(true);
+    expect(shouldPersist(["https://other.test", "stocks"], ok(), NOW, off)).toBe(true);
+  });
   it("토큰 오류(401)로 실패 중이면 저장하지 않음", () => {
     expect(shouldPersist([url, "stocks"], ok({ error: { status: 401 } }), NOW)).toBe(false);
   });

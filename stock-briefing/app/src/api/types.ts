@@ -1,4 +1,5 @@
 /** 백엔드 응답 타입 (backend/src/domain, services 와 맞춘다) */
+import type { AccountUser } from "@/lib/session";
 
 export type Market = "KOSPI" | "KOSDAQ" | "NASDAQ" | "NYSE" | "AMEX" | "US" | "UNKNOWN";
 export type Currency = "KRW" | "USD";
@@ -68,6 +69,8 @@ export interface Quote {
   asOf: string;
   source: string;
   afterMarket?: AfterMarketQuote | null;
+  /** 실제 보강한 재무 숫자의 원 수신 시각. 예전 서버는 없을 수 있다. */
+  fundamentalsBasis?: { receivedAt: string | null; refreshFailed: boolean; source: string | null; fields: string[] };
   priceBasis?: string; // "KRX+NXT 통합" | "KRX 정규장" | "정규장"
   priceKrw?: number | null; // 미국 종목 원화 환산
   /** 실시간 체결로 스냅샷과 다른 가격을 덮어쓴 현재가 (예전 서버의 초록 점 기준 — 새 서버면 realtime·session 을 쓴다, lib/liveDot) */
@@ -102,7 +105,7 @@ export interface TossOpenApiStatus {
     idleIntervalMin: number;
     running: boolean;
     lastRunAt: string | null;
-    lastTrigger: "startup" | "schedule" | "briefing" | "manual" | null;
+    lastTrigger: "startup" | "schedule" | "briefing" | "manual" | "order" | "view" | null;
     lastError: string | null;
     lastChanges: { added: number; updated: number; removed: number; holdings: number } | null;
     nextRunAt: string | null;
@@ -125,6 +128,10 @@ export interface TossImportResult {
   unchanged: string[];
   /** 전량 매도로 관심 종목으로 바뀐 종목 (구버전 서버에는 없음) */
   removed?: string[];
+  /** 사용자가 삭제하여 계좌 동기화에서 제외한 종목. holdings에는 계속 포함된다. */
+  excluded?: string[];
+  /** 일부 계좌 응답을 확인하지 못해 수량·평단 반영을 보류한 종목. */
+  deferred?: string[];
   holdings: { code: string; name: string; currency: Currency; quantity: number; avgPrice: number | null; lastPrice: number | null; market: string }[];
 }
 
@@ -207,6 +214,7 @@ export interface Briefing {
 }
 
 export interface BriefingWithData extends Briefing {
+  verification?: ReportVerification;
   data: {
     quote: Quote | null;
     technical: Record<string, unknown> | null;
@@ -660,7 +668,17 @@ export interface LastBriefingRun {
 
 export type AnalysisKind = "company" | "value" | "technical";
 
+/** 원자료 시세와 직접 대조한 명시적 주장. 본문 전체 사실성 검증을 뜻하지 않는다. */
+export interface ReportVerification {
+  scope: "quote_claims";
+  quoteAsOf: string | null;
+  quoteSource: string | null;
+  checkedClaims: number;
+  issues: { field: "price" | "changeRate"; reported: string; expected: string }[];
+}
+
 export interface Analysis {
+  verification?: ReportVerification;
   id: number;
   code: string;
   kind: AnalysisKind;
@@ -669,6 +687,21 @@ export interface Analysis {
   model: string;
   createdAt: string;
   cached: boolean;
+}
+
+/** 저장된 본문과 실행 상태만 읽는다. 새 분석을 만들지 않는다. */
+export interface AnalysisState {
+  latest: Analysis | null;
+  running: boolean;
+  /** 요청 ID를 보낸 경우에만 제공. 예전 서버에는 없다. */
+  request?: AnalysisRequestState;
+}
+
+export interface AnalysisRequestState {
+  id: string;
+  status: "pending" | "completed" | "failed" | "unknown";
+  /** 완료된 해당 요청의 결과. 다른 요청이 저장한 최신 결과와 구별한다. */
+  result: Analysis | null;
 }
 
 export interface NewsItem {
@@ -703,6 +736,11 @@ export interface Health {
   sources?: Record<string, string>;
   /** 토큰이 없거나 틀려 상세를 뺀 응답 */
   limited?: boolean;
+  /**
+   * 계정 A단계 서버: 토큰은 맞지만 주인 세션이 아니라(주인 아닌 계정·로그인 전) 공유 칸만 준 응답 — 서버 시각·출처 구성·모델 설정만.
+   * limited 가 아니다 (연결은 정상). 주인 데이터(토스 계좌·알림 기기·브리핑 상태·매매 기록)는 없다
+   */
+  viewer?: "shared";
   schedule: { timezone: string; running: boolean; jobs: { session: BriefingSession; cron: string; nextRun: string | null }[] } | null;
   devices?: number;
   authRequired?: boolean;
@@ -902,6 +940,19 @@ export interface ThemeDetail {
 export interface FeatureFlags {
   features: Record<string, boolean>;
   updatedAt: string | null;
+}
+
+/** 계정 A단계 (플래그 accounts): 로그인·가입 응답. token 은 이 응답에 한 번만 온다 */
+export interface AuthResult {
+  token: string;
+  user: AccountUser;
+  session: { id: number; remember: boolean; expiresAt: string };
+}
+
+/** GET /api/auth/me */
+export interface AuthMe {
+  user: AccountUser;
+  session: { id: number; remember: boolean; expiresAt: string };
 }
 
 /**
@@ -1122,6 +1173,8 @@ export interface BriefingStatusProblem {
 
 /** 브리핑 늦음·실패 안내 (서버 GET /api/briefings/status — 플래그가 꺼져 있거나 예전 서버면 404) */
 export interface BriefingStatus {
+  /** 시작부터 표시하는 현재 실행. 없는 필드는 예전 서버·기능 꺼짐, null은 실행 없음. */
+  activeRun?: BriefingActiveRun | null;
   session: BriefingSession | null;
   date: string;
   scheduledAt: string | null;
@@ -1139,6 +1192,40 @@ export interface BriefingStatus {
   retryAt: string | null;
   /** 상세의 '이 종목 다시 만들기'가 있는지 (플래그 briefingManualRun) */
   manualRun: boolean;
+}
+
+export interface BriefingActiveRun {
+  session: BriefingSession;
+  date: string;
+  trigger: "schedule" | "manual";
+  partial: boolean;
+  startedAt: string;
+  total: number;
+  /** 성공·실패·건너뜀을 포함해 처리가 끝난 수 */
+  done: number;
+}
+
+/** 토스 계좌 API가 준 통화별 주식 평가금액. 현금·예수금은 포함하지 않는다. */
+export interface TossAccountSnapshot {
+  source: "toss-openapi";
+  scope: "all-toss-stock-holdings";
+  excludesCash: true;
+  includesExcludedHoldings: true;
+  receivedFrom: string;
+  receivedAt: string;
+  accountCount: number;
+  holdingCount: number;
+  excludedHoldingCount: number;
+  gross: { krw: number; usd: number };
+  net: { krw: number; usd: number };
+  /** 같은 동기화에서 확보한 원화 매입금액. 예전 서버·미확보 기록에는 없다. */
+  costBasis?: { krw: number; estimatedHoldingCount: number; holdingCount: number; source: "synced-holdings-cost-book" } | null;
+  displayFx: { usdKrw: number; receivedAt: string; source: "app-display-fx"; kind: "reference" } | null;
+}
+export interface TossAccountSnapshotBody {
+  on: boolean;
+  snapshot: TossAccountSnapshot | null;
+  sync: { enabled: boolean; intervalMin: number; idleIntervalMin: number; lastRunAt: string | null; nextRunAt: string | null; lastError: string | null } | null;
 }
 
 /** 잔고 '숫자 기준' 배지 (3-32, 플래그 numberBasis — 서버 GET /api/admin/toss/reconcile/badge 와 같은 모양) */
@@ -1163,4 +1250,9 @@ export interface MarketQuoteBasis {
 export interface QuoteBasis {
   kr: MarketQuoteBasis | null;
   us: MarketQuoteBasis | null;
+}
+export interface WatchItem {
+  code: string; name: string; market: string; currency: "KRW" | "USD";
+  startPrice: number; desiredPrice: number; alerts: boolean;
+  createdAt: string; updatedAt: string; quote: Quote | null;
 }

@@ -238,7 +238,42 @@ export interface ValueReferenceTable {
   created_at: string;
 }
 
+export interface GenerationJobTable {
+  job_key: string;
+  run_id: string;
+  owner: string;
+  signature: string;
+  status: string;
+  started_at: string;
+  updated_at: string;
+  lease_until: string;
+  checkpoint: string;
+  result: string | null;
+  error: string | null;
+}
+
+export interface GenerationRequestTable {
+  request_key: string;
+  job_key: string;
+  run_id: string;
+  status: string;
+  result: string | null;
+  updated_at: string;
+}
+
+export interface FundamentalsCacheTable {
+  code: string;
+  payload: string;
+  fetched_at: string;
+}
+
 export interface Database {
+  watch_items: { code: string; name: string; market: string; start_price: number; desired_price: number; alerts: number; revision: string; created_at: string; updated_at: string };
+  movement_marks: { mark_key: string; up: number; down: number; created_at: string };
+  movement_events: { event_key: string; code: string; scope: string; payload: string; created_at: string };
+  generation_jobs: GenerationJobTable;
+  generation_requests: GenerationRequestTable;
+  fundamentals_cache: FundamentalsCacheTable;
   value_fundamentals: ValueFundamentalsTable;
   value_references: ValueReferenceTable;
   listed_stocks: ListedStockTable;

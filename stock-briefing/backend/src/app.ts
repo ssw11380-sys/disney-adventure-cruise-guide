@@ -10,9 +10,11 @@ import { seoulIso } from "./lib/time.js";
 import { GenerationError } from "./llm/generator.js";
 import { PromptStore } from "./llm/prompts.js";
 import { defaultsFromCron, NotificationSettingsStore, timeToCron } from "./notifications/settings.js";
+import { ReceiptStore } from "./notifications/receiptStore.js";
 import { describeProviders, metaStore, type Providers } from "./providers/index.js";
-import { adminRoutes, tossStatus, type AdminDeps } from "./routes/admin.js";
+import { adminRoutes, readTossAccountSnapshot, tossStatus, type AdminDeps } from "./routes/admin.js";
 import { HoldingsAutoSync, TossSyncService } from "./services/tossSyncService.js";
+import { AccountLiveRefresh } from "./services/accountLiveRefresh.js";
 import { analysisRoutes } from "./routes/analysis.js";
 import { appErrorAdminRoutes, appErrorRoutes } from "./routes/appErrors.js";
 import { briefingRoutes } from "./routes/briefings.js";
@@ -28,6 +30,8 @@ import cron from "node-cron";
 import { stockRoutes } from "./routes/stocks.js";
 import { BriefingScheduler } from "./scheduler.js";
 import { AnalysisService } from "./services/analysisService.js";
+import { createFundamentalsCacheStore } from "./providers/market/fundamentalsCacheStore.js";
+import { checkpointGenerator, GenerationJobs, type GenerationJobTiming } from "./services/generationJobs.js";
 import { BriefingService } from "./services/briefingService.js";
 import { AccountBriefingService } from "./services/accountBriefingService.js";
 import { HoldingEventsService } from "./services/holdingEvents.js";
@@ -58,6 +62,8 @@ import { scoreRoutes } from "./routes/scores.js";
 import { PriceAlertService } from "./services/priceAlertService.js";
 import { BriefingStatusService } from "./services/briefingStatus.js";
 import { priceAlertRoutes } from "./routes/priceAlerts.js";
+import { watchlistRoutes } from "./routes/watchlist.js";
+import { WatchlistService } from "./services/watchlistService.js";
 
 export interface BuildAppOptions {
   config: AppConfig;
@@ -71,6 +77,7 @@ export interface BuildAppOptions {
   now?: () => Date;
   /** 푸시 영수증 확인 대기 시간 (테스트용) */
   receiptDelayMs?: number;
+  generationJobTiming?: GenerationJobTiming;
 }
 
 export const DISCLAIMER = "투자 판단의 책임은 본인에게 있으며, 본 서비스는 투자 권유가 아닙니다.";
@@ -82,10 +89,15 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   await app.register(websocket, { options: { maxPayload: 4096 } });
   const log = app.log;
   const now = opts.now ?? (() => new Date());
+  const generationJobs = new GenerationJobs(opts.db, { ...opts.generationJobTiming, recordNow: now });
+  const generator = checkpointGenerator(opts.providers.generator);
+  opts.providers.fundamentals?.setCacheStore(createFundamentalsCacheStore(opts.db));
   // 기능 켜고 끄기 (3-15): 플래그 목록은 featureService.ts 한 곳
   const features = new FeatureService(opts.db, now);
 
-  const stockService = new StockService({ db: opts.db, ...opts.providers, tossSyncMinutes: opts.config.TOSS_SYNC_MINUTES, now });
+  const stockService = new StockService({ db: opts.db, ...opts.providers, tossSyncMinutes: opts.config.TOSS_SYNC_MINUTES, now,
+    extraLiveCodes: async () => (await features.enabled("watchlistSteps")) ? (await opts.db.selectFrom("watch_items").select("code").orderBy("created_at", "desc").orderBy("code").execute()).map(s => s.code) : [],
+  });
   // 가격·등락률·거래량 알림 (3-29, 플래그 priceAlerts): 조건 저장·울림 기록, 거래량 급증은 차트와 같은 30분봉 캐시(450개)로 계산
   const priceAlerts = new PriceAlertService({ db: opts.db, features, candles: (code) => stockService.getCandles(code, "30m", 450).then((s) => s.candles), now });
   const appErrors = new AppErrorService(opts.db, now);
@@ -123,7 +135,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     }
     // 원화 장부 보정에는 토스가 원화 평가에 쓰는 표시 환율이 필요하다 (fundamentals.usdKrw 는 토스 웹 표시 환율을 먼저 쓴다)
     const fundamentals = opts.providers.fundamentals;
-    const sync = new TossSyncService(opts.db, opts.providers.tossOpenApi, now, fundamentals ? () => fundamentals.usdKrw() : null, log);
+    const sync = new TossSyncService(opts.db, opts.providers.tossOpenApi, now, fundamentals ? () => fundamentals.usdKrw() : null, log, () => features.enabled("tossAccountSnapshot"));
     // 토스 앱에서 사고팔면 늦어도 TOSS_SYNC_MINUTES 안에 반영. 바뀐 게 있으면 실시간 구독 종목도 갱신
     const reconcile = new ReconcileService({ db: opts.db, now, log });
     const autoSync = new HoldingsAutoSync({
@@ -131,6 +143,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       // 동기화마다 앱 총평가와 토스 계좌 요약을 대조해 남긴다 (3-13)
       // 대조 기록 뒤 접속한 앱에 알린다 → '숫자 기준' 배지가 바로 바뀐다 (3-32, 플래그 numberBasis). priceStream 은 아래에서 만들고 동기화 때 부른다
       onResult: reconcileAfterSync({ features, reconcile, stocks: stockService, after: () => priceStream.notify("reconcile") }),
+      onSettled: () => priceStream.notify("account"),
       calendar: opts.providers.calendar,
       // 바뀐 게 있으면 실시간 구독 종목을 맞추고, 접속한 앱에 "잔고 변경"을 바로 알린다
       afterSync: async () => {
@@ -198,10 +211,16 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   }
 
   // 서버 → 앱 실시간 가격 스트림 (/api/stream). 토스 웹소켓 체결을 250ms 씩 모아 중계하고, 웹소켓이 없는 종목만 앱이 붙어 있는 동안 3초 폴링
+  const accountLiveRefresh = tossDeps && opts.enableScheduler !== false ? new AccountLiveRefresh({
+    autoSync: tossDeps.autoSync,
+    enabled: async () => await features.enabled("accountLiveRefresh") && await features.enabled("tossAccountSnapshot"),
+    now: () => now().getTime(),
+  }) : null;
   const priceStream = new PriceStream({
+    onActiveChange: (active) => accountLiveRefresh?.setActive(active),
     live: opts.providers.live,
     quickPrices: opts.providers.quickPrices,
-    codes: async () => (await stockService.list()).map((s) => s.code),
+    codes: () => stockService.streamCodes(),
     // 등록 종목 시장의 거래 세션이 모두 닫혀 있으면 토스 웹 폴링을 30초로 늦춘다 (달력은 5분 캐시).
     // 토스 달력 isOpen 은 미국 정규장만이라 세션(프리·애프터·주간거래 포함)으로 본다 — 그래야 웹소켓이 없는 종목도 3초마다 바뀐다
     marketOpen: async (codes) => anySessionOpen(codes, await opts.providers.calendar.status(), now()),
@@ -227,11 +246,12 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   });
   const prompts = opts.promptStore ?? new PromptStore();
   const briefingService = new BriefingService({
-    db: opts.db, collector, generator: opts.providers.generator, prompts, calendar: opts.providers.calendar, log, now,
+    db: opts.db, collector, generator, prompts, calendar: opts.providers.calendar, log, now, jobs: generationJobs,
     // 브리핑 2차 6: 종목 브리핑 AI 글 안전하게 (새 프롬프트·가격 줄 요약·금지어 검사)
     safeWording: () => features.enabled("briefingSafeWording"),
+    parallel: () => features.enabled("briefingParallel"),
   });
-  const analysisService = new AnalysisService({ db: opts.db, collector, generator: opts.providers.generator, prompts, lookup: (code) => stockService.preview(code), valueSafe: () => features.enabled("valueAiSafeWording"), log, now });
+  const analysisService = new AnalysisService({ db: opts.db, collector, generator, prompts, lookup: (code) => stockService.preview(code), valueSafe: () => features.enabled("valueAiSafeWording"), now, log, jobs: generationJobs });
 
   // 알림/시간 설정: DB 에 저장된 값이 .env 기본값을 덮어쓴다
   const settingsStore = new NotificationSettingsStore(
@@ -253,11 +273,13 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       now,
     });
     scheduler.start();
-    app.addHook("onClose", async () => scheduler?.stop());
+    // preClose에는 플러그인 기한이 있으므로 새 예약만 막고 바로 끝낸다. 회수는 아래 마지막 onClose에서 한다.
+    app.addHook("preClose", async () => scheduler?.beginShutdown());
   }
 
   const deviceService = new DeviceService(opts.db, opts.providers.push, now);
   const notificationService = new NotificationService({
+    receipts: new ReceiptStore(opts.db),
     push: opts.providers.push,
     devices: deviceService,
     settings: settingsStore,
@@ -267,6 +289,11 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     ...(opts.receiptDelayMs !== undefined ? { receiptDelayMs: opts.receiptDelayMs } : {}),
   });
   // 지수 띠와 잔고 위젯 지수 줄, 계좌 브리핑(3-31)이 같은 목록(30초 캐시·stale 규칙)을 쓰게 하나만 만든다
+  const watchlist = new WatchlistService({ db: opts.db, stocks: stockService, features, notifications: notificationService, settings: settingsStore, now,
+    onChange: async () => { await stockService.syncLive().catch(() => log.warn({}, "관심종목 실시간 구독 갱신 실패")); },
+    warn: () => log.warn({}, "5% 구간 알림 확인 실패") });
+  if (opts.enableScheduler !== false) watchlist.start();
+  app.addHook("onClose", async () => watchlist.stop());
   const marketIndices = opts.providers.indices ?? new MarketIndices();
   // 지표 점수 (3-44, 플래그 indicatorScores): 종목 상세의 추세 지표 점수. 일봉은 차트와 같은 캐시, 비교 지수는 위 지수 목록과 같은 인스턴스.
   // 장 마감 뒤(한국 20:10 · 뉴욕 17:30, 평일·거래일만) 등록 종목을 미리 계산해 기록한다. 플래그가 꺼져 있으면 예약이 돌아도 아무것도 하지 않는다
@@ -291,10 +318,11 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   // 계좌 한 장 브리핑 (3-31, 플래그 accountBriefing): 종목별 브리핑 실행이 끝나면 계좌 요약 1건을 만든다
   const accountBriefings = new AccountBriefingService({
     db: opts.db,
+    jobs: generationJobs,
     stocks: stockService,
     indices: marketIndices,
     calendar: opts.providers.calendar,
-    generator: opts.providers.generator,
+    generator,
     prompts,
     features,
     // 브리핑 3차 4 비중 한 줄 (플래그 accountExposure): 레버리지·인버스는 지표 점수와 같은 토스 웹 상품 정보(같은 인스턴스·24시간 캐시)로 가린다
@@ -303,6 +331,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     now,
     log,
   });
+  await notificationService.resumeReceipts();
   briefingService.onBriefing(notificationService.onBriefing);
   briefingService.onSessionStart(notificationService.onSessionStart);
   // 시장 전체 요약 (플래그 marketSummary): 아래 발견 탭 서비스(한국 업종)를 만든 뒤 채운다
@@ -322,7 +351,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     features,
     settings: () => settingsStore.get(),
     calendar: opts.providers.calendar,
-    progress: () => briefingService.progress,
+    progress: () => briefingService.currentProgress(),
     llmConfigured: () => opts.providers.generator.model !== "disabled",
     now,
     log,
@@ -441,6 +470,8 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
     appErrors: await appErrors.counts(7).catch(() => null),
     quotes: stockService.quoteStatus(),
     candles: stockService.candleStatus(),
+    fundamentalsCache: opts.providers.fundamentals?.cacheStats() ?? null,
+    notificationDelivery: await notificationService.deliveryStatus().catch(() => null),
     backup: await backups.status().catch(() => null),
     // 매매 기록(3-36): 켜져 있을 때만 (끄면 응답이 예전과 같게). 최근 5·30거래일 스냅샷이 빠진 날이 있으면 warning — ok 는 그대로 true
     ...((await features.enabled("tradeRecords")) ? { tradeRecords: await tradeRecords.status().catch(() => null) } : {}),
@@ -524,9 +555,11 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
 
   await app.register(stockRoutes, { prefix: "/api/stocks", service: stockService });
   await app.register(priceAlertRoutes, { prefix: "/api/price-alerts", service: priceAlerts });
+  await app.register(watchlistRoutes, { prefix: "/api/watchlist", service: watchlist, features });
   await app.register(analysisRoutes, {
     prefix: "/api/stocks",
     service: analysisService,
+    features,
     stocks: stockService,
     news: opts.providers.news,
     financials: opts.providers.financials,
@@ -536,7 +569,7 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
   await app.register(accountBriefingRoutes, {
     prefix: "/api/account-briefings",
     service: accountBriefings,
-    busy: () => briefingService.isRunning || accountBriefings.isRunning,
+    busy: async () => briefingService.isRunning || accountBriefings.isRunning || await generationJobs.anyRunning(["briefing:", "account:"]),
     now,
     // 관리용 실행은 그 세션의 브리핑 시각(알림 설정) 뒤에만 — 아직 오지 않은 세션을 미리 만들어 예약 실행이 건너뛰지 않게
     sessionTime: async (session) => {
@@ -548,8 +581,8 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
   // accounts: 계좌 한 장 브리핑(3-31)이 켜져 있으면 최근 id 를 위젯 응답에 넣어 앱 백그라운드 알림이 새 계좌 브리핑도 알아보게
   // schedule: 브리핑 위젯 안내에 설정한 브리핑 시간을 쓴다 (BH-68 — 예전에는 늘 '평일 08:30·16:00')
   // 브리핑 위젯 첫 줄(시장 전체 요약): 새 앱이 &ms=1 로 물을 때만, 플래그가 켜져 있을 때만 가장 최근 요약을 읽는다
-  await app.register(widgetRoutes, { prefix: "/api/widget", stocks: stockService, briefings: briefingService, calendar: opts.providers.calendar, features, indices: marketIndices, accounts: accountBriefings, schedule: () => settingsStore.get(), ...(summaries ? { summaries } : {}) });
-  await app.register(featureAdminRoutes, { prefix: "/api/admin/features", features });
+  await app.register(widgetRoutes, { prefix: "/api/widget", stocks: stockService, briefings: briefingService, calendar: opts.providers.calendar, features, indices: marketIndices, accounts: accountBriefings, schedule: () => settingsStore.get(), ...(summaries ? { summaries } : {}), tossAccount: () => readTossAccountSnapshot(tossDeps, features) });
+  await app.register(featureAdminRoutes, { prefix: "/api/admin/features", features, afterSet: async (patch) => { if ("watchlistSteps" in patch) await stockService.syncLive(); } });
   await app.register(adminRoutes, { prefix: "/api/admin", service: stockService, dart: opts.providers.dart, toss: tossDeps, outboundIp, backups, features });
   await app.register(tradeRecordRoutes, { prefix: "/api", service: tradeRecords, now });
   await app.register(tradeRecordAdminRoutes, { prefix: "/api/admin/trade-records", service: tradeRecords });
@@ -557,10 +590,18 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
   await app.register(appErrorRoutes, { prefix: "/api/app-errors", service: appErrors });
   await app.register(appErrorAdminRoutes, { prefix: "/api/admin/app-errors", service: appErrors });
   // running: 종목 브리핑과 이어지는 계좌 브리핑·시장 요약을 만드는 동안 (앱 백그라운드 알림이 기다렸다가 한 번에 알리게)
-  const notifDeps = { devices: deviceService, notifications: notificationService, settings: settingsStore, scheduler, features, isRunning: () => briefingService.isRunning || accountBriefings.isRunning || (marketSummaries?.isRunning ?? false) };
+  const notifDeps = { devices: deviceService, notifications: notificationService, settings: settingsStore, scheduler, features, isRunning: async () => briefingService.isRunning || accountBriefings.isRunning || (marketSummaries?.isRunning ?? false) || await generationJobs.anyRunning(["briefing:", "account:"]) };
   await app.register(deviceRoutes, { prefix: "/api/devices", ...notifDeps });
   await app.register(notificationRoutes, { prefix: "/api/notifications", ...notifDeps });
 
+  // 연결이 끊긴 수동 요청도 생성·저장을 끝낸다. 예약 종료 훅 뒤, 다른 자원 정리 전에 회수한다.
+  app.addHook("onClose", async () => {
+    await Promise.all([analysisService.shutdown(), briefingService.shutdown()]);
+    await accountBriefings.shutdown();
+    await opts.providers.fundamentals?.flushCache();
+  });
+  // onClose는 역순이다. 예약 사전 작업이 새 브리핑을 시작할 수 있으므로 예약부터 회수한다.
+  if (scheduler) app.addHook("onClose", async () => scheduler.shutdown());
   return app;
 }
 

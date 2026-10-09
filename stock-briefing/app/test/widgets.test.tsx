@@ -284,6 +284,51 @@ describe("위젯-1: 조회 실패", () => {
   });
 });
 
+describe("로그인 필요는 실패가 아니다 (계정 A단계 검증 5차)", () => {
+  it("로그인 필요·주인 아닌 계정: 예전·다듬은 잔고 위젯, 자산 위젯 어느 크기에서도 '갱신 실패'가 없고 안내만 — 진짜 실패(서버 오류)는 그대로 '갱신 실패'", async () => {
+    const { LOGIN_NEEDED, PERSONAL_NOT_READY } = await import("@/widgets/data");
+    const { quietState } = await import("@/widgets/model");
+    expect(quietState(LOGIN_NEEDED)).toBe(true);
+    expect(quietState(PERSONAL_NOT_READY)).toBe(true);
+    for (const e of [null, "HTTP 503", "Network request failed", "HTTP 401"]) expect(quietState(e), String(e)).toBe(false);
+    const { BriefingWidget } = await import("@/widgets/widgets");
+    const words = (error: string, polish: boolean, w: number, hgt: number, fontScale: number, stocks: RegisteredWithQuote[]) =>
+      [
+        ...texts(render(<HoldingsWidget stocks={stocks} showKrw={false} fetchedAt={NOW} error={error} now={NOW} width={w} height={hgt} fontScale={fontScale} {...(polish ? { polish: true } : {})} />)),
+        ...texts(render(<AssetWidget stocks={stocks} showKrw={false} fetchedAt={NOW} error={error} now={NOW} width={w} height={hgt} fontScale={fontScale} />)),
+        ...texts(render(<BriefingWidget briefings={[]} fetchedAt={NOW} error={error} now={NOW} width={w} height={hgt} fontScale={fontScale} {...(polish ? { polish: true } : {})} />)),
+      ].map((t) => t.text);
+    // 낮은 위젯·큰 글씨(메모 줄이 들어가지 않아 '갱신 실패'가 머리로 가던 크기 — 250×80 · 200% 등)까지
+    for (const w of [180, 250, 360, 445, 780])
+      for (const hgt of [80, 110, 180, 250])
+        for (const fontScale of [1, 1.3, 2])
+          for (const polish of [false, true]) {
+            const at = `${w}x${hgt} ${fontScale} ${polish}`;
+            const login = words(LOGIN_NEEDED, polish, w, hgt, fontScale, []).join(" ");
+            expect(login, at).not.toMatch(/갱신 실패|다시 시도|불러오지 못했/);
+            expect(login, at).toMatch(/로그인하면 보여요 · 눌러서 앱 열기/);
+            const member = words(PERSONAL_NOT_READY, polish, w, hgt, fontScale, []).join(" ");
+            expect(member, at).not.toMatch(/갱신 실패|다시 시도|불러오지 못했/);
+            expect(member, at).toMatch(/개인 종목 기능은 준비 중/);
+          }
+    // 진짜 실패는 그대로: 마지막 잔고가 있으면 '갱신 실패 …' (메모 줄 또는 머리), 받은 적이 없으면 ↻ 로 다시 시도
+    for (const polish of [false, true]) {
+      expect(words("HTTP 503", polish, 360, 180, 1, book()).join(" ")).toMatch(/갱신 실패/);
+      expect(words("HTTP 503", polish, 250, 80, 2, []).join(" ")).toMatch(/갱신 실패/);
+      expect(words("HTTP 503", polish, 360, 250, 1, []).join(" ")).toMatch(/잔고를 불러오지 못했습니다\. ↻ 로 다시 시도/);
+    }
+  });
+
+  it("지수·환율 위젯: 로그인 필요면 좁아도 '갱신 실패'로 줄이지 않는다", async () => {
+    const { LOGIN_NEEDED } = await import("@/widgets/data");
+    const { MarketWidget } = await import("@/widgets/marketWidget");
+    for (const w of [110, 180, 360]) {
+      const tx = texts(render(<MarketWidget board={null} boardAt={null} enabled error={LOGIN_NEEDED} now={NOW} width={w} height={110} />)).map((t) => t.text);
+      expect(tx.join(" "), String(w)).not.toMatch(/갱신 실패/);
+    }
+  });
+});
+
 describe("위젯-8: 기준 시각은 시세 시각", () => {
   it("장 마감 뒤에는 15:30 기준 (휴대폰이 받은 15:40 이 아니라)", () => {
     const words = texts(render(<HoldingsWidget stocks={book()} showKrw={false} fetchedAt={NOW} error={null} now={NOW} />)).map((t) => t.text);
@@ -448,7 +493,7 @@ describe("3-16 위젯 데이터·갱신 주기", () => {
     const a = await loadWidgetData({ stocks: true, briefings: true });
     const b = await loadWidgetData({ stocks: true, briefings: true });
     // 새 앱은 지수 줄을 그릴 수 있다고 알린다 (?indices=1 — 서버는 이 표시가 있을 때만 지수를 넣는다)
-    expect(calls.map((c) => c.url)).toEqual([`${API}/api/widget?indices=1&sessions=1&ui=2&ms=1`, `${API}/api/widget?indices=1&sessions=1&ui=2&ms=1`]);
+    expect(calls.map((c) => c.url)).toEqual([`${API}/api/widget?indices=1&sessions=1&ui=2&ms=1&account=1`, `${API}/api/widget?indices=1&sessions=1&ui=2&ms=1&account=1`]);
     expect(calls[1]!.inm).toBe('"abc"');
     expect(b.stocks.map((s) => s.code)).toEqual(a.stocks.map((s) => s.code));
     expect(b.market?.label).toBe("한국 장중");
@@ -463,7 +508,7 @@ describe("3-16 위젯 데이터·갱신 주기", () => {
       return new Response(JSON.stringify(url.includes("briefings") ? [] : book()), { status: 200 });
     });
     const d = await loadWidgetData({ stocks: true, briefings: true });
-    expect(urls).toEqual([`${API}/api/widget?indices=1&sessions=1&ui=2&ms=1`, `${API}/api/stocks?quotes=1`, `${API}/api/briefings/latest`]);
+    expect(urls).toEqual([`${API}/api/widget?indices=1&sessions=1&ui=2&ms=1&account=1`, `${API}/api/stocks?quotes=1`, `${API}/api/briefings/latest`]);
     expect(d.stocks).toHaveLength(18);
     expect(d.market).toBeNull();
   });
@@ -570,7 +615,7 @@ describe("3-16 위젯 데이터·갱신 주기", () => {
       return new Response(JSON.stringify({ ...payload, market: { label: "미국 주간거래", open: false, nextChangeAt: "2026-09-25T08:00:00Z", kr: false, us: false } }), { status: 200, headers: { etag: '"new"' } });
     });
     const d = await loadWidgetData({ stocks: true, briefings: true, reuse: true });
-    expect(calls).toEqual([{ url: `${API}/api/widget?indices=1&sessions=1&ui=2&ms=1`, inm: null }]);
+    expect(calls).toEqual([{ url: `${API}/api/widget?indices=1&sessions=1&ui=2&ms=1&account=1`, inm: null }]);
     expect(d.market?.label).toBe("미국 주간거래");
     // 새 주소로 받아 둔 응답은 그대로 다시 쓴다
     await loadWidgetData({ stocks: true, briefings: true, reuse: true });

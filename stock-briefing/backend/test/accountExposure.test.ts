@@ -327,15 +327,31 @@ describe("계좌 브리핑 저장: exposure (서비스)", () => {
     const hang = () => new Promise<ProductFacts | null>(() => undefined);
     // 종목마다 5초까지 기다려도 되지만 전체는 60ms — 동시에 4개를 부르고, 시간이 다 된 뒤의 2종목은 부르지 않는다
     const { svc, productFacts } = await setup({ facts: hang, productWaitMs: 5_000, productBudgetMs: 60 });
-    const t0 = Date.now();
-    const b = await make(svc);
-    expect(Date.now() - t0).toBeLessThan(2_000);
-    expect(b.status).toBe("ok");
-    expect(productFacts).toHaveBeenCalledTimes(4);
-    const e = (await svc.get(b.id)).data!.exposure!;
-    // 상품 정보 없이도 표(RGTX·122630)·종목 마스터(삼성전자 ST)로 가린 것은 그대로
-    expect(e.levInv.items.map((x) => x.code)).toEqual(["RGTX", "122630"]);
-    expect(e.count).toBe(5);
+    // 실제 타이머와 벽시계의 밀리초 경계 차이가 호출 수를 바꾸지 않도록 같은 고정 시계로 예산을 검증한다.
+    vi.useFakeTimers({ now: new Date("2026-09-28T08:38:00+09:00") });
+    try {
+      const t0 = Date.now();
+      let completed = false;
+      const pending = make(svc).then((b) => { completed = true; return b; });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(productFacts).toHaveBeenCalledTimes(4);
+      await vi.advanceTimersByTimeAsync(59);
+      expect(completed).toBe(false);
+      expect(productFacts).toHaveBeenCalledTimes(4);
+      await vi.advanceTimersByTimeAsync(1);
+      const b = await pending;
+      expect(Date.now() - t0).toBe(60);
+      expect(Date.now() - t0).toBeLessThan(2_000);
+      expect(b.status).toBe("ok");
+      expect(productFacts).toHaveBeenCalledTimes(4);
+      const e = (await svc.get(b.id)).data!.exposure!;
+      // 상품 정보 없이도 표(RGTX·122630)·종목 마스터(삼성전자 ST)로 가린 것은 그대로
+      expect(e.levInv.items.map((x) => x.code)).toEqual(["RGTX", "122630"]);
+      expect(e.count).toBe(5);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("환율을 받지 못한 날 (검토 지적): 미국 종목이 모두 합계에서 빠지면 us.count 0 · uncounted 로 남고, 뺀 레버리지(RGTX)는 levInv.uncounted", async () => {
