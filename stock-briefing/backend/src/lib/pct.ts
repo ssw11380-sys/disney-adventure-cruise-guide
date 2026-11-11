@@ -34,3 +34,23 @@ export function ratioPct(part: number, whole: number | null | undefined): number
   if (whole === null || whole === undefined || !Number.isFinite(whole) || whole <= 0 || !Number.isFinite(part)) return null;
   return truncPct((part / whole) * 100);
 }
+
+/**
+ * 출처(네이버 순위·테마 목록 등)가 준 등락률은 반올림 값이다 → 가격과 전일 대비로 다시 계산해 버림 값으로 바꾼다.
+ *  - 부호는 출처 등락률을 따른다 (전일 대비가 절댓값으로 오는 목록이 있다). 등락률이 0 이면 전일 대비의 부호
+ *  - 다시 계산한 값을 반올림했을 때 출처 값과 같아야 같은 기준의 숫자다. 다르면 칸끼리 기준이 다른 것이라
+ *    (다른 거래소 값이 섞임 등) 출처 값 그대로 둔다
+ *  - 가격·전일 대비를 모르면 출처 값 그대로
+ */
+export function retruncRate(price: number | null | undefined, change: number | null | undefined, given: number | null | undefined): number | null {
+  const g = given === null || given === undefined || !Number.isFinite(given) ? null : given;
+  if (price === null || price === undefined || !Number.isFinite(price) || change === null || change === undefined || !Number.isFinite(change)) return g;
+  const sign = g !== null && g !== 0 ? Math.sign(g) : Math.sign(change);
+  const signed = sign * Math.abs(change);
+  const prev = price - signed;
+  if (!(prev > 0)) return g;
+  const exact = (signed / prev) * 100;
+  if (g === null) return truncPct(exact);
+  // 다시 계산한 값을 반올림하면 출처 값이 나올 때만 같은 기준의 숫자다
+  return Math.abs(Math.round(exact * 100) / 100 - g) < 1e-9 ? truncPct(exact) : g;
+}

@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
 import type { LiveTick } from "../src/providers/market/tossRealtime.js";
 import { PriceStream, type StreamSocket } from "../src/services/priceStream.js";
-import { changePct, ratioPct, truncPct } from "../src/lib/pct.js";
+import { changePct, ratioPct, retruncRate, truncPct } from "../src/lib/pct.js";
 import { NaverKrBase, parseKrBaseRow, pickKrBase } from "../src/providers/market/naverKrBase.js";
 import { MarketCalendar, stateFromOfficial, type OfficialCalendar } from "../src/providers/market/calendar.js";
 import { parseCalendarDay, TossOpenApiClient, TossOpenApiProvider } from "../src/providers/market/tossOpenApi.js";
@@ -419,5 +419,50 @@ describe("실시간 스트림 — 앱이 보고 있는 종목(등록 종목 밖)
     await stream.poll();
     expect(asked.at(-1)).toEqual(["000660"]);
     stream.stop();
+  });
+});
+
+describe("출처가 준 등락률(반올림 값)을 버림 값으로 (retruncRate)", () => {
+  it("가격·전일 대비로 다시 계산해 버린다 — 반올림했을 때 출처 값과 같을 때만", () => {
+    expect(retruncRate(208_000, 9_100, 4.58)).toBe(4.57); // 삼성전자: 네이버 4.58 → 토스 4.57
+    expect(retruncRate(705.1, 37.49, 5.62)).toBe(5.61); // 코스닥 지수
+    expect(retruncRate(274_500, 500, -0.18)).toBe(-0.18); // 전일 대비가 절댓값으로 와도 부호는 등락률을 따른다
+    expect(retruncRate(51_863.69, -185.14, -0.36)).toBe(-0.35);
+    expect(retruncRate(10_000, 0, 0)).toBe(0);
+  });
+
+  it("칸끼리 기준이 다르면(다시 계산해 반올림해도 출처 값이 아님) 출처 값 그대로 · 모르는 칸이 있으면 그대로", () => {
+    expect(retruncRate(10_000, -100, -1)).toBe(-1); // -0.9901 → 반올림 -0.99 ≠ -1
+    expect(retruncRate(10_000, 200, 3.5)).toBe(3.5);
+    expect(retruncRate(null, 100, 1.23)).toBe(1.23);
+    expect(retruncRate(10_000, null, 1.23)).toBe(1.23);
+    expect(retruncRate(10_000, 100, null)).toBe(1.01); // 출처 등락률이 없으면 계산한 값(버림)
+    expect(retruncRate(100, 150, null)).toBeNull(); // 전일 값이 0 이하
+  });
+});
+
+describe("토스가 이 서버의 시세 한도를 낮게 잡았을 때", () => {
+  it("초당 한도가 3 이하로 오면 현재가 확인을 약 3초 간격으로 늦춘다 (스냅샷·일봉 조회가 한도에 밀리지 않게)", async () => {
+    const calls: Call[] = [];
+    const base = fakeFetch({ calls });
+    const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
+      const res = await base(input, init);
+      if (!String(input).includes("/api/v1/prices")) return res;
+      return new Response(await res.text(), { status: res.status, headers: { "content-type": "application/json", "x-ratelimit-limit": "1" } });
+    }) as typeof fetch;
+    let now = NOW();
+    const c = new TossOpenApiClient({ clientId: "c_1", clientSecret: "s_1", fetchFn, now: () => now, maxRetryWaitMs: 0 });
+    const p = new TossOpenApiProvider(c, { now: () => now });
+    const priceCalls = () => calls.filter((x) => x.url.includes("/api/v1/prices")).length;
+    await p.getMany(["035420"]); // 첫 응답에서 한도 1 을 안다
+    expect(priceCalls()).toBe(1);
+    now = new Date(now.getTime() + 1_000);
+    expect((await p.getMany(["035420"])).get("035420")?.price).toBe(201_500); // 받아 둔 값
+    now = new Date(now.getTime() + 1_000);
+    await p.getMany(["035420"]);
+    expect(priceCalls()).toBe(1);
+    now = new Date(now.getTime() + 1_000); // 3초 뒤
+    await p.getMany(["035420"]);
+    expect(priceCalls()).toBe(2);
   });
 });

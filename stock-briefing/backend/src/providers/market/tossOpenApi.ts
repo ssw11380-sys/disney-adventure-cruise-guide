@@ -424,6 +424,13 @@ const PRICES_CHUNK = 50;
 const QUICK_FRESH_MS = 800;
 /** 실시간 보조: 앱이 붙어 있는 동안 서버가 현재가를 묻는 간격. 시세 그룹 한도는 초당 15회, 이 조회는 종목이 많아도 1초에 1~2회 */
 const QUICK_POLL_MS = 1_000;
+/**
+ * 실시간 보조: 토스가 이 서버 IP 의 시세 한도를 낮게 잡았으면(문서: 일부 IP 대역은 초당 1회) 현재가 확인을 이만큼으로 늦춘다 —
+ * 1초 확인이 한도를 다 써서 시세 스냅샷·일봉 조회가 429 로 밀리지 않게. 한도는 응답 머리글(X-RateLimit-Limit)로 안다
+ */
+const QUICK_FRESH_LOW_LIMIT_MS = 2_800;
+/** 이 값 이하의 초당 한도면 낮은 한도로 본다 */
+const LOW_RATE_LIMIT = 3;
 /** 실시간 보조: 요청 한도(429)에 걸리면 이만큼 쉰다 (다른 조회 — 일봉·계좌 — 가 밀리지 않게) */
 const QUICK_BACKOFF_MS = 5_000;
 /** 세션 자격(NXT 대상·거래정지)을 다시 받는 간격 — 거래정지는 장중에도 바뀔 수 있어 하루가 아니라 1시간 */
@@ -548,19 +555,22 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
   async getMany(codes: string[]): Promise<Map<string, LiveTick>> {
     const list = [...new Set(codes.map(normalizeCode))].filter((c) => CODE_RE.test(c));
     if (list.length === 0) return new Map();
+    // 한도가 낮은 IP 면 확인 간격을 늦춘다 (받아 둔 값을 그만큼 더 쓴다)
+    const limit = this.client.status.rateLimits?.["/api/v1/prices"];
+    const QUICK_FRESH = limit !== undefined && limit <= LOW_RATE_LIMIT ? QUICK_FRESH_LOW_LIMIT_MS : QUICK_FRESH_MS;
     const pick = () => {
       const n = this.now().getTime();
       return new Map(
         list.flatMap((c) => {
           const x = this.quickTicks.get(c);
-          return x && n - x.receivedAt < QUICK_FRESH_MS ? [[c, x] as [string, LiveTick]] : [];
+          return x && n - x.receivedAt < QUICK_FRESH ? [[c, x] as [string, LiveTick]] : [];
         }),
       );
     };
     const t = this.now().getTime();
     const fresh = (c: string) => {
       const x = this.quickTicks.get(c);
-      return (x !== undefined && t - x.receivedAt < QUICK_FRESH_MS) || t - (this.quickMissAt.get(c) ?? -Infinity) < QUICK_FRESH_MS;
+      return (x !== undefined && t - x.receivedAt < QUICK_FRESH) || t - (this.quickMissAt.get(c) ?? -Infinity) < QUICK_FRESH;
     };
     if (list.every(fresh) || t < this.quickBackoffUntil) return pick();
     const running = this.quickInflight.find((x) => list.every((c) => x.codes.has(c)));
