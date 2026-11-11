@@ -51,6 +51,8 @@ export interface Providers {
   quickPrices: QuickPriceSource | null;
   /** 한국 종목 기준가 출처 (운영 확인용 — /health). 없으면(테스트 기본) 보이지 않는다 */
   krBase?: { status(): Record<string, unknown> } | null;
+  /** 토스 웹(비공식) 출처가 막혀 쉬는 중인지 (운영 확인용 — /health). 없으면(테스트 기본) 보이지 않는다 */
+  tossWeb?: { blockStatus(): { blocked: boolean; until: string | null; streak: number } } | null;
   /** PER/PBR/배당/52주·환율 보강 (네이버) */
   fundamentals: NaverFundamentals | null;
   /** 발견 탭(순위·테마·업종). 없으면 기본 네이버 공개 JSON */
@@ -191,6 +193,7 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
     // 실시간 보조: 공식 API 현재가 일괄(1초, 체결 시각이 실제 체결 시각). 키가 없으면 예전 토스 웹(3초)
     quickPrices: tossOpenApi ?? toss,
     krBase,
+    tossWeb: toss,
     fundamentals,
     tics: new TossTics(),
     search: new StockSearchChain([toss, yahoo], log),

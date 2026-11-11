@@ -5,6 +5,7 @@ import { PriceStream, type StreamSocket } from "../src/services/priceStream.js";
 import { changePct, ratioPct, retruncRate, truncPct } from "../src/lib/pct.js";
 import { NaverKrBase, parseKrBaseRow, pickKrBase } from "../src/providers/market/naverKrBase.js";
 import { MarketCalendar, stateFromOfficial, type OfficialCalendar } from "../src/providers/market/calendar.js";
+import { TossProvider } from "../src/providers/market/toss.js";
 import { parseCalendarDay, TossOpenApiClient, TossOpenApiProvider } from "../src/providers/market/tossOpenApi.js";
 import { createMigratedDb } from "../src/db/index.js";
 import { StockService } from "../src/services/stockService.js";
@@ -464,5 +465,41 @@ describe("토스가 이 서버의 시세 한도를 낮게 잡았을 때", () => 
     now = new Date(now.getTime() + 1_000); // 3초 뒤
     await p.getMany(["035420"]);
     expect(priceCalls()).toBe(2);
+  });
+});
+
+describe("토스 웹(비공식) 주소가 요청을 막았을 때", () => {
+  it("연달아 3번 '요청 막힘'(HTTP 400 invalid-client-state)이면 10분 동안 두드리지 않고 바로 실패한다 — 끝나면 한 번 다시 물어 본다", async () => {
+    let now = new Date("2026-11-12T00:20:00+09:00");
+    const calls: string[] = [];
+    const blocked = { on: true };
+    const fetchFn = (async (url: string | URL | Request) => {
+      calls.push(String(url));
+      if (blocked.on) return new Response(JSON.stringify({ error: { statusCode: 400, code: "invalid-client-state", message: null } }), { status: 400 });
+      return new Response(JSON.stringify({ result: [{ productCode: "A005930", close: 208000, base: 198900, currency: "KRW" }] }), { status: 200 });
+    }) as FetchFn;
+    const toss = new TossProvider(fetchFn, null, () => now);
+    for (let i = 0; i < 3; i++) await expect(toss.getMany(["005930"])).rejects.toThrow(/invalid-client-state/);
+    expect(toss.blockStatus()).toMatchObject({ blocked: true, streak: 3 });
+    const n = calls.length;
+    await expect(toss.getMany(["005930"])).rejects.toThrow(/쉬는 중/);
+    await expect(toss.search("삼성", 5)).rejects.toThrow(/쉬는 중/);
+    expect(calls).toHaveLength(n); // 요청이 나가지 않는다
+    // 10분 뒤 한 번 다시 묻고, 또 막혀 있으면 바로 다시 쉰다
+    now = new Date(now.getTime() + 10 * 60_000 + 1);
+    await expect(toss.getMany(["005930"])).rejects.toThrow(/invalid-client-state/);
+    expect(calls).toHaveLength(n + 1);
+    await expect(toss.getMany(["005930"])).rejects.toThrow(/쉬는 중/);
+    // 다시 열리면 그대로 쓰고 기록을 지운다
+    blocked.on = false;
+    now = new Date(now.getTime() + 10 * 60_000 + 1);
+    expect((await toss.getMany(["005930"])).get("005930")?.price).toBe(208_000);
+    expect(toss.blockStatus()).toEqual({ blocked: false, until: null, streak: 0 });
+  });
+
+  it("다른 오류(500·404)는 막힘으로 세지 않는다", async () => {
+    const toss = new TossProvider((async () => new Response("x", { status: 500 })) as FetchFn, null, () => new Date("2026-11-12T00:20:00+09:00"));
+    for (let i = 0; i < 5; i++) await expect(toss.getMany(["005930"])).rejects.toThrow(/HTTP 500/);
+    expect(toss.blockStatus()).toEqual({ blocked: false, until: null, streak: 0 });
   });
 });

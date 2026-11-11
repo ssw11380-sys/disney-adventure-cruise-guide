@@ -547,6 +547,8 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
     quotes: stockService.quoteStatus(),
     // 한국 종목 기준가 출처 상태 (받아 둔 종목 수·마지막 성공·실패) — 기준가를 못 받으면 quotes.baseFallbacks 가 늘어난다
     ...(opts.providers.krBase ? { krBase: opts.providers.krBase.status() } : {}),
+    // 토스 웹(비공식) 주소가 요청을 막아 쉬는 중인지 — 막혀 있어도 시세는 공식 API·네이버로 돈다 (상품 정보·배당 요약 등 부가 자료만 대체 경로)
+    ...(opts.providers.tossWeb ? { tossWeb: opts.providers.tossWeb.blockStatus() } : {}),
     candles: stockService.candleStatus(),
     fundamentalsCache: opts.providers.fundamentals?.cacheStats() ?? null,
     notificationDelivery: await notificationService.deliveryStatus().catch(() => null),
