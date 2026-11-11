@@ -5,6 +5,7 @@ import type { Briefing } from "./briefingService.js";
 import type { MarketSummary } from "./marketSummaryService.js";
 import type { RegisteredWithQuote } from "./stockService.js";
 import type { TossAccountSnapshotBody } from "../routes/admin.js";
+import { truncPct } from "../lib/pct.js";
 
 /**
  * 홈 화면 위젯 한 번에 필요한 것만 (3-16). 위젯 3종이 이 응답 하나를 같이 쓴다.
@@ -335,8 +336,8 @@ export function extendedOpen(calendar: { kr: boolean; us: boolean }, sessions: r
   return { kr: on("KR", calendar.kr), us: on("US", calendar.us) };
 }
 
-/** 위젯 표시에 필요한 자릿수만 (등락률 소수 2자리, 금액·가격·환율 4자리) */
-const r2 = (n: number) => Math.round(n * 100) / 100;
+/** 위젯 표시에 필요한 자릿수만 (등락률 소수 2자리 — 토스증권처럼 버림 lib/pct, 금액·가격·환율 4자리) */
+const r2 = (n: number) => truncPct(n);
 const r4 = (n: number) => Math.round(n * 1e4) / 1e4;
 /** "2026-09-24T12:03:51.000+09:00" → "2026-09-24T12:03:51+09:00" */
 const shortIso = (iso: string) => iso.replace(/\.000(?=[Z+-])/, "");

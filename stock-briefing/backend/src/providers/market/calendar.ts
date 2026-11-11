@@ -119,6 +119,54 @@ export function stateFromSession(market: MarketKey, now: Date, tradingEnd: strin
   };
 }
 
+/** 공식 장 운영 달력의 하루 (토스증권 Open API /api/v1/market-calendar — providers/market/tossOpenApi 의 TossCalendarDay 와 같은 모양) */
+export interface OfficialCalendarDay {
+  date: string;
+  /** 그날 첫 세션 시작 ~ 마지막 세션 끝 (모두 쉬면 null) */
+  open: { startTime: string; endTime: string } | null;
+  /** 정규장 (쉬면 null) */
+  regular: { startTime: string; endTime: string } | null;
+}
+
+export interface OfficialCalendar {
+  previous: OfficialCalendarDay | null;
+  today: OfficialCalendarDay | null;
+  next: OfficialCalendarDay | null;
+}
+
+export type OfficialCalendarSource = (market: MarketKey) => Promise<OfficialCalendar>;
+
+/**
+ * 공식 달력 → 장 상태. 뜻은 예전 토스 달력과 같다: 한국은 통합(KRX+NXT) 08:00~20:00 창, 미국은 정규장만 (isOpen 주석).
+ * 전 영업일·오늘·다음 영업일 세 날의 창에서 지금이 든 창(장중), 지난 마지막 창의 끝(lastClose), 다음 창의 시작(opensAt)을 고른다.
+ * 미국은 '오늘'이 한국 날짜 기준이라 지금 열린 정규장이 '전 영업일'에 있을 수 있다 (한국 새벽) — 그래서 세 날을 모두 본다.
+ * 휴장일은 창이 없어 지난 창과 다음 창 사이가 된다 → knownTradingDays 가 그 사이 날을 휴장으로 안다. 쓸 창이 하나도 없으면 요일 추정
+ */
+export function stateFromOfficial(market: MarketKey, now: Date, cal: OfficialCalendar): MarketState {
+  const t = now.getTime();
+  const windows = [cal.previous, cal.today, cal.next]
+    .map((d) => (market === "KR" ? d?.open : d?.regular) ?? null)
+    .map((w) => (w ? { start: Date.parse(w.startTime), end: Date.parse(w.endTime) } : null))
+    .filter((w): w is { start: number; end: number } => w !== null && Number.isFinite(w.start) && Number.isFinite(w.end) && w.end > w.start)
+    .sort((a, b) => a.start - b.start);
+  if (windows.length === 0) return fallbackState(market, now);
+  const today = localDate(now, TZ[market]);
+  const isTradingDay = windows.some((w) => localDate(new Date(w.start), TZ[market]) === today);
+  const cur = windows.find((w) => w.start <= t && t < w.end);
+  if (cur) return { market, isTradingDay, isOpen: true, opensAt: null, closesAt: new Date(cur.end).toISOString(), lastClose: null, source: "toss" };
+  const next = windows.find((w) => w.start > t);
+  const last = [...windows].reverse().find((w) => w.end <= t);
+  return {
+    market,
+    isTradingDay,
+    isOpen: false,
+    opensAt: next ? new Date(next.start).toISOString() : null,
+    closesAt: null,
+    lastClose: last ? new Date(last.end).toISOString() : null,
+    source: "toss",
+  };
+}
+
 /** 네트워크 캐시는 유지하고, 조회 시점에 따라 달라지는 현지 날짜·추정 장 상태만 갱신한다. */
 function statusAt(status: MarketStatus, now: Date): MarketStatus {
   const current = (market: MarketKey): MarketState => {
@@ -141,6 +189,11 @@ export class MarketCalendar {
     private readonly ttlMs = 5 * 60_000,
     /** 출처(토스 달력·휴장일 목록)끼리 다를 때 경고 (시장·날짜마다 한 번) */
     private readonly log: { warn(obj: Record<string, unknown>, msg: string): void } = { warn: () => {} },
+    /**
+     * 공식 장 운영 달력 (토스증권 Open API 키가 있을 때). 있으면 이것만 쓴다 — 예전에 쓰던 토스 웹 시세 주소는 2026-11 에 막혔다.
+     * 없으면(키 없음) 예전 주소를 한 번 물어 보고, 안 되면 요일·휴장일 목록으로 추정한다
+     */
+    private readonly official: OfficialCalendarSource | null = null,
   ) {}
 
   private inflight: Promise<MarketStatus> | null = null;
@@ -163,7 +216,14 @@ export class MarketCalendar {
     const now = this.now();
     let KR = fallbackState("KR", now);
     let US = fallbackState("US", now);
-    try {
+    if (this.official) {
+      // 시장마다 따로 받는다 — 한쪽이 실패해도 다른 쪽은 공식 달력으로 (실패한 쪽은 요일·휴장일 목록 추정, 날짜별 사실은 lastToss 가 지킨다)
+      const official = this.official;
+      const load = (m: MarketKey) => official(m).then((c) => stateFromOfficial(m, now, c), () => null);
+      const [kr, us] = await Promise.all([load("KR"), load("US")]);
+      if (kr) KR = kr;
+      if (us) US = us;
+    } else try {
       const res = await this.fetchFn(`https://wts-info-api.tossinvest.com/api/v3/stock-prices?productCodes=${PRODUCTS.KR},${PRODUCTS.US}`, {
         headers: { "user-agent": UA, accept: "application/json", referer: "https://tossinvest.com/" },
         signal: AbortSignal.timeout(5_000), // 멈춘 연결이 장 상태를 묻는 모든 요청을 붙잡지 않게

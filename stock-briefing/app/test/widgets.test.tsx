@@ -472,7 +472,7 @@ describe("3-16 위젯 데이터·갱신 주기", () => {
     const p = fromPayload(payload);
     const s = p.stocks[0]!;
     expect(s.quote).toMatchObject({ price: 70_000, change: 100, changeRate: 0.14, currency: "KRW", asOf: AT_CLOSE });
-    expect(s.evaluation).toMatchObject({ marketValue: 700_000, costBasis: 600_000, profit: 100_000, profitRate: 16.67, afterCost: { marketValue: 698_000, profit: 98_000, profitRate: 16.33 } });
+    expect(s.evaluation).toMatchObject({ marketValue: 700_000, costBasis: 600_000, profit: 100_000, profitRate: 16.66, afterCost: { marketValue: 698_000, profit: 98_000, profitRate: 16.33 } });
     expect(p.stocks[1]!.evaluation).toMatchObject({ costBasisKrw: 540_000, krwCostSource: "exact" });
     expect(p.stocks[2]!.quote).toMatchObject({ stale: true });
     expect(p.briefings.map((b) => b.code)).toEqual(["005930", "VRT"]);

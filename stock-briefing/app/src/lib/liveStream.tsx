@@ -9,6 +9,7 @@ import { SAVER } from "./pollSaver";
 import { applyTick, applyTicksToList, evaluate, latestPerCode, newTradingDay, streamUrl, type StreamMessage, type StreamTick } from "./liveTick";
 import { personalBlocked, sessionFor, sessionIdentityVersion, sessionVersion, subscribeSession } from "./session";
 import { useSettings } from "./settings";
+import { isViewingSender, setViewingSender, viewingCodes } from "./streamView";
 
 /**
  * 서버 /api/stream 웹소켓을 앱이 켜져 있는 동안 하나 유지하고, 체결이 올 때마다 react-query 캐시의
@@ -205,6 +206,12 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
     let backoff = 1000;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let watchdog: ReturnType<typeof setTimeout> | null = null;
+    // 이 연결이 건 '보고 있는 종목 보내기' — 끊길 때 내 것만 푼다 (서버 주소를 바꿔 새 연결이 먼저 건 것을 지우지 않게)
+    let viewSender: (() => void) | null = null;
+    const releaseViewSender = () => {
+      if (viewSender && isViewingSender(viewSender)) setViewingSender(null);
+      viewSender = null;
+    };
 
     // 체결은 모아서 한 번에 적용한다: 서버가 250ms 묶음(ticks)으로 보내면 받은 즉시 한 번, 예전 서버의 낱개(tick)는 100ms 모아서.
     // 목록은 바뀐 종목만 새 객체라 그 줄만 다시 그려지고, 연결 상태(lastTickAt)는 5초에 한 번만 갱신한다 (3-17)
@@ -272,6 +279,7 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
     const drop = (ws: WebSocket) => {
       if (socket !== ws) return;
       socket = null;
+      releaseViewSender();
       forgetTicks();
       if (watchdog) clearTimeout(watchdog);
       watchdog = null;
@@ -315,6 +323,16 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
         } catch {
           /* ignore */
         }
+        // 보고 있는 종목(등록 종목 밖의 상세 화면)도 같이 받겠다고 알린다. 화면을 열고 닫을 때마다 다시 보낸다 (lib/streamView)
+        viewSender = () => {
+          if (socket !== ws) return;
+          try {
+            ws.send(JSON.stringify({ type: "view", codes: viewingCodes() }));
+          } catch {
+            /* ignore */
+          }
+        };
+        setViewingSender(viewSender);
         setState((s) => ({ ...s, connected: true, connectedAt: Date.now() }));
         armWatchdog(ws);
       };
@@ -374,6 +392,7 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
       watchdog = null;
       const ws = socket;
       socket = null;
+      releaseViewSender();
       forgetTicks();
       // 연결 중인 소켓은 여기서 닫히지 않을 수 있다 → 나중에 열리면 onopen 이 닫는다
       if (ws) closeQuietly(ws);

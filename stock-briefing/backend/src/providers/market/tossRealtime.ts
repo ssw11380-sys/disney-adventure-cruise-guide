@@ -26,10 +26,17 @@ export interface LiveTicks {
   status(): { enabled: boolean; connected: boolean; subscribed: string[]; lastMessageAt: string | null; lastError: string | null; lastAliveAt?: string | null };
 }
 
-/** 웹소켓 없이 REST 로 여러 종목 현재가를 한 번에 받는 소스 (토스 웹 stock-prices 등) */
+/** 웹소켓 없이 REST 로 여러 종목 현재가를 한 번에 받는 소스 (토스 공식 API 현재가 일괄 · 토스 웹 stock-prices) */
 export interface QuickPriceSource {
   readonly name: string;
   getMany(codes: string[]): Promise<Map<string, LiveTick>>;
+  /**
+   * 체결의 timestamp 가 실제 마지막 체결 시각인 출처 (토스 공식 API 현재가 — 시간외 체결 포함). 없거나 false 면 '받은 시각'이 찍히는 출처(토스 웹).
+   * 실제 체결 시각이면 웹소켓 체결과 시각으로 바로 견줄 수 있고, 시간외(미국 애프터마켓·주말)에도 그대로 붙인다
+   */
+  readonly tradeTime?: boolean;
+  /** 앱이 붙어 있는 동안 서버가 이 출처를 묻는 간격(ms). 없으면 3초 */
+  readonly pollMs?: number;
   /**
    * 종목별 세션 사실 (초록 점 판단용, services/liveSession). 받아 둔 값만 바로 돌려주고, 없거나 오래됐으면 뒤에서 새로 받는다.
    * 없는 소스(예전·가짜)면 세션은 시각·달력만으로, 자격은 모름(null)으로 본다

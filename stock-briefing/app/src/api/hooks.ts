@@ -8,6 +8,7 @@ import { isTradingHoursKst } from "@/lib/format";
 import { candleRefresh, pollInterval, refetchDue, streamFresh } from "@/lib/freshness";
 import { capToBoundary, marketBoundary, marketChip, nextBoundary, quotesOf, sessionOpen } from "@/lib/liveDot";
 import { useLiveStream, withLastTick } from "@/lib/liveStream";
+import { useStreamView } from "@/lib/streamView";
 import { tradingNow } from "@/lib/marketTime";
 import { RECONCILE_OFF, RECONCILE_POLL_MS } from "@/lib/numberBasis";
 import { saverInterval, unchangedStreak } from "@/lib/pollSaver";
@@ -173,6 +174,8 @@ export function useStock(code: string) {
   const api = useApi();
   const every = useLivePoll();
   const focused = useScreenFocused();
+  // 화면에 보이는 동안 이 종목을 실시간 스트림으로도 받는다 — 등록하지 않은 종목(발견·검색에서 연 종목)도 1초 안에 따라가게 (lib/liveStream)
+  useStreamView(focused && code ? code : null);
   return useQuery({ subscribed: focused, queryKey: useKey("stock", code), queryFn: () => api.getStock(code), staleTime: 2_000, refetchInterval: every, refetchIntervalInBackground: false, retryDelay: 1_000, enabled: !!code });
 }
 

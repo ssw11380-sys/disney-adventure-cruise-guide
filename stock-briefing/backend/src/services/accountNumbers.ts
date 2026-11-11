@@ -5,6 +5,7 @@ import { seoulDate } from "../lib/time.js";
 import { isKrTradingDate, isUsTradingDate, krRegularHours, marketContext, usRegularCloseMinutes } from "./marketContext.js";
 import type { Evaluation } from "./stockService.js";
 import type { HoldingThemesSnapshot } from "./holdingThemesService.js";
+import { truncPct } from "../lib/pct.js";
 
 /**
  * 계좌 한 장 브리핑(3-31)의 숫자와 문장. 숫자는 모두 여기서 코드로 계산하고, 모델은 이 숫자를 옮겨 적기만 한다.
@@ -448,7 +449,7 @@ interface RawRow {
 function bucket(rows: RawRow[], day: number): MarketBucket | null {
   if (!rows.length) return null;
   const prev = sum(rows.map((r) => r.prev));
-  return { count: rows.length, value: Math.round(sum(rows.map((r) => r.value))), day, dayRate: prev > 0 ? round2((sum(rows.map((r) => r.day)) / prev) * 100) : null };
+  return { count: rows.length, value: Math.round(sum(rows.map((r) => r.value))), day, dayRate: prev > 0 ? truncPct((sum(rows.map((r) => r.day)) / prev) * 100) : null };
 }
 
 /** 잔고 목록 → 계좌 합계·당일 손익 기여·환율 효과 */
@@ -528,9 +529,9 @@ export function computeAccount(list: readonly AccountHolding[], opts: { afterCos
     totalCost: Math.round(costRaw),
     // 앱 잔고 합계처럼 평가·매입을 따로 반올림한 뒤 뺀다 (한 번에 반올림하면 .5 를 사이에 두고 1원 달라짐)
     totalProfit: Math.round(valueRaw) - Math.round(costRaw),
-    totalProfitRate: costRaw > 0 ? round2(((valueRaw - costRaw) / costRaw) * 100) : null,
+    totalProfitRate: costRaw > 0 ? truncPct(((valueRaw - costRaw) / costRaw) * 100) : null,
     dayPnl,
-    dayRate: prevRaw > 0 ? round2((dayRaw / prevRaw) * 100) : null,
+    dayRate: prevRaw > 0 ? truncPct((dayRaw / prevRaw) * 100) : null,
     contributions: top.map((r) => ({ code: r.code, name: r.name, currency: r.currency, amount: amount.get(r)!, changeRate: r.changeRate, value: Math.round(r.value) })),
     others: rest.length ? { count: rest.length, amount: sum(rest.map((r) => amount.get(r)!)) } : null,
     markets: { kr: bucket(kr, krDay), us: bucket(us, usDay) },

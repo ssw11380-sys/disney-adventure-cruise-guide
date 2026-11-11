@@ -303,7 +303,7 @@ describe("MarketIndices", () => {
     const list = await m.list();
     expect(list.map((i) => i.code)).toEqual(["KOSPI", "DJI", "USDKRW", "JPYKRW"]);
     expect(list[0]).toMatchObject({ name: "코스피", value: 7026.35, change: 8.44, changeRate: 0.12, open: true });
-    expect(list[1]).toMatchObject({ change: -185.14, changeRate: -0.36, open: false });
+    expect(list[1]).toMatchObject({ change: -185.14, changeRate: -0.35, open: false });
     expect(list[2]).toMatchObject({ name: "원/달러", kind: "fx", value: 1352.1, change: -3.4, changeRate: -0.25 });
     expect(list[3]).toMatchObject({ name: "원/100엔", kind: "fx", value: 858.01 });
     expect(list[0]!.kind).toBe("index");

@@ -87,10 +87,24 @@ export function formatIndexValue(v: number): string {
   return v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+/**
+ * 퍼센트 값(예 4.5751)을 소수 둘째 자리까지 0 쪽으로 버린다 — 토스증권 표기와 같다 (반올림하지 않는다).
+ * 2026-11-12 실측: 삼성전자 4.5751…% → 토스 +4.57% (반올림이면 +4.58%), 제너럴 다이내믹스 −0.4354…% → −0.43%,
+ * 공식 계좌 API 의 종목 수익률도 모두 버림. 서버 backend/src/lib/pct.ts 와 같은 식이다 (한쪽을 바꾸면 다른 쪽도).
+ * 여유(1e-9)는 부동소수 오차만 메운다 — 4.58 이 457.99999999999994 가 되어 4.57 로 버려지지 않게
+ */
+export function truncPct(pct: number): number {
+  if (!Number.isFinite(pct)) return pct;
+  const scaled = pct * 100;
+  const t = Math.trunc(scaled + (scaled >= 0 ? 1e-9 : -1e-9)) / 100;
+  return t === 0 ? 0 : t;
+}
+
+/** 퍼센트 표기: 소수 둘째 자리 아래는 버린다 (truncPct — 토스증권과 같은 숫자) */
 export function formatPct(n: number | null | undefined, opts: { sign?: boolean } = { sign: true }): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return "-";
   // 1,000% 넘는 급등(상장 첫날·동전주)도 읽기 쉽게 자리 구분
-  const a = Math.abs(n);
+  const a = Math.abs(truncPct(n));
   const s = `${a >= 1000 ? a.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : a.toFixed(2)}%`;
   if (!opts.sign) return s;
   return withSign(n, s, true);

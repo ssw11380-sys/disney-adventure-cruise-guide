@@ -14,6 +14,7 @@ import { mapLimit } from "../lib/concurrency.js";
 import { holdingsWriteLock } from "../lib/mutex.js";
 import { ConflictError, NotFoundError, ProviderError, TossLockedError, within } from "../lib/errors.js";
 import { seoulIso } from "../lib/time.js";
+import { truncPct } from "../lib/pct.js";
 import { toMarket } from "../providers/market/kisMaster.js";
 import type { MasterProvider, QuoteProvider, StockSearchProvider } from "../providers/market/types.js";
 import { applyFundamentalsBasis, type NaverFundamentals } from "../providers/market/fundamentals.js";
@@ -649,15 +650,26 @@ export class StockService {
     return this.quickCached(codes);
   }
 
-  /** 마지막으로 받은 토스 웹 가격 중 QUICK_MAX_AGE_MS 안의 것 (새로 받지 않는다) */
+  /**
+   * 마지막으로 받은 일괄 가격 중 QUICK_MAX_AGE_MS 안의 것 (새로 받지 않는다).
+   * 받은 시각(receivedAt)과 체결 시각(timestamp) 중 늦은 쪽으로 잰다 — 토스 웹은 timestamp 가 곧 받은 시각이고,
+   * 공식 API 현재가는 timestamp 가 실제 체결 시각이라 체결이 뜸한 종목은 방금 받은 값도 몇 분 전 시각이다 (그때는 receivedAt 으로)
+   */
   private quickCached(codes: string[]): Map<string, LiveTick> {
     const t = this.now().getTime();
     const out = new Map<string, LiveTick>();
     for (const c of codes) {
       const tick = this.quickLast.get(c);
-      if (tick && t - Date.parse(tick.timestamp) <= QUICK_MAX_AGE_MS) out.set(c, tick);
+      if (!tick) continue;
+      const at = Date.parse(tick.timestamp);
+      if (t - Math.max(tick.receivedAt, Number.isNaN(at) ? -Infinity : at) <= QUICK_MAX_AGE_MS) out.set(c, tick);
     }
     return out;
+  }
+
+  /** 일괄 가격의 체결 시각이 실제 체결 시각인지 (공식 API 현재가). 토스 웹은 받은 시각이라 아니다 */
+  private get quickExact(): boolean {
+    return this.deps.quickPrices?.tradeTime === true;
   }
 
   // ── 시세 ────────────────────────────────────────────────────────
@@ -878,10 +890,15 @@ export class StockService {
   /** 웹소켓 마지막 체결이 스냅샷보다 새 거래일 것이라 붙이지 않고 보류 중인지 (스냅샷을 다시 받아야 붙는다) */
   private heldTick(code: string): boolean {
     const h = this.book.get(code);
-    const tick = this.deps.live?.get(code);
-    if (!h || !tick) return false;
-    const tickAt = Date.parse(tick.timestamp), quoteAt = Date.parse(h.quote.asOf);
-    return !Number.isNaN(tickAt) && !Number.isNaN(quoteAt) && tickAt >= quoteAt && !sameTradingDay(h.quote, tick.timestamp);
+    if (!h) return false;
+    const quoteAt = Date.parse(h.quote.asOf);
+    const newDay = (tick: LiveTick | null | undefined): boolean => {
+      if (!tick) return false;
+      const tickAt = Date.parse(tick.timestamp);
+      return !Number.isNaN(tickAt) && !Number.isNaN(quoteAt) && tickAt >= quoteAt && !sameTradingDay(h.quote, tick.timestamp);
+    };
+    // 공식 API 현재가(quickExact)도 실제 체결 시각이라 같은 방식으로 보류한다 (웹소켓이 그 체결을 주지 않았어도 스냅샷을 다시 받게)
+    return newDay(this.deps.live?.get(code)) || (this.quickExact && newDay(this.quickLast.get(code)));
   }
 
   /**
@@ -973,7 +990,8 @@ export class StockService {
    * 시세를 아직 받지 않은 종목은 모르니 넣지 않는다 (예전처럼 폴링)
    */
   async webOff(codes: string[]): Promise<Set<string>> {
-    if (codes.length === 0) return new Set();
+    // 공식 API 현재가는 시간외 체결까지 든 '최근 체결'이라 빼지 않는다
+    if (codes.length === 0 || this.quickExact) return new Set();
     await this.hydrate();
     const calendar = await this.calendarNow();
     const now = this.now();
@@ -999,6 +1017,8 @@ export class StockService {
       Date.parse(this.deps.live?.get(code)?.timestamp ?? ""),
       h.quote.source === "toss-openapi" ? Date.parse(h.quote.asOf) : NaN,
       this.quickMovedAt.get(code) ?? NaN,
+      // 공식 API 현재가는 체결 시각 그대로가 증거다
+      this.quickExact ? Date.parse(this.quickLast.get(code)?.timestamp ?? "") : NaN,
     ].filter((x) => Number.isFinite(x));
     const realtime = realtimeOf({
       session,
@@ -1039,8 +1059,10 @@ export class StockService {
     //    보류가 아니다 (이번 거래일에 아직 체결이 없는 조용한 종목 — 공식 API asOf 가 지난 거래일 — 도 점이 켜진다).
     //    값이 다르면 붙이지 않고 스냅샷을 곧 다시 받는다(quickAhead). 다시 받기 전(10초 안)에는 점을 그대로 두고(조용한 종목의 첫 체결 — 곧 붙는다),
     //    다시 받아도 스냅샷이 지난 거래일 것이면(공식 API 가 이번 거래일 체결을 모름 — quickBehind) 가격이 따라가지 않으니 토스 웹 3초 갱신으로는 켜지 않는다
-    const held = newDay && !pick.polled;
-    const ahead = newDay && pick.polled && pick.tick.price !== h.quote.price;
+    //  - 공식 API 현재가(quickExact)는 웹소켓 체결처럼 실제 체결 시각이다 → 새 거래일 것이면 같은 방식으로 보류하고 스냅샷을 곧 다시 받는다
+    const exact = pick !== null && (!pick.polled || this.quickExact);
+    const held = newDay && exact;
+    const ahead = newDay && !exact && pick.tick.price !== h.quote.price;
     // 토스 웹 가격을 따져 본 때만 적는다 (이번 응답에 토스 웹 가격이 없으면 그대로 둔다 — 지웠다 다시 적어 같은 가격으로 또 조르지 않게)
     if (pick?.polled) this.noteQuickAhead(code, ahead ? pick.tick : null, h);
     const behind = ahead && this.quickBehind(code, h);
@@ -1051,7 +1073,14 @@ export class StockService {
     const out = stale ? { ...q, stale: true } : q.stale ? { ...q, stale: false } : q;
     if (!ctx || !view) return out;
     // 토스 웹 가격이 보여 주는 가격의 출처일 때만 "3초 갱신 중" (같은 출처를 실시간 스트림이 3초마다 앱에 보낸다 — facts.pricedAt)
-    const polledAt = pick?.polled && !behind ? Math.max(pick.tick.receivedAt, ctx.facts.get(code)?.pricedAt ?? 0) : null;
+    // 공식 API 현재가(quickExact)는 체결 시각으로 웹소켓 체결과 견줘 늘 새 쪽을 붙이므로, 어느 쪽이 골라졌든 이 종목 현재가를 받고 있으면 "갱신 중"이다
+    const polledAt = this.quickExact
+      ? !held && h.quote.source.startsWith("toss")
+        ? Math.max(quick?.get(code)?.receivedAt ?? 0, ctx.facts.get(code)?.pricedAt ?? 0) || null
+        : null
+      : pick?.polled && !behind
+        ? Math.max(pick.tick.receivedAt, ctx.facts.get(code)?.pricedAt ?? 0)
+        : null;
     return this.withSession(code, h, out, { held, polledAt, view }, ctx);
   }
 
@@ -1094,6 +1123,14 @@ export class StockService {
     // 웹소켓 마지막 체결이 스냅샷보다 오래됐으면(예: 웹소켓이 이 세션 체결을 아직 안 줌) 토스 웹 일괄 가격으로 — 웹소켓이 멈춘 종목도 3초 갱신이 붙게.
     // polled = 토스 웹 가격 (timestamp 가 체결 시각이 아니라 받은 시각)
     const ws = usable(this.deps.live?.get(quote.code));
+    // 공식 API 현재가(quickExact)는 시간외 체결까지 든 '최근 체결'이고 시각도 실제 체결 시각이다 → 시간외에도 쓰고, 웹소켓 체결과는 체결 시각으로 견준다
+    // (웹소켓은 유실이 있다 — 놓친 체결을 1초 확인이 바로 메운다. 시각이 같으면 밀리초까지 있는 웹소켓 체결)
+    if (this.quickExact) {
+      const exact = quick && quote.source.startsWith("toss") ? usable(quick.get(quote.code)) : null;
+      if (ws && exact) return Date.parse(exact.timestamp) > Date.parse(ws.timestamp) ? { tick: exact, polled: true } : { tick: ws, polled: false };
+      if (ws) return { tick: ws, polled: false };
+      return exact ? { tick: exact, polled: true } : null;
+    }
     const polled = quick && quote.source.startsWith("toss") && !webIsRegularClose(quote, phase) ? usable(quick.get(quote.code)) : null;
     if (ws && polled && trust && polled.receivedAt >= ws.receivedAt && !this.wsFollows(ws, quoteAt, trust)) return { tick: polled, polled: true };
     if (ws) return { tick: ws, polled: false };
@@ -1125,7 +1162,8 @@ export class StockService {
     // 등락률은 반올림 전 차이로, 등락은 소수 4자리까지 (센트로 반올림한 등락으로 내면 1달러 미만 미국 종목이 틀린다 — 앱 liveTick.applyTick 과 같은 식)
     const diff = prevClose !== null ? tick.price - prevClose : null;
     const change = diff !== null ? Math.round(diff * 1e4) / 1e4 : quote.change;
-    const changeRate = prevClose && diff !== null ? Math.round((diff / prevClose) * 10000) / 100 : quote.changeRate;
+    // 소수 둘째 자리 아래는 토스증권처럼 버린다 (lib/pct)
+    const changeRate = prevClose && diff !== null ? truncPct((diff / prevClose) * 100) : quote.changeRate;
     // 원화 환산은 화면에 함께 보이는 환율(fxRate)로 — 옛 원화가/달러가 비율로 곱하면 반올림 때문에 1원씩 어긋난다
     const priceKrw = quote.fxRate ? Math.round(tick.price * quote.fxRate) : quote.priceKrw && quote.price ? Math.round((quote.priceKrw / quote.price) * tick.price) : (quote.priceKrw ?? null);
     return {
@@ -1203,7 +1241,8 @@ export function evaluate(
   const marketValue = q.price * s.quantity;
   const costBasis = t?.purchaseAmount ?? s.avgPrice * s.quantity;
   const profit = marketValue - costBasis;
-  const pct = (p: number) => (costBasis > 0 ? Math.round((p / costBasis) * 10000) / 100 : 0);
+  // 수익률도 토스증권처럼 소수 둘째 자리 아래를 버린다 (공식 계좌 API 의 종목 수익률과 같은 규칙 — lib/pct)
+  const pct = (p: number) => (costBasis > 0 ? truncPct((p / costBasis) * 100) : 0);
   const costRate = t?.costRate ?? null;
   const afterValue = costRate !== null ? marketValue * (1 - costRate) : null;
   return {

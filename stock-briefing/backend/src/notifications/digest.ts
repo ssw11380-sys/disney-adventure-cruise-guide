@@ -1,4 +1,5 @@
 import type { PushMessage } from "./push.js";
+import { truncPct } from "../lib/pct.js";
 
 /**
  * 브리핑 알림 묶음 (3-19). 세션(오전·오후)마다 알림 1건: "오후 브리핑 17종목" + 변동 상위 2종목.
@@ -99,7 +100,9 @@ export function inQuietHours(s: QuietHours, now: Date): boolean {
 }
 
 export function formatRate(r: number): string {
-  return `${r > 0 ? "+" : ""}${r.toFixed(2)}%`;
+  // 소수 둘째 자리 아래는 토스증권처럼 버린다 (앱 lib/briefingDigest 와 같은 식)
+  const t = truncPct(r);
+  return `${t > 0 ? "+" : ""}${t.toFixed(2)}%`;
 }
 
 /** 원화 금액: "+1,234원" · "-2,868,108원" · "0원" (반올림한 값의 부호. sign=false 면 + 를 붙이지 않음) */

@@ -5,6 +5,7 @@ import { seoulIso } from "../../lib/time.js";
 import type { ProductFacts } from "../../analysis/leveraged.js";
 import type { LiveTick, StockSessionFacts } from "./tossRealtime.js";
 import type { FetchFn, QuoteProvider, StockSearchProvider } from "./types.js";
+import { truncPct } from "../../lib/pct.js";
 
 /**
  * 토스증권 웹(tossinvest.com)이 쓰는 내부 API. 공식 개발자 API 가 아니라 예고 없이 바뀔 수 있으므로
@@ -348,7 +349,7 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
     if (price === null) throw new ProviderError(this.name, `${code} 현재가 없음`);
     // 등락률은 반올림 전 차이로 (센트로 반올림한 등락으로 내면 1달러 미만 미국 종목이 0.00% 가 된다), 등락은 소수 4자리까지
     const change = base !== null ? round4(price - base) : 0;
-    const changeRate = base ? round2(((price - base) / base) * 100) : 0;
+    const changeRate = base ? truncPct(((price - base) / base) * 100) : 0;
     const currency = String(p["currency"] ?? (kr ? "KRW" : "USD")) === "USD" ? "USD" : "KRW";
     const latest = chart.at(-1) ?? null; // 오늘(또는 마지막 거래일) 봉
     const shares = num(info?.["sharesOutstanding"]);
@@ -363,7 +364,7 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
             status: "CLOSE",
             price: afterClose,
             change: round2(afterClose - (base ?? price)),
-            changeRate: base ? round2(((afterClose - base) / base) * 100) : 0,
+            changeRate: base ? truncPct(((afterClose - base) / base) * 100) : 0,
             volume: null,
             asOf: seoulIso(this.now()),
           }
@@ -724,7 +725,7 @@ function toListed(it: Json): ListedStock | null {
     isinCode: null,
     groupCode: companyCode.startsWith("EF") ? "EF" : "ST",
     price,
-    changeRate: price !== null && basePrice ? round2(((price - basePrice) / basePrice) * 100) : null,
+    changeRate: price !== null && basePrice ? truncPct(((price - basePrice) / basePrice) * 100) : null,
     currency: kr ? "KRW" : "USD",
   };
 }

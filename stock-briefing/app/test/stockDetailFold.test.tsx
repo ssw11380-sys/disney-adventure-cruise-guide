@@ -640,7 +640,7 @@ describe("휴대폰·접은 화면 보유 한 줄 (기능 플래그 detailPolish
     const us = open(apple(), { polish: true, params: { code: "AAPL" } });
     // (254.4 × 30 × 1391.5) − 원화 매입금액 7,302,600
     const krw = Math.round(254.4 * 30 * 1391.5 - 7_302_600);
-    expect(textOf(line(us)!)).toBe(`보유 30주 · 평가손익 +${krw.toLocaleString("ko-KR")}원 (+${((krw / 7_302_600) * 100).toFixed(2)}%)`);
+    expect(textOf(line(us)!)).toBe(`보유 30주 · 평가손익 +${krw.toLocaleString("ko-KR")}원 (+${(Math.trunc((krw / 7_302_600) * 10_000) / 100).toFixed(2)}%)`);
     h.settings = { ...h.settings, showKrw: false, afterCost: true };
     const s = samsung();
     const cost = { ...s, evaluation: { ...s.evaluation!, afterCost: { marketValue: 10_000_000, profit: 1_480_000, profitRate: 17.37 } } };
@@ -667,7 +667,7 @@ describe("휴대폰·접은 화면 보유 한 줄 (기능 플래그 detailPolish
     const loss = { ...holding("005930", quote("005930", 60_000, { change: -100, changeRate: -0.17 }), 10, 70_000, {}, "삼성전자"), registered: true };
     h.win = { ...h.win, fontScale: 1.3 };
     const l = line(open(loss, { polish: true }))!;
-    expect(textOf(l)).toBe("보유 10주 · 평가손익 -100,000원 (-14.29%)");
+    expect(textOf(l)).toBe("보유 10주 · 평가손익 -100,000원 (-14.28%)");
     expect(l.props.numberOfLines).toBe(2);
     const parts = l.children.filter((c): c is HostNode => typeof c !== "string");
     expect(parts[1]!.props.style).toMatchObject({ color: light.down });

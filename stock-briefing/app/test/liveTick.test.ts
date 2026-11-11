@@ -49,12 +49,12 @@ describe("applyTick (실시간 체결 덮어쓰기)", () => {
     const penny = quote("DCX", 0.4321, { currency: "USD", prevClose: 0.4321, fxRate: 1390 });
     const up = applyTick(penny, tick("DCX", 0.4381))!;
     expect(up.change).toBe(0.006);
-    expect(up.changeRate).toBe(1.39); // 예전: 0.01 → 2.31%
+    expect(up.changeRate).toBe(1.38); // 1.3885…% → 버림. 예전: 0.01 → 2.31%
     const flat = applyTick(penny, tick("DCX", 0.434))!;
     expect(flat.change).toBe(0.0019);
-    expect(flat.changeRate).toBe(0.44); // 예전: 0 → 0.00% (보합 색)
+    expect(flat.changeRate).toBe(0.43); // 0.4397…% → 버림. 예전: 0 → 0.00% (보합 색)
     const down = applyTick(penny, tick("DCX", 0.4299))!;
-    expect(down.changeRate).toBe(-0.51);
+    expect(down.changeRate).toBe(-0.5); // -0.5091…% → 0 쪽으로 버림
     const tiny = applyTick(quote("GCDT", 0.05, { currency: "USD", prevClose: 0.05 }), tick("GCDT", 0.0537))!;
     expect(tiny.change).toBe(0.0037);
     expect(tiny.changeRate).toBe(7.4);
@@ -64,7 +64,7 @@ describe("applyTick (실시간 체결 덮어쓰기)", () => {
 
   it("1달러 이상 종목은 예전과 같은 값", () => {
     const us = quote("AAPL", 201.37, { currency: "USD", prevClose: 201.37 });
-    expect(applyTick(us, tick("AAPL", 203.12))).toMatchObject({ change: 1.75, changeRate: 0.87 });
+    expect(applyTick(us, tick("AAPL", 203.12))).toMatchObject({ change: 1.75, changeRate: 0.86 }); // 0.8690…% → 버림
   });
 });
 

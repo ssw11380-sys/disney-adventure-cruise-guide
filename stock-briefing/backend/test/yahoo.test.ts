@@ -36,7 +36,7 @@ describe("YahooProvider", () => {
     const q = await new YahooProvider(fetchFn, async () => "KOSPI").getQuote("000660");
     expect(q.prevClose).toBe(1_868_000);
     expect(q.change).toBe(-28_000);
-    expect(q.changeRate).toBe(-1.5);
+    expect(q.changeRate).toBe(-1.49); // -28,000 ÷ 1,868,000 = -1.4989…% → 버림
     expect(q.source).toBe("yahoo");
   });
 
@@ -106,7 +106,7 @@ describe("YahooProvider", () => {
     const q = await new YahooProvider(fakeFetch(() => brk(507.17, 0.499, null))).getQuote("BRK.B");
     expect(q.prevClose).toBeCloseTo(504.65, 1);
     expect(q.change).toBeCloseTo(2.52, 1);
-    expect(q.changeRate).toBe(0.5);
+    expect(q.changeRate).toBe(0.49); // 2.52 ÷ 504.65 = 0.4993…% → 버림
     // 행이 다 있으면 봉 종가를 그대로 쓴다 (등락률로 되짚은 값의 반올림 오차 없이)
     const full = await new YahooProvider(fakeFetch(() => brk(507.17, 0.499, 504.65))).getQuote("BRK.B");
     expect(full.prevClose).toBe(504.65);

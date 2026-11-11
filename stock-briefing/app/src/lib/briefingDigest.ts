@@ -1,5 +1,6 @@
 import type { MarketSummary } from "@/api/types";
 import { digestLine, mdw } from "./marketSummary";
+import { truncPct } from "./format";
 
 /**
  * 브리핑 알림 묶음 (3-19). 서버 backend/src/notifications/digest.ts 와 같은 규칙·문구 —
@@ -50,7 +51,9 @@ export function inQuietHours(p: Pick<NotifyPrefs, "quietEnabled" | "quietStart" 
 }
 
 export function formatRate(r: number): string {
-  return `${r > 0 ? "+" : ""}${r.toFixed(2)}%`;
+  // 소수 둘째 자리 아래는 토스증권처럼 버린다 (서버 notifications/digest 와 같은 식)
+  const t = truncPct(r);
+  return `${t > 0 ? "+" : ""}${t.toFixed(2)}%`;
 }
 
 /** 원화 금액: "+1,234원" · "-2,868,108원" · "0원" (서버 formatWon 과 같다) */

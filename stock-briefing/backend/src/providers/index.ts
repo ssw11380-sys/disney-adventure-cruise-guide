@@ -18,6 +18,7 @@ import type { InvestorFlowProvider } from "./market/investorFlow.js";
 import { KisProvider } from "./market/kis.js";
 import { KisMasterProvider } from "./market/kisMaster.js";
 import { NaverFinanceProvider } from "./market/naver.js";
+import { NaverKrBase } from "./market/naverKrBase.js";
 import { NaverFundamentals } from "./market/fundamentals.js";
 import type { MasterProvider, QuoteProvider, StockSearchProvider } from "./market/types.js";
 import { YahooProvider } from "./market/yahoo.js";
@@ -46,8 +47,10 @@ export interface Providers {
   tossOpenApi: TossOpenApiProvider | null;
   /** 실시간 체결(웹소켓) — 토스 Open API 키 있을 때만 */
   live: TossRealtime | null;
-  /** 키 없이도 되는 준실시간: 토스 웹 시세를 여러 종목 한 번에 */
+  /** 준실시간: 여러 종목 현재가를 한 번에 (공식 API 현재가 일괄 1초 · 키가 없으면 토스 웹 3초) */
   quickPrices: QuickPriceSource | null;
+  /** 한국 종목 기준가 출처 (운영 확인용 — /health). 없으면(테스트 기본) 보이지 않는다 */
+  krBase?: { status(): Record<string, unknown> } | null;
   /** PER/PBR/배당/52주·환율 보강 (네이버) */
   fundamentals: NaverFundamentals | null;
   /** 발견 탭(순위·테마·업종). 없으면 기본 네이버 공개 JSON */
@@ -130,14 +133,26 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
   const codeStore = metaStore(db);
   const toss = new TossProvider(fetch, codeStore);
 
+  // 한국 종목 기준가(전일 대비의 기준 — 직전 거래일 한국거래소 정규장 종가): 네이버 실시간 시세에서 (providers/market/naverKrBase).
+  // 예전에는 토스 웹 시세의 base 를 썼는데 2026-11 에 그 주소가 막혀(HTTP 400), 공식 API 일봉의 통합 종가로 등락을 내고 있었다 → 토스 앱과 등락률이 달랐다
+  const krBase = new NaverKrBase();
   // 토스증권 공식 Open API: 키가 있으면 시세·차트·마스터·수급·실시간의 1순위
   let tossOpenApi: TossOpenApiProvider | null = null;
   let live: TossRealtime | null = null;
   if (cfg.tossOpenApiEnabled) {
     const client = new TossOpenApiClient({ clientId: cfg.TOSS_CLIENT_ID, clientSecret: cfg.TOSS_CLIENT_SECRET, log });
-    tossOpenApi = new TossOpenApiProvider(client, { krBase: (code) => toss.basePrice(code), krBaseMany: (codes) => toss.baseMany(codes) });
+    tossOpenApi = new TossOpenApiProvider(client, {
+      // 네이버가 주지 못한 종목만 토스 웹 기준가를 한 번 더 물어 본다 (다시 열리면 그대로 쓰이고, 막혀 있으면 30초씩 쉰다)
+      krBaseMany: async (codes) => {
+        const out = await krBase.baseMany(codes).catch(() => new Map<string, number>());
+        const missing = codes.filter((c) => !out.has(c));
+        if (missing.length) for (const [c, b] of await toss.baseMany(missing).catch(() => new Map<string, number>())) out.set(c, b);
+        return out;
+      },
+    });
     live = new TossRealtime(client, { log });
   }
+  const official = tossOpenApi;
 
   const quoteChain: QuoteProvider[] = [];
   let kis: KisProvider | null = null;
@@ -152,8 +167,9 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
   quoteChain.push(yahoo);
 
   const fundamentals = new NaverFundamentals();
-  // 환율: 토스 앱이 원화 평가금에 쓰는 환율(토스 웹 시세의 closeKrw/close) → 토스 Open API 매매기준율 → 네이버(하나은행 고시)
-  fundamentals.fxPrimary = async () => (await toss.usdKrw()) ?? (tossOpenApi ? await tossOpenApi.usdKrw() : null);
+  // 환율: 토스 Open API 표시 환율(매매기준율, 1분 갱신) → 토스 웹 시세의 closeKrw/close → 네이버(하나은행 고시).
+  // 예전에는 토스 웹이 먼저였는데 2026-11 에 그 주소가 막혀, 환율을 물을 때마다 실패하는 요청이 먼저 나갔다 → 공식 API 를 먼저
+  fundamentals.fxPrimary = async () => (official ? await official.usdKrw() : null) ?? (await toss.usdKrw());
   const newsChain: NewsProvider[] = [new NaverStockNewsProvider(fetch, fundamentals)];
   if (cfg.NAVER_CLIENT_ID && cfg.NAVER_CLIENT_SECRET) {
     newsChain.push(new NaverNewsProvider(cfg.NAVER_CLIENT_ID, cfg.NAVER_CLIENT_SECRET));
@@ -172,7 +188,9 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
     quotes: new QuoteProviderChain(quoteChain, log),
     tossOpenApi,
     live,
-    quickPrices: toss,
+    // 실시간 보조: 공식 API 현재가 일괄(1초, 체결 시각이 실제 체결 시각). 키가 없으면 예전 토스 웹(3초)
+    quickPrices: tossOpenApi ?? toss,
+    krBase,
     fundamentals,
     tics: new TossTics(),
     search: new StockSearchChain([toss, yahoo], log),
@@ -187,8 +205,8 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
     secFilings: edgar,
     // 한국 간이 가치(3-44 3단계): 네이버 재무 요약(요청 사이 0.7초) + 업종 구성 종목(발견 탭과 같은 네이버 공개 JSON)
     krValueSources: defaultKrValueSources(new NaverFinanceClient(), new NaverDiscover()),
-    // 토스 달력과 휴장일 목록이 다르면 로그로 경고 (시장·날짜마다 한 번)
-    calendar: new MarketCalendar(fetch, () => new Date(), 5 * 60_000, log),
+    // 토스 달력과 휴장일 목록이 다르면 로그로 경고 (시장·날짜마다 한 번). 키가 있으면 공식 장 운영 달력
+    calendar: new MarketCalendar(fetch, () => new Date(), 5 * 60_000, log, official ? (m) => official.marketCalendar(m) : null),
     regularCloseSources: { KR: [naver], US: [toss, yahoo] },
     productInfo: toss,
     // 다가오는 일정 (브리핑 3차 5): 토스 웹(시세와 같은 인스턴스 — 상품 코드 캐시 공유) + 네이버(같은 fundamentals 1시간 캐시)
@@ -227,7 +245,8 @@ export function describeProviders(cfg: AppConfig): Record<string, string> {
     news: cfg.NAVER_CLIENT_ID ? "naver 종목뉴스 → google-rss → naver 검색" : "naver 종목뉴스 → google-rss",
     financials: (cfg.DART_API_KEY ? "dart(한국)" : "없음(DART 키 없음)") + " · edgar(미국)",
     investorFlow: cfg.kisEnabled ? "kis" : cfg.tossOpenApiEnabled ? "toss-openapi(공식)" : "없음 (KIS/토스 Open API 키 없음)",
-    realtime: cfg.tossOpenApiEnabled ? "toss-openapi 웹소켓 + toss 웹 3초 갱신" : "toss 웹 3초 갱신 (Open API 키 있으면 웹소켓)",
+    realtime: cfg.tossOpenApiEnabled ? "toss-openapi 웹소켓 + 공식 현재가 1초 확인" : "toss 웹 3초 갱신 (Open API 키 있으면 웹소켓)",
+    krBase: "naver 실시간 시세 (한국 종목 기준가)",
     llm: describeLlmBackend(resolveLlmBackend(cfg)),
   };
 }

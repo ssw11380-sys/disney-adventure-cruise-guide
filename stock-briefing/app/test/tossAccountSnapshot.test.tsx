@@ -59,7 +59,7 @@ describe("계좌 대표 손익과 선택해서 보는 시세 추정", () => {
     expect(text(r.tree)).toContain("원화 환산(참고) 100,000원");
     expect(text(r.tree)).toContain("계좌 기준 평가손익(참고)");
     expect(text(r.tree)).toContain("-20,000원");
-    expect(text(r.tree)).toContain("수익률 -16.67%");
+    expect(text(r.tree)).toContain("수익률 -16.66%");
     expect(text(r.tree)).toContain("매입금액 120,000원");
     expect(text(r.tree)).not.toContain("+5,000원");
     const tab = all(r.tree).find((x) => x.props.accessibilityLabel === "시간외 시세 기준 추정 보기")!;

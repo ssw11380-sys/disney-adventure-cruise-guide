@@ -1,5 +1,6 @@
 import type { LatestBriefing, Quote, QuoteSession, RegisteredWithQuote, TossAccountSnapshotBody } from "@/api/types";
 import { featureOn } from "@/lib/features";
+import { truncPct } from "@/lib/format";
 
 /**
  * GET /api/widget 응답 (서버 widgetPayload.ts 와 같은 모양, 짧은 키) → 위젯 코드가 쓰는 모양으로 되돌린다 (순수 함수).
@@ -287,7 +288,7 @@ export function cleanSummary(v: unknown): WidgetSummary | null {
   return { id: s.id as number, date: s.date, session: s.session, market: s.market, marketDate: s.marketDate, basisDate: s.basisDate, holiday, phase: s.phase, asOf: s.asOf, indices, holdings };
 }
 
-const rate = (profit: number, cost: number) => (cost > 0 ? Math.round((profit / cost) * 10000) / 100 : 0);
+const rate = (profit: number, cost: number) => (cost > 0 ? truncPct((profit / cost) * 100) : 0);
 
 export function fromPayload(p: WidgetPayload): {
   tossAccount?: TossAccountSnapshotBody;

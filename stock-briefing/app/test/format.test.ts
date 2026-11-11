@@ -25,7 +25,10 @@ describe("금액 표기", () => {
 
 describe("등락률·호가", () => {
   it("등락률 부호와 천 단위", () => {
-    expect(formatPct(3.456)).toBe("+3.46%");
+    expect(formatPct(3.456)).toBe("+3.45%"); // 소수 둘째 자리 아래는 버림 (토스증권과 같은 표기)
+    expect(formatPct(4.5751)).toBe("+4.57%"); // 삼성전자 2026-11-11: 토스 +4.57% (반올림이면 +4.58%)
+    expect(formatPct(-0.4354)).toBe("-0.43%"); // 음수도 0 쪽으로
+    expect(formatPct(4.58)).toBe("+4.58%"); // 딱 떨어지는 값은 그대로
     expect(formatPct(-0.5)).toBe("-0.50%");
     expect(formatPct(0)).toBe("0.00%");
     expect(formatPct(280.83)).toBe("+280.83%");
@@ -89,7 +92,8 @@ describe("BH-38: 표시 자리에서 반올림하면 0 인 값은 부호 없이 
     expect(formatPct(-0.004)).toBe("0.00%");
     expect(formatPct(0.004)).toBe("0.00%");
     expect(formatPct(-0.0043)).toBe("0.00%"); // 230달러 종목 1분봉의 1센트 하락
-    expect(formatPct(-0.006)).toBe("-0.01%");
+    expect(formatPct(-0.006)).toBe("0.00%"); // 버림: 0.01% 에 못 미치면 0.00%
+    expect(formatPct(-0.01)).toBe("-0.01%");
   });
   it("화살표·원화 보기·큰 금액 단위", () => {
     expect(formatArrow(-0.001, "KRW")).toBe("0");
@@ -129,7 +133,8 @@ describe("BH-38: 표시 자리에서 반올림하면 0 인 값은 부호 없이 
   it("화면 읽기: '0.00%' 로 보이는 등락률은 보합", () => {
     expect(speakRate(-0.004)).toBe("보합");
     expect(speakRate(0.0043)).toBe("보합");
-    expect(speakRate(-0.006)).toBe("0.01% 하락");
+    expect(speakRate(-0.006)).toBe("보합"); // 화면에 0.00% 로 보인다
+    expect(speakRate(-0.01)).toBe("0.01% 하락");
   });
 });
 
