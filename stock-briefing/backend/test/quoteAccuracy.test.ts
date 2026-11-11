@@ -493,6 +493,7 @@ describe("공식 API 현재가 일괄 — 1초 확인 (실시간 보조)", () =>
     now = new Date(now.getTime() + 1_000);
     await expect(p.getMany(["035420"])).rejects.toThrow(/429/);
     expect(c.status.lastRateLimitedAt).not.toBeNull();
+    expect(c.status.rateLimited).toEqual({ "/api/v1/prices": 2 }); // 어느 조회가 한도에 걸렸는지 (/health) — 처음 + 한 번 다시 시도
     const n = calls.filter((x) => x.url.includes("/prices")).length;
     now = new Date(now.getTime() + 2_000);
     expect((await p.getMany(["035420"])).size).toBe(0); // 쉬는 중 — 요청 없음, 오래된 값은 주지 않는다

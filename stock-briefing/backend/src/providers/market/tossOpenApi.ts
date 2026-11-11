@@ -63,6 +63,8 @@ export interface TossOpenApiStatus {
   rateLimits?: Record<string, number>;
   /** 마지막으로 429(요청 한도 초과)를 받은 시각 */
   lastRateLimitedAt?: string | null;
+  /** 경로별 429 횟수 (서버가 켜진 뒤 — 어느 조회가 한도에 걸리는지 운영에서 본다) */
+  rateLimited?: Record<string, number>;
 }
 
 type Json = Record<string, unknown>;
@@ -107,7 +109,7 @@ export class TossOpenApiClient {
     this.baseUrl = opts.baseUrl ?? TOSS_OPENAPI_BASE;
     this.maxRetryWaitMs = opts.maxRetryWaitMs ?? 3000;
     this.timeoutMs = opts.timeoutMs ?? REQUEST_TIMEOUT_MS;
-    this.status = { configured: Boolean(opts.clientId && opts.clientSecret), tokenIssuedAt: null, lastOkAt: null, lastError: null, ipBlocked: false, rateLimits: {}, lastRateLimitedAt: null };
+    this.status = { configured: Boolean(opts.clientId && opts.clientSecret), tokenIssuedAt: null, lastOkAt: null, lastError: null, ipBlocked: false, rateLimits: {}, lastRateLimitedAt: null, rateLimited: {} };
   }
 
   /** 응답 머리글의 초당 허용 요청 수를 경로별로 적어 둔다 (없으면 그대로) */
@@ -220,7 +222,10 @@ export class TossOpenApiClient {
         opts.timeoutMs ?? this.timeoutMs,
       );
       this.noteRateLimit(path, res);
-      if (res.status === 429) this.status.lastRateLimitedAt = seoulIso(this.now());
+      if (res.status === 429) {
+        this.status.lastRateLimitedAt = seoulIso(this.now());
+        if (this.status.rateLimited) this.status.rateLimited[path] = (this.status.rateLimited[path] ?? 0) + 1;
+      }
       if (res.ok) {
         if (!body || typeof body !== "object") throw this.fail(new ProviderError(this.name, `응답 형식 오류: ${path}`));
         this.status.lastOkAt = seoulIso(this.now());
