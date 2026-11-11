@@ -4,6 +4,9 @@ import { Alert, StyleSheet, Text, View } from "react-native";
 import { useStockMutations, useStocks } from "@/api/hooks";
 import type { DiscoverMarket, DiscoverSession, DiscoverStock } from "@/api/types";
 import { formatDateKo } from "@/lib/format";
+import { usePlain } from "@/lib/plainFlag";
+import { plainDiscoverStatus, plainSnapshotTime } from "@/lib/plainView";
+import { useNow } from "@/lib/useNow";
 import { font, space, useTheme } from "@/theme";
 import type { HoldingMark } from "./DiscoverRow";
 
@@ -96,13 +99,16 @@ export function StatusLine({
   paused?: boolean;
 }) {
   const t = useTheme();
+  // 군더더기 글 줄이기(plainView): "장 마감 · 11/11 20:00 기준" 처럼 짧게 (갱신 주기·'직전 정규장 기준' 설명을 빼고 시각은 짧은 꼴로)
+  const plain = usePlain();
+  const now = useNow(60_000);
   const moving = session ? session === "regular" || session === "extended" : open;
   return (
     <View style={[styles.status, { borderBottomColor: t.line, backgroundColor: t.bg }]}>
       <View style={[styles.dot, { backgroundColor: moving ? t.live : t.muted }]} />
       <Text style={{ color: t.muted, fontSize: font.tiny, flexShrink: 1 }} numberOfLines={2}>
-        {statusLabel(market, open, session, live, paused)}
-        {asOf ? ` · ${formatDateKo(asOf, true)} 기준` : ""}
+        {plain ? plainDiscoverStatus(session ?? (open ? "regular" : "closed"), live, paused) : statusLabel(market, open, session, live, paused)}
+        {asOf ? ` · ${plain ? (plainSnapshotTime(asOf, now) ?? `${formatDateKo(asOf, true)} 기준`) : `${formatDateKo(asOf, true)} 기준`}` : ""}
         {note ? ` · ${note}` : ""}
       </Text>
     </View>

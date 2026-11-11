@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import WebSocket from "ws";
 import { isKrCode, normalizeCode } from "../../lib/codes.js";
+import { truncUsdPrice } from "../../lib/usdPrice.js";
 import { TOSS_OPENAPI_WS, type TossOpenApiClient, type TossOpenApiLogger } from "./tossOpenApi.js";
 
 /**
@@ -315,8 +316,10 @@ export class TossRealtime extends EventEmitter implements LiveTicks {
     const parts = msg.topic.split(":"); // trade:us:AAPL
     if (parts[0] !== "trade" || parts.length < 3) return;
     const code = normalizeCode(parts.slice(2).join(":"));
-    const price = Number(msg.data["price"]);
-    if (!Number.isFinite(price)) return;
+    const rawPrice = Number(msg.data["price"]);
+    if (!Number.isFinite(rawPrice)) return;
+    // 미국 체결가는 센트 아래를 버린 값으로 온다 — 혹시 그대로 와도 현재가 확인 값과 같은 자리로 맞춘다 (lib/usdPrice)
+    const price = isKrCode(code) ? rawPrice : truncUsdPrice(rawPrice);
     const volume = Number(msg.data["volume"]);
     const tick: LiveTick = {
       code,

@@ -4,6 +4,7 @@ import { ProviderError, within } from "../../lib/errors.js";
 import { mapLimit } from "../../lib/concurrency.js";
 import { seoulIso } from "../../lib/time.js";
 import { truncPct } from "../../lib/pct.js";
+import { truncUsdPrice } from "../../lib/usdPrice.js";
 import { parseTossAccountTotals, type TossAccountTotals } from "../../services/tossAccountSnapshot.js";
 import type { InvestorFlowDay, InvestorFlowProvider } from "./investorFlow.js";
 import type { LiveTick, QuickPriceSource, StockSessionFacts } from "./tossRealtime.js";
@@ -63,6 +64,8 @@ export interface TossOpenApiStatus {
   rateLimits?: Record<string, number>;
   /** 마지막으로 429(요청 한도 초과)를 받은 시각 */
   lastRateLimitedAt?: string | null;
+  /** 경로별 429 횟수 (서버가 켜진 뒤 — 어느 조회가 한도에 걸리는지 운영에서 본다) */
+  rateLimited?: Record<string, number>;
 }
 
 type Json = Record<string, unknown>;
@@ -107,7 +110,7 @@ export class TossOpenApiClient {
     this.baseUrl = opts.baseUrl ?? TOSS_OPENAPI_BASE;
     this.maxRetryWaitMs = opts.maxRetryWaitMs ?? 3000;
     this.timeoutMs = opts.timeoutMs ?? REQUEST_TIMEOUT_MS;
-    this.status = { configured: Boolean(opts.clientId && opts.clientSecret), tokenIssuedAt: null, lastOkAt: null, lastError: null, ipBlocked: false, rateLimits: {}, lastRateLimitedAt: null };
+    this.status = { configured: Boolean(opts.clientId && opts.clientSecret), tokenIssuedAt: null, lastOkAt: null, lastError: null, ipBlocked: false, rateLimits: {}, lastRateLimitedAt: null, rateLimited: {} };
   }
 
   /** 응답 머리글의 초당 허용 요청 수를 경로별로 적어 둔다 (없으면 그대로) */
@@ -220,7 +223,10 @@ export class TossOpenApiClient {
         opts.timeoutMs ?? this.timeoutMs,
       );
       this.noteRateLimit(path, res);
-      if (res.status === 429) this.status.lastRateLimitedAt = seoulIso(this.now());
+      if (res.status === 429) {
+        this.status.lastRateLimitedAt = seoulIso(this.now());
+        if (this.status.rateLimited) this.status.rateLimited[path] = (this.status.rateLimited[path] ?? 0) + 1;
+      }
       if (res.ok) {
         if (!body || typeof body !== "object") throw this.fail(new ProviderError(this.name, `응답 형식 오류: ${path}`));
         this.status.lastOkAt = seoulIso(this.now());
@@ -610,7 +616,9 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
     const got = this.now().getTime();
     for (const code of list) {
       const p = prices.get(code);
-      const price = num(p?.["lastPrice"]);
+      const raw = num(p?.["lastPrice"]);
+      // 미국 종목은 토스 화면·웹소켓 체결과 같은 자리로 (센트 아래 버림) — 같은 체결이 다른 가격으로 보이지 않게
+      const price = raw === null || isKrCode(code) ? raw : truncUsdPrice(raw);
       const ts = typeof p?.["timestamp"] === "string" && !Number.isNaN(Date.parse(p["timestamp"])) ? p["timestamp"] : null;
       // 체결 시각이 없으면(오늘 체결 없음 등) 붙일 체결이 아니다 — 스냅샷 값을 그대로 둔다
       if (price === null || ts === null) {
@@ -892,8 +900,11 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
     const kr = isKrCode(code);
     if (!p) throw new ProviderError(this.name, `${code} 시세 없음`);
     const latest = daily.at(-1) ?? null;
-    const price = num(p["lastPrice"]) ?? latest?.close ?? null;
-    if (price === null) throw new ProviderError(this.name, `${code} 현재가 없음`);
+    const rawPrice = num(p["lastPrice"]) ?? latest?.close ?? null;
+    if (rawPrice === null) throw new ProviderError(this.name, `${code} 현재가 없음`);
+    // 미국 종목은 토스 화면처럼 센트 아래를 버린다 (공식 현재가는 소수 넷째 자리까지 온다 — lib/usdPrice)
+    const usd = (v: number) => (kr ? v : truncUsdPrice(v));
+    const price = usd(rawPrice);
     const ts = typeof p["timestamp"] === "string" ? p["timestamp"] : null;
     const priceDate = ts ? localDate(ts, kr) : latest?.date ?? "";
     // 오늘 봉이 있으면 전일은 그 앞 봉, 없으면(장 시작 전 등) 마지막 봉이 전일.
@@ -922,10 +933,10 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
       price,
       change,
       changeRate,
-      open: today?.open ?? null,
+      open: today ? usd(today.open) : null,
       // 오늘 봉은 최대 1분 전 것이라 현재가가 그 고가·저가를 넘었을 수 있다
-      high: today ? Math.max(today.high, price) : null,
-      low: today ? Math.min(today.low, price) : null,
+      high: today ? Math.max(usd(today.high), price) : null,
+      low: today ? Math.min(usd(today.low), price) : null,
       prevClose,
       volume: today?.volume ?? null,
       marketCap: shares !== null ? Math.round(price * shares) : null,

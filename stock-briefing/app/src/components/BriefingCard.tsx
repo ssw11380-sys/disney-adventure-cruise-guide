@@ -8,6 +8,8 @@ import { font, slopFor, space, useTheme } from "@/theme";
 import { foldBriefings as FB } from "@/tokens";
 import { sentence, speakRate } from "@/lib/a11y";
 import { AI_TAG } from "@/lib/disclaimer";
+import { usePlain } from "@/lib/plainFlag";
+import { plainText } from "@/lib/plainView";
 import { failedLine, failedReasonSpeech } from "@/lib/briefingStatus";
 import { RankMark } from "./BriefingList";
 import { MarkdownView } from "./MarkdownView";
@@ -43,7 +45,9 @@ export function BriefingCard({
 }) {
   const t = useTheme();
   const failed = briefing.status === "failed";
-  const ai = aiTag && !failed;
+  // 군더더기 글 줄이기(plainView): 날짜 줄 끝 '· AI가 쓴 글' 을 붙이지 않고, 실패 까닭의 'AI 서비스' 도 쉬운 말로
+  const plain = usePlain();
+  const ai = aiTag && !failed && !plain;
   const lines = briefing.summary.split("\n").filter(Boolean);
   return (
     <Card style={selected ? { borderLeftWidth: FB.selBar, borderLeftColor: t.accent, paddingLeft: space.lg - FB.selBar } : undefined}>
@@ -97,8 +101,8 @@ export function BriefingCard({
         </View>
       </Pressable>
       {failed ? (
-        <Text style={{ color: t.danger, fontSize: font.small }} {...(plainFail ? { accessibilityLabel: `만들지 못함, ${failedReasonSpeech(briefing)}` } : {})}>
-          {plainFail ? failedLine(briefing) : (briefing.error ?? briefing.summary)}
+        <Text style={{ color: t.danger, fontSize: font.small }} {...(plainFail ? { accessibilityLabel: `만들지 못함, ${plain ? plainText(failedReasonSpeech(briefing)) : failedReasonSpeech(briefing)}` } : {})}>
+          {plainFail ? (plain ? plainText(failedLine(briefing)) : failedLine(briefing)) : (briefing.error ?? briefing.summary)}
         </Text>
       ) : mode === "line" ? (
         <Text style={{ color: t.ink, fontSize: font.body, lineHeight: 22 }} numberOfLines={1}>

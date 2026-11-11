@@ -17,6 +17,8 @@ import { Badge, Button, Card, ChangeText, ErrorView, Muted, Row, SectionTitle, S
 import { sentence, speakAmount, speakMove, speakProfit, speakRate } from "@/lib/a11y";
 import { createdTimeSameDay } from "@/lib/briefingPick";
 import { AI_NOTE } from "@/lib/disclaimer";
+import { usePlain } from "@/lib/plainFlag";
+import { PLAIN_NOTE } from "@/lib/plainView";
 import { estimateText } from "@/lib/briefingRun";
 import { failedCardText, failedRunText } from "@/lib/briefingStatus";
 import { afterMarketLabel, formatDateKo, formatPct, formatPrice, SESSION_LABEL, shownSign } from "@/lib/format";
@@ -51,6 +53,8 @@ export function BriefingBody({
   side?: number;
 }) {
   const t = useTheme();
+  // 군더더기 글 줄이기(plainView): 'AI가 쓴 글 · 틀릴 수 있음' → '참고용 요약 · 틀릴 수 있음'
+  const plain = usePlain();
   const b = useBriefing(id);
   // 3-24 연결 오류의 '설정 열기'·칸 이름 문구 (플래그 emptyGuide, 꺼져 있으면 null — 지금 그대로)
   const guide = useSettingsGuide();
@@ -173,7 +177,7 @@ export function BriefingBody({
           <Muted>
             {formatDateKo(d.date)} {SESSION_LABEL[d.session]} 브리핑 · {formatDateKo(d.createdAt, true)} 생성
           </Muted>
-          {ai ? <Muted>{AI_NOTE}</Muted> : null}
+          {ai ? <Muted>{plain ? PLAIN_NOTE : AI_NOTE}</Muted> : null}
           <View style={{ flexDirection: "row", gap: space.sm, marginTop: space.xs }}>
             {failed ? <Badge tone="bad">생성 실패</Badge> : null}
             {d.missing.length ? <Badge tone="warn">미확인 {d.missing.length}건</Badge> : null}
@@ -334,6 +338,7 @@ const SOURCE_SLOP = slopFor(Math.round(font.small * 1.45));
  */
 function Head({ d, ai = false }: { d: BriefingWithData; ai?: boolean }) {
   const t = useTheme();
+  const plain = usePlain();
   const failed = d.status === "failed";
   const name = d.name ?? d.code;
   const time = createdTimeSameDay(d);
@@ -346,7 +351,7 @@ function Head({ d, ai = false }: { d: BriefingWithData; ai?: boolean }) {
           </Text>
           <Muted style={styles.headWhen}>{`${formatDateKo(d.date)} ${SESSION_LABEL[d.session]} 브리핑 ·`}</Muted>
           <Muted style={styles.headWhen}>{`${time ?? formatDateKo(d.createdAt, true)} 생성${ai ? " ·" : ""}`}</Muted>
-          {ai ? <Muted style={styles.headWhen}>{AI_NOTE}</Muted> : null}
+          {ai ? <Muted style={styles.headWhen}>{plain ? PLAIN_NOTE : AI_NOTE}</Muted> : null}
           {failed ? <Badge tone="bad">생성 실패</Badge> : null}
           {d.missing.length ? <Badge tone="warn">미확인 {d.missing.length}건</Badge> : null}
         </View>

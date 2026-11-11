@@ -9,6 +9,7 @@ import { seoulIso } from "../lib/time.js";
  */
 export const FEATURES = {
   informationFocus: { default: true, description: "잔고 핵심 금액·상태 우선 표시와 기준 펼치기, 관심 희망가 차이 방향 안내. 끄면 기존 전체 기준 설명과 부호 표시" },
+  plainView: { default: true, description: "군더더기 글 줄이기 (2026-11-12): 잔고 계좌 요약은 금액·평가손익·받은 시각만(단서는 '계산 기준'을 펴면), 그 아래 상태 줄은 '미국 정규장 · 실시간'처럼 짧게, 관심 카드·발견·브리핑·종목 상세·설정의 설명·출처·수신 시각 줄과 'AI' 표기를 줄인다. 숫자·시세·경고·화면 아래 고지 문구는 그대로. 끄면 지금 화면 그대로" },
   accountLiveRefresh: { default: true, description: "앱 연결 중 계좌 원본을 완료 후 30초 간격으로 확인. 끄면 기존 정기·체결·수동 동기화만 유지" },
   widgetLeanLive: { default: true, description: "위젯 핵심 숫자 중심 보기와 앱 실행 중 시세 5초 묶음 전달. 끄면 기존 표시와 1분 간격, 수량 즉시 전달·마지막 시세 전달 보완은 유지" },
   watchlistSteps: { default: true, description: "별도 관심종목·관심 시작 가격·구매희망 가격, 관심 기준 및 잔고 전일 종가 기준 5% 구간 서버 알림. 끄면 메뉴·조회·알림 중지, 저장값 보존" },

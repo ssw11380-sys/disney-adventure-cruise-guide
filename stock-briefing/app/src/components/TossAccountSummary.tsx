@@ -6,6 +6,7 @@ import { ApiRequestError } from "@/api/client";
 import type { TossAccountSnapshotBody } from "@/api/types";
 import { formatNumber, formatPct, formatPrice } from "@/lib/format";
 import { sentence, speakProfit, speakRate } from "@/lib/a11y";
+import { plainSnapshotTime } from "@/lib/plainView";
 import { useSettings } from "@/lib/settings";
 import { tossSnapshotNotice, tossSnapshotRange, tossSnapshotTime, tossSnapshotValuation } from "@/lib/tossAccountSnapshot";
 import { useNow } from "@/lib/useNow";
@@ -14,18 +15,19 @@ import { changeColor, font, fontCap, space, touch, useTheme } from "@/theme";
 /** 계좌 대표 금액은 토스 수신 평가만 사용한다. 시세 추정은 별도로 펼쳐 본다. */
 /** onThemes: 내 종목 테마 화면 열기 (3-35, 플래그 holdingThemes) — 없으면 지금 나무 그대로 */
 /** onJournal: 매매일지 열기 (3-37, 플래그 tradeJournal · tradeRecords) — 없으면 지금 나무 그대로 */
-export function TossAccountSummary({ children, onAllocation, onThemes, onJournal, focused = false }: { children: React.ReactNode; onAllocation?: () => void; onThemes?: () => void; onJournal?: () => void; focused?: boolean }) {
+/** plain · status: 군더더기 글 줄이기 (플래그 plainView) — 짧은 요약과 그 아래 시세 상태 줄. 없으면 지금 나무 그대로 */
+export function TossAccountSummary({ children, onAllocation, onThemes, onJournal, focused = false, plain = false, status }: { children: React.ReactNode; onAllocation?: () => void; onThemes?: () => void; onJournal?: () => void; focused?: boolean; plain?: boolean; status?: React.ReactNode }) {
   const { valuation } = useLocalSearchParams<{ valuation?: string }>();
   const q = useTossAccountSnapshot();
   const { afterCost, showKrw } = useSettings();
   const now = useNow(30_000);
   const denied = q.error instanceof ApiRequestError && (q.error.status === 401 || q.error.status === 403);
   return <TossAccountSummaryView body={denied ? undefined : q.data} failed={q.isError} afterCost={afterCost} showKrw={showKrw} now={now}
-    onAllocation={denied ? undefined : onAllocation} {...(onThemes && !denied ? { onThemes } : null)} {...(onJournal && !denied ? { onJournal } : null)} focused={focused}
+    onAllocation={denied ? undefined : onAllocation} {...(onThemes && !denied ? { onThemes } : null)} {...(onJournal && !denied ? { onJournal } : null)} focused={focused} {...(plain ? { plain: true, status } : null)}
     requestedView={valuation === "live" || valuation === "account" ? valuation : undefined}>{denied ? null : children}</TossAccountSummaryView>;
 }
 
-export function TossAccountSummaryView({ body, failed, afterCost, showKrw, now, children, requestedView, onAllocation, onThemes, onJournal, focused = false }: {
+export function TossAccountSummaryView({ body, failed, afterCost, showKrw, now, children, requestedView, onAllocation, onThemes, onJournal, focused = false, plain = false, status }: {
   body: TossAccountSnapshotBody | undefined;
   failed: boolean;
   afterCost: boolean;
@@ -39,6 +41,12 @@ export function TossAccountSummaryView({ body, failed, afterCost, showKrw, now, 
   /** 3-37 (플래그 tradeJournal · tradeRecords): '내 종목 테마 보기' 뒤 '매매일지 보기' (요약이 계좌 패널·띠의 [매매일지]를 접어 두므로). 없으면 지금 그대로 */
   onJournal?: () => void;
   focused?: boolean;
+  /**
+   * 군더더기 글 줄이기 (플래그 plainView, focused 일 때만): 단서·출처 줄은 '계산 기준'을 폈을 때만 보이고, 요약은 금액·평가손익·받은 시각만.
+   * 끝의 '종목별 금액·손익·비중은 시세 기준 추정값입니다' 자리에는 시세 상태 줄(status — 실시간·지연)을 둔다. 없으면 지금 나무 그대로
+   */
+  plain?: boolean;
+  status?: React.ReactNode;
 }) {
   const t = useTheme();
   const navigation = useNavigationContainerRef();
@@ -70,6 +78,62 @@ export function TossAccountSummaryView({ body, failed, afterCost, showKrw, now, 
   const valuation = snap ? tossSnapshotValuation(snap, afterCost) : null;
   // 서버에서 기능을 끄거나 이전 서버에 연결하면 기존 화면을 유지한다.
   if (body?.on === false && !failed) return <>{children}</>;
+  if (focused && plain) {
+    const open = estimateOpen && (basisOpen || !snap);
+    const when = snap ? plainSnapshotTime(snap.receivedAt, now) : null;
+    const link = (label: string, a11y: string, onPress: () => void, expanded?: boolean) => (
+      <Pressable accessibilityRole="button" accessibilityLabel={a11y} {...(expanded === undefined ? null : { accessibilityState: { expanded } })} onPress={onPress} style={styles.action}>
+        <Text style={{ color: t.accent, fontSize: font.small }}>{label}</Text>
+      </Pressable>
+    );
+    return <View style={{ backgroundColor: t.surface }}>
+      <View style={styles.body}>
+        <View style={styles.plainHead}>
+          <Text accessibilityRole="header" style={{ color: t.ink, fontSize: font.body, fontWeight: "700" }}>토스 주식 평가금액</Text>
+          {when ? <Text style={{ color: t.muted, fontSize: font.tiny, fontVariant: ["tabular-nums"] }}>{when}</Text> : null}
+        </View>
+        {notice ? <Text style={{ color: failed || snap ? t.warn : t.muted, fontSize: font.small }}>{notice}</Text> : null}
+        {snap && amount && valuation ? <>
+          {showKrw && valuation.evaluationKrw !== null
+            ? <Text maxFontSizeMultiplier={fontCap.row} style={{ color: t.ink, fontSize: font.hero, fontWeight: "700", fontVariant: ["tabular-nums"] }}>{formatPrice(valuation.evaluationKrw, "KRW")}</Text>
+            : <>
+              <View style={styles.amounts}><Amount label="원화" value={formatPrice(amount.krw, "KRW")} /><Amount label="달러" value={formatPrice(amount.usd, "USD")} /></View>
+              {showKrw ? <Text style={{ color: t.warn, fontSize: font.small }}>환율·평가금액 확인 불가 · 통화별 원본만 표시</Text> : null}
+            </>}
+          {showKrw ? <>
+            <View style={styles.profitLine} accessible accessibilityLabel={sentence(["평가손익", valuation.profitKrw === null ? "확인 불가" : speakProfit(formatPrice(valuation.profitKrw, "KRW"), valuation.profitKrw), valuation.profitRate === null ? null : `수익률 ${speakRate(valuation.profitRate)}`])}>
+              <Text style={{ color: t.sub, fontSize: font.small }}>평가손익</Text>
+              <Text maxFontSizeMultiplier={fontCap.row} style={{ color: valuation.profitKrw === null ? t.muted : changeColor(t, valuation.profitKrw), fontSize: font.title, fontWeight: "700", fontVariant: ["tabular-nums"] }}>{valuation.profitKrw === null ? "확인 불가" : formatPrice(valuation.profitKrw, "KRW", { sign: true })}</Text>
+              {valuation.profitKrw !== null ? <Text maxFontSizeMultiplier={fontCap.row} style={{ color: valuation.profitRate === null ? t.muted : changeColor(t, valuation.profitKrw), fontSize: font.body, fontWeight: "600", fontVariant: ["tabular-nums"] }}>{valuation.profitRate === null ? "수익률 계산 불가" : formatPct(valuation.profitRate)}</Text> : null}
+            </View>
+            {valuation.unavailable ? <Text style={{ color: t.warn, fontSize: font.small }}>{valuation.unavailable}</Text> : valuation.estimatedHoldingCount ? <Text style={{ color: t.warn, fontSize: font.small }}>추정 원가 {valuation.estimatedHoldingCount}종목 포함</Text> : null}
+          </> : null}
+          {snap.excludedHoldingCount > 0 ? <Text style={{ color: t.warn, fontSize: font.small }}>계좌 합계에는 앱 동기화 제외 {snap.excludedHoldingCount}종목도 포함</Text> : null}
+        </> : null}
+        <View style={styles.profitLine}>
+          {snap ? link(basisOpen ? "계산 기준 접기" : "계산 기준", basisOpen ? "금액·계산 기준 접기" : "금액·계산 기준 펼치기", () => { setBasisOpen(!basisOpen); setEstimateOpen(false); }, basisOpen) : null}
+          {onAllocation ? link("비중", "종목 시세 기준 비중 보기", onAllocation) : null}
+          {onThemes ? link("테마", "내 종목 테마 보기", onThemes) : null}
+          {onJournal ? link("매매일지", "매매일지 보기", onJournal) : null}
+        </View>
+        {basisOpen && snap && amount && valuation ? <View style={[styles.details, { borderColor: t.line }]}>
+          <Text style={{ color: t.sub, fontSize: font.small }}>토스 수신 원본 · {afterCost ? "수수료·세금 차감 후" : "수수료·세금 차감 전"} · 현금·예수금 제외</Text>
+          {showKrw && valuation.evaluationKrw !== null ? <View style={styles.amounts}><Amount label="원화" value={formatPrice(amount.krw, "KRW")} /><Amount label="달러" value={formatPrice(amount.usd, "USD")} /></View> : null}
+          {valuation.costKrw !== null ? <Text style={{ color: t.sub, fontSize: font.small }}>매입금액 {formatPrice(valuation.costKrw, "KRW")}</Text> : null}
+          {showKrw ? <Text style={{ color: t.muted, fontSize: font.small }}>평가손익은 같은 계좌 동기화의 평가금액 − 원화 매입금액입니다. 환율·원가·비용·반올림 기준에 따라 토스 화면의 원화 손익과 다를 수 있습니다.</Text> : <Text style={{ color: t.muted, fontSize: font.small }}>설정에서 원화 환산을 켜면 원화 합계와 평가손익을 함께 봅니다.</Text>}
+          {amount.usd !== 0 && snap.displayFx ? <Text style={{ color: t.muted, fontSize: font.small }}>앱 표시 환율 {formatNumber(snap.displayFx.usdKrw, 2)}원 · {tossSnapshotTime(snap.displayFx.receivedAt)} 확인. 토스 앱의 최종 원화 합계와 다를 수 있습니다.</Text> : null}
+          <Text style={{ color: t.sub, fontSize: font.small }}>전체 연동 {snap.accountCount}개 계좌 · 보유 {snap.holdingCount}종목</Text>
+          <Text style={{ color: t.muted, fontSize: font.small }}>위 금액은 토스에서 받은 값입니다 ({tossSnapshotRange(snap.receivedFrom, snap.receivedAt)} 수신, 한국 시각). 아래 종목별 금액·손익·비중은 종목 시세로 계산한 값이라 조금 다를 수 있습니다.</Text>
+        </View> : null}
+        {(basisOpen || !snap) && children ? <>
+          {link(estimateOpen ? "시세 기준 합계 접기" : "시세 기준 합계 보기", estimateOpen ? "시간외 시세 기준 추정 접기" : "시간외 시세 기준 추정 보기", () => setEstimateOpen(!estimateOpen), estimateOpen)}
+          {estimateOpen ? <Text style={{ color: t.warn, fontSize: font.small }}>아래는 지금 시세(시간외 포함)로 다시 계산한 합계입니다. 토스 계좌의 평가손익과 다를 수 있습니다.</Text> : null}
+        </> : null}
+      </View>
+      {open ? children : null}
+      {status && !open ? <View style={[styles.listNote, { borderTopColor: t.line }]}>{status}</View> : null}
+    </View>;
+  }
   if (focused) return <View style={{ backgroundColor: t.surface }}>
     <View style={styles.body}>
       <Text accessibilityRole="header" style={{ color: t.ink, fontSize: font.body, fontWeight: "700" }}>토스 주식 평가금액</Text>
@@ -192,6 +256,8 @@ function Amount({ label, value }: { label: string; value: string }) {
 
 const styles = StyleSheet.create({
   profitLine: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: space.xl, rowGap: space.xxs },
+  // 짧은 요약(플래그 plainView)의 머리 줄: 제목 | 받은 시각
+  plainHead: { flexDirection: "row", flexWrap: "wrap", alignItems: "baseline", justifyContent: "space-between", columnGap: space.sm, rowGap: space.xxs },
   details: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: space.sm, gap: space.sm },
   listNote: { borderTopWidth: StyleSheet.hairlineWidth, paddingHorizontal: space.lg, paddingVertical: space.sm },
   action: { minHeight: touch.min, justifyContent: "center", paddingVertical: space.sm, alignSelf: "flex-start" },

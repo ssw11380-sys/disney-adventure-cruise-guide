@@ -33,6 +33,7 @@ import { formatDateKo, formatPct } from "@/lib/format";
 import { viewState } from "@/lib/freshness";
 import { useSettingsGuide } from "@/lib/settingsLink";
 import { useFoldLayout } from "@/lib/useFoldLayout";
+import { usePlain } from "@/lib/plainFlag";
 import { useUx } from "@/lib/uxFlags";
 import { isWide } from "@/lib/windowClass";
 import { font, fontCap, slopFor, space, useTheme } from "@/theme";
@@ -83,6 +84,8 @@ export default function BriefingsScreen() {
   const trim = useFeature("briefingTrim", false);
   // 브리핑 2차 6 (플래그 briefingSafeWording, 앱 fallback 꺼짐): 접은 화면 종목 카드 날짜 줄 끝 ' · AI가 쓴 글'. 여기서 한 번 읽어 카드에 넘긴다. 꺼지면 지금 그대로
   const aiTag = useFeature("briefingSafeWording", false);
+  // 군더더기 글 줄이기(plainView): 맨 위 묶음 아래 '… 숫자로 만든 것 · 매매 권유가 아닙니다' 줄을 그리지 않는다 (고지 문구는 화면 맨 아래에 그대로)
+  const plain = usePlain();
   // 브리핑 2차 2 (플래그 briefingCompactTop, 앱 fallback 꺼짐): 접은 화면 맨 위 시장 요약·계좌 카드 → 넓은 창 줄 모양 두 줄(계좌 먼저)과 안내 한 줄,
   // 넓은 창도 계좌 줄을 위로. 여기서 한 번 읽어 줄에 속성으로 넘긴다. 꺼지면 지금 그대로
   const compactTop = useFeature("briefingCompactTop", false);
@@ -216,9 +219,9 @@ export default function BriefingsScreen() {
   const oldBanner =
     llmOff || (last && last.failed > 0) ? (
       <Card style={{ borderLeftWidth: 3, borderLeftColor: t.danger }}>
-        <Text style={{ color: t.danger, fontSize: font.body, fontWeight: "700" }}>{llmOff ? "브리핑 모델이 설정되지 않았습니다" : `최근 실행에서 ${last!.failed}개 종목이 실패했습니다`}</Text>
+        <Text style={{ color: t.danger, fontSize: font.body, fontWeight: "700" }}>{llmOff ? (plain ? "브리핑을 만들 수 없습니다" : "브리핑 모델이 설정되지 않았습니다") : `최근 실행에서 ${last!.failed}개 종목이 실패했습니다`}</Text>
         {/* 브리핑 3차 2 (briefingStatus): 켜진 채 상태를 못 받아 이 안내로 돌아와도 오류 원문 대신 쉬운 말 (꺼지면 원문 그대로) */}
-        <Muted>{llmOff ? "브리핑을 만드는 모델 키가 서버에 설정되지 않아 새 브리핑을 만들 수 없습니다. 관리자에게 알려 주세요." : statusOn && last!.lastError ? failedRunText(last!.lastError) : last!.lastError ?? ""}</Muted>
+        <Muted>{llmOff ? (plain ? "서버 설정이 빠져 있어 새 브리핑을 만들 수 없습니다. 관리자에게 알려 주세요." : "브리핑을 만드는 모델 키가 서버에 설정되지 않아 새 브리핑을 만들 수 없습니다. 관리자에게 알려 주세요.") : statusOn && last!.lastError ? failedRunText(last!.lastError) : last!.lastError ?? ""}</Muted>
         {last ? <Muted>{formatDateKo(last.finishedAt, true)} · {last.session === "morning" ? "오전" : "오후"} · 성공 {last.ok} / 실패 {last.failed} / 건너뜀 {last.skipped}</Muted> : null}
       </Card>
     ) : null;
@@ -304,7 +307,7 @@ export default function BriefingsScreen() {
         timeMark={timeMark}
         // 브리핑 2차 2 (compactTop): 시장 줄이 한국 휴장을 이미 말하면 목록 위 안내에서 휴장 글을 뺀다 (같은 말 두 번 방지)
         holiday={compactTop && summarySaysKrHoliday ? null : wideHoliday}
-        criterion={movers ? CRITERION : null}
+        criterion={movers ? (plain ? CRITERION_PLAIN : CRITERION) : null}
         ratesFail={ratesFailText}
         banner={banner}
         manual={manual}
@@ -370,7 +373,7 @@ export default function BriefingsScreen() {
             holdBig
           />
         ) : null}
-        <Muted style={styles.topNote}>{topNote}</Muted>
+        {plain ? null : <Muted style={styles.topNote}>{topNote}</Muted>}
       </View>
     ) : null;
   return (
@@ -431,7 +434,7 @@ export default function BriefingsScreen() {
         onChange={setMode}
       />
       {/* 브리핑 2차 3: 기준 줄은 보기 탭과 첫 카드(순위 1) 사이에 한 번 */}
-      {ranked && withBriefing.length > 0 ? <Muted style={styles.criterion}>{CRITERION}</Muted> : null}
+      {ranked && withBriefing.length > 0 ? <Muted style={styles.criterion}>{plain ? CRITERION_PLAIN : CRITERION}</Muted> : null}
       {items.length === 0 ? (
         (guideEmpty?.none ?? <Empty title="등록된 종목이 없습니다" hint="잔고 탭에서 종목을 추가하세요." />)
       ) : withBriefing.length === 0 ? (
@@ -814,6 +817,8 @@ const TOP_ROW_SLOP = slopFor(31);
 
 /** 변동 큰 순의 기준·매매 권유 아님 ('변동 큰 종목' 카드 대신 — 넓은 창 목록 위·아래, 브리핑 2차 3 이면 접은 화면 순위 1 바로 위) */
 const CRITERION = "변동 큰 순 = 전일 대비 등락률 크기 순 · 매매 권유가 아닙니다";
+/** 군더더기 글 줄이기(plainView): 정렬 기준만 (고지 문구는 화면 맨 아래에 그대로 있다) */
+const CRITERION_PLAIN = "변동 큰 순 = 전일 대비 등락률 크기 순";
 
 const styles = StyleSheet.create({
   fill: { flex: 1 },

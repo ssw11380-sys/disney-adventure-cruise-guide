@@ -16,6 +16,7 @@ import { InitialPasswordSheet } from "@/components/auth/InitialPasswordSheet";
 import { FilingAlertBridge } from "@/components/FilingAlertBridge";
 import { NotificationBridge, useSplashHold } from "@/components/NotificationBridge";
 import { MovementAlertBridge } from "@/components/MovementAlertBridge";
+import { PlainViewProvider } from "@/components/PlainViewProvider";
 import { PriceAlertProvider } from "@/components/PriceAlertProvider";
 import { ConnectionWordingBridge, FirstRunGate, GuideMarksProvider, HapticsBridge, UxFlagsProvider } from "@/components/UxBridge";
 import { WatchGroupsProvider } from "@/components/WatchGroupsProvider";
@@ -225,6 +226,7 @@ export default function RootLayout() {
             <LiveStreamProvider>
               {/* 3-24 플래그(oneHand·firstRun·emptyGuide)를 한 번 받아 아래 화면에 내려 준다 */}
               <UxFlagsProvider>
+                <PlainViewProvider>
                 <GuideMarksProvider>
                   {/* 가격 알림 (3-29, 플래그 priceAlerts): 조건 목록·확인 엔진·화면 위 알림 카드·알림 시트. 꺼져 있으면 아래를 그대로 그리기만 한다 */}
                   <PriceAlertProvider>
@@ -245,6 +247,7 @@ export default function RootLayout() {
                     <InitialPasswordSheet />
                   </PriceAlertProvider>
                 </GuideMarksProvider>
+                </PlainViewProvider>
               </UxFlagsProvider>
             </LiveStreamProvider>
           </PersistQueryClientProvider>
