@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { LiveTick } from "../src/providers/market/tossRealtime.js";
 import { PriceStream, type StreamSocket } from "../src/services/priceStream.js";
 import { changePct, ratioPct, retruncRate, truncPct } from "../src/lib/pct.js";
+import { truncUsdPrice } from "../src/lib/usdPrice.js";
 import { krBaseWithFallback, NaverKrBase, parseKrBaseRow, pickKrBase, pickRegularClose } from "../src/providers/market/naverKrBase.js";
 import { MarketCalendar, stateFromOfficial, type OfficialCalendar } from "../src/providers/market/calendar.js";
 import { TossProvider } from "../src/providers/market/toss.js";
@@ -714,6 +715,52 @@ describe("실시간 스트림 — 앱이 보고 있는 종목(등록 종목 밖)
     await settle();
     expect((b.sent[0]!["ticks"] as Array<{ code: string }>).map((x) => x.code)).toEqual(["000660"]);
     stream.stop();
+  });
+});
+
+describe("미국 주식 가격은 토스증권처럼 센트 아래를 버린다 (lib/usdPrice)", () => {
+  it("실측 표본: 공식 현재가(소수 넷째 자리) → 토스 화면·웹소켓 체결가", () => {
+    expect(truncUsdPrice(354.555)).toBe(354.55); // 브로드컴 — 토스 화면 체결가 $354.55 (반올림이면 354.56)
+    expect(truncUsdPrice(34.5282)).toBe(34.52); // 아이온큐 — 웹소켓 체결 34.52 (반올림이면 34.53)
+    expect(truncUsdPrice(210.235)).toBe(210.23); // 버티브
+    expect(truncUsdPrice(354.7851)).toBe(354.78);
+    expect(truncUsdPrice(82.405)).toBe(82.4); // 암페놀
+  });
+
+  it("이미 센트 단위인 값은 그대로 (부동소수 오차로 1센트 깎이지 않는다) · 1달러 미만은 넷째 자리까지 그대로", () => {
+    for (const v of [354.55, 68.42, 4.35, 1.15, 1.1, 100, 1, 377.5, 0.29 * 100]) expect(truncUsdPrice(v), String(v)).toBeCloseTo(v, 9);
+    expect(truncUsdPrice(4.35)).toBe(4.35);
+    expect(truncUsdPrice(1.15)).toBe(1.15);
+    expect(truncUsdPrice(0.0537)).toBe(0.0537);
+    expect(truncUsdPrice(0.9999)).toBe(0.9999);
+    expect(truncUsdPrice(Number.NaN)).toBeNaN();
+  });
+
+  it("공식 현재가를 받는 두 길(1초 확인 · 스냅샷 시세)에 모두 적용하고, 한국 종목은 건드리지 않는다", async () => {
+    const base = fakeFetch();
+    // TSLA 가 센트 아래 가격으로 체결됨
+    const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (!url.includes("/api/v1/prices")) return base(input, init);
+      const symbols = new URL(url).searchParams.get("symbols")!.split(",");
+      return new Response(
+        JSON.stringify({
+          result: symbols.map((s) =>
+            s === "TSLA" ? { symbol: "TSLA", timestamp: "2026-09-22T13:59:00.000+09:00", lastPrice: "377.5551", currency: "USD" } : { symbol: s, timestamp: "2026-09-22T13:59:30.123+09:00", lastPrice: "201500", currency: "KRW" },
+          ),
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+    const c = new TossOpenApiClient({ clientId: "c_1", clientSecret: "s_1", fetchFn, now: NOW, maxRetryWaitMs: 0 });
+    const p = new TossOpenApiProvider(c, { now: NOW });
+    const ticks = await p.getMany(["TSLA", "035420"]);
+    expect(ticks.get("TSLA")!.price).toBe(377.55);
+    expect(ticks.get("035420")!.price).toBe(201_500);
+    const q = await p.getQuote("TSLA");
+    expect(q.price).toBe(377.55);
+    // 전일 대비·등락률도 버린 가격으로 (센트 아래 숫자가 남지 않는다)
+    expect(Math.round(q.change * 100) / 100).toBe(q.change);
   });
 });
 
