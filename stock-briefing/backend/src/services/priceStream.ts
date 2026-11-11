@@ -2,6 +2,7 @@ import type { EventEmitter } from "node:events";
 import { CODE_RE, normalizeCode } from "../lib/codes.js";
 import type { LiveTick, LiveTicks, QuickPriceSource } from "../providers/market/tossRealtime.js";
 import type { ChainLogger } from "../providers/market/chain.js";
+import { laterThan, polledOverWs } from "./tickOrder.js";
 
 /**
  * 서버 → 앱 실시간 가격 스트림 (웹소켓 /api/stream).
@@ -119,10 +120,14 @@ export class PriceStream {
   /** 접속 직후: 웹소켓이 들고 있는 마지막 체결 + 지금까지 보낸 값 전부를 한 번에. 그 뒤 폴링 소스가 있으면 바로 한 번 읽는다 */
   private async sendSnapshot(socket: StreamSocket): Promise<void> {
     try {
-      for (const code of await this.deps.codes()) {
+      const codes = await this.pollCodes();
+      for (const code of codes) {
         const t = this.deps.live?.get(code);
         if (t) this.remember({ ...t, source: "toss-openapi" });
       }
+      // 등록 종목도, 누가 보고 있는 종목도 아닌 값은 버린다 (잠깐 본 종목이 서버를 다시 켤 때까지 스냅샷에 실리지 않게)
+      const keep = new Set(codes);
+      for (const code of this.last.keys()) if (!keep.has(code)) this.last.delete(code);
     } catch {
       /* 종목 목록을 못 읽어도 스냅샷은 보낸다 */
     }
@@ -208,9 +213,10 @@ export class PriceStream {
       const ticks = await q.getMany(codes);
       for (const [code, tick] of ticks) {
         const ws = this.deps.live?.get(code);
-        // 웹소켓 체결이 폴링 값보다 새로우면 폴링 값은 버린다
-        if (ws && Date.parse(ws.timestamp) >= Date.parse(tick.timestamp)) continue;
-        this.publish({ code, price: tick.price, volume: tick.volume, timestamp: tick.timestamp, source: q.name });
+        // 웹소켓 체결이 폴링 값보다 새로우면 폴링 값은 버린다. 같은 초 안에서 웹소켓이 놓친 체결은 살린다 (services/tickOrder — 가격 출처 고르기와 같은 규칙)
+        const use = ws ? polledOverWs(ws, tick) : tick;
+        if (!use) continue;
+        this.publish({ code, price: use.price, volume: use.volume, timestamp: use.timestamp, source: q.name });
       }
     } catch (e) {
       this.deps.log?.warn({ err: e instanceof Error ? e.message : String(e) }, "실시간 스트림 폴링 실패");
@@ -222,7 +228,8 @@ export class PriceStream {
   /** 마지막 값 갱신. 가격이 실제로 바뀌었을 때만 true (같은 가격의 새 체결은 시각만 갱신) */
   private remember(tick: StreamTick): boolean {
     const prev = this.last.get(tick.code);
-    if (prev && prev.timestamp > tick.timestamp) return false;
+    // 시각은 읽어서 견준다 — 출처마다 표기(+09:00 · Z)가 달라도 순서가 뒤집히지 않게
+    if (prev && laterThan(prev.timestamp, tick.timestamp)) return false;
     this.last.set(tick.code, tick);
     return !prev || prev.price !== tick.price;
   }

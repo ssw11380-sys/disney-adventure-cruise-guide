@@ -18,7 +18,7 @@ import type { InvestorFlowProvider } from "./market/investorFlow.js";
 import { KisProvider } from "./market/kis.js";
 import { KisMasterProvider } from "./market/kisMaster.js";
 import { NaverFinanceProvider } from "./market/naver.js";
-import { NaverKrBase } from "./market/naverKrBase.js";
+import { krBaseWithFallback, NaverKrBase } from "./market/naverKrBase.js";
 import { NaverFundamentals } from "./market/fundamentals.js";
 import type { MasterProvider, QuoteProvider, StockSearchProvider } from "./market/types.js";
 import { YahooProvider } from "./market/yahoo.js";
@@ -144,13 +144,9 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
   if (cfg.tossOpenApiEnabled) {
     const client = new TossOpenApiClient({ clientId: cfg.TOSS_CLIENT_ID, clientSecret: cfg.TOSS_CLIENT_SECRET, log });
     tossOpenApi = new TossOpenApiProvider(client, {
-      // 네이버가 주지 못한 종목만 토스 웹 기준가를 한 번 더 물어 본다 (다시 열리면 그대로 쓰이고, 막혀 있으면 30초씩 쉰다)
-      krBaseMany: async (codes) => {
-        const out = await krBase.baseMany(codes).catch(() => new Map<string, number>());
-        const missing = codes.filter((c) => !out.has(c));
-        if (missing.length) for (const [c, b] of await toss.baseMany(missing).catch(() => new Map<string, number>())) out.set(c, b);
-        return out;
-      },
+      // 네이버가 주지 못한 종목만 토스 웹 기준가를 한 번 더 물어 본다 (다시 열리면 그대로 쓰이고, 막혀 있으면 10분씩 쉰다).
+      // 토스 웹은 잠깐만 기다린다 — 느려도 네이버가 준 기준가까지 늦어져 버려지지 않게 (naverKrBase.krBaseWithFallback)
+      krBaseMany: (codes) => krBaseWithFallback(codes, (c) => krBase.baseMany(c), (c) => toss.baseMany(c)),
     });
     live = new TossRealtime(client, { log });
   }
@@ -249,7 +245,7 @@ export function describeProviders(cfg: AppConfig): Record<string, string> {
     financials: (cfg.DART_API_KEY ? "dart(한국)" : "없음(DART 키 없음)") + " · edgar(미국)",
     investorFlow: cfg.kisEnabled ? "kis" : cfg.tossOpenApiEnabled ? "toss-openapi(공식)" : "없음 (KIS/토스 Open API 키 없음)",
     realtime: cfg.tossOpenApiEnabled ? "toss-openapi 웹소켓 + 공식 현재가 1초 확인" : "toss 웹 3초 갱신 (Open API 키 있으면 웹소켓)",
-    krBase: "naver 실시간 시세 (한국 종목 기준가)",
+    krBase: "naver 실시간 시세 + 분봉 (한국 종목 기준가 — 개장 전에는 지난 정규장 종가)",
     llm: describeLlmBackend(resolveLlmBackend(cfg)),
   };
 }

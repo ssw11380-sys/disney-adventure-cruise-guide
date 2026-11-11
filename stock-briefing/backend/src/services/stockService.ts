@@ -5,6 +5,7 @@ import { CandleCache } from "./candleCache.js";
 import { marketContext, tradingDate } from "./marketContext.js";
 import { keepTossCalendar, realtimeOf, sessionAt, toQuoteSession, tradedInSession, type StockSession } from "./liveSession.js";
 import { wsCovered } from "./priceStream.js";
+import { polledOverWs } from "./tickOrder.js";
 import type { MarketStatus } from "../providers/market/calendar.js";
 import type { Db } from "../db/index.js";
 import { sameTimeOrder } from "../db/order.js";
@@ -1124,10 +1125,13 @@ export class StockService {
     // polled = 토스 웹 가격 (timestamp 가 체결 시각이 아니라 받은 시각)
     const ws = usable(this.deps.live?.get(quote.code));
     // 공식 API 현재가(quickExact)는 시간외 체결까지 든 '최근 체결'이고 시각도 실제 체결 시각이다 → 시간외에도 쓰고, 웹소켓 체결과는 체결 시각으로 견준다
-    // (웹소켓은 유실이 있다 — 놓친 체결을 1초 확인이 바로 메운다. 시각이 같으면 밀리초까지 있는 웹소켓 체결)
+    // (웹소켓은 유실이 있다 — 놓친 체결을 1초 확인이 바로 메운다. 현재가 시각은 초 단위라 같은 초 안의 놓친 체결은 받은 순서로 가린다 — services/tickOrder)
     if (this.quickExact) {
       const exact = quick && quote.source.startsWith("toss") ? usable(quick.get(quote.code)) : null;
-      if (ws && exact) return Date.parse(exact.timestamp) > Date.parse(ws.timestamp) ? { tick: exact, polled: true } : { tick: ws, polled: false };
+      if (ws && exact) {
+        const newer = polledOverWs(ws, exact);
+        return newer ? { tick: newer, polled: true } : { tick: ws, polled: false };
+      }
       if (ws) return { tick: ws, polled: false };
       return exact ? { tick: exact, polled: true } : null;
     }

@@ -414,6 +414,12 @@ export function aggregateCandles(daily: Candle[], period: CandlePeriod): Candle[
 
 /** 한국 종목 기준가(krBase)를 기다리는 최대 시간 */
 const KR_BASE_WAIT_MS = 1_500;
+/** 현재가 묶음을 거절하게 만든 종목을 묶음에서 빼 두는 시간 */
+const REJECTED_MS = 10 * 60_000;
+/** 물은 종목이 모두 거절됐을 때(종목 탓이 아닐 수 있다) 쉬는 시간 */
+const REJECTED_ALL_MS = 60_000;
+/** 종목(심볼) 때문에 거절된 요청인지 — 모르는·상장폐지 종목은 400·404·422 */
+const isRejected = (e: unknown): boolean => e instanceof ProviderError && /HTTP 4(00|04|22)/.test(e.message);
 /** 시세용 일봉 개수 (52주 고저) */
 const QUOTE_DAILY = 260;
 /** 같은 거래일 안에서 최근 봉(오늘 시고저·거래량, 새로 열린 거래일 봉)만 다시 받는 간격 — 예전 시세 캐시와 같은 1분 */
@@ -779,19 +785,46 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
     return p;
   }
 
+  /** 현재가 묶음을 거절하게 만든 종목(공식 API 가 모르는·상장폐지 종목)과 다시 넣어 볼 시각 — 그동안은 묶음에서 뺀다 */
+  private readonly rejectedUntil = new Map<string, number>();
+
   /** 현재가 일괄 조회 (/prices 는 symbols 를 콤마로 여러 개 받는다) */
   private async pricesMany(codes: string[]): Promise<Map<string, Json>> {
     const out = new Map<string, Json>();
-    for (let i = 0; i < codes.length; i += PRICES_CHUNK) {
-      const chunk = codes.slice(i, i + PRICES_CHUNK);
+    const t = this.now().getTime();
+    // 묶음을 거절하게 만든 종목은 한동안 묻지 않는다 (그 종목만 '시세 없음' → 체인이 다음 소스로)
+    const ask = codes.filter((c) => {
+      const until = this.rejectedUntil.get(c);
+      if (until === undefined) return true;
+      if (until > t) return false;
+      this.rejectedUntil.delete(c);
+      return true;
+    });
+    for (let i = 0; i < ask.length; i += PRICES_CHUNK) {
+      const chunk = ask.slice(i, i + PRICES_CHUNK);
       let rows: Json[];
       try {
         rows = (await this.client.get<Json[]>("/api/v1/prices", { symbols: chunk.join(",") })) ?? [];
       } catch (e) {
-        // 모르는·상장폐지 종목 하나 때문에 묶음 전체가 4xx 로 거절되면 종목마다 다시 물어 나머지는 살린다
-        if (chunk.length === 1 || !(e instanceof ProviderError) || !/HTTP 4(00|04|22)/.test(e.message)) throw e;
-        const single = await mapLimit(chunk, DAILY_CONCURRENCY, (c) => this.client.get<Json[]>("/api/v1/prices", { symbols: c }).then((r) => (r ?? []).map((x) => ({ ...x, symbol: x["symbol"] ?? c })), () => [] as Json[]));
-        rows = single.flat();
+        if (!isRejected(e)) throw e;
+        if (chunk.length === 1) {
+          // 한 종목만 물었는데 거절: 잠깐 다시 묻지 않는다 (상세 화면을 보는 동안 1초마다 두드리지 않게)
+          this.rejectedUntil.set(chunk[0]!, this.now().getTime() + REJECTED_ALL_MS);
+          throw e;
+        }
+        // 모르는·상장폐지 종목 하나 때문에 묶음 전체가 4xx 로 거절되면 종목마다 다시 물어 나머지는 살린다.
+        // 거절된 종목은 기억해 두고 한동안 묶음에서 뺀다 — 1초 확인(getMany)이 매번 '묶음 1 + 종목 수'만큼 부르지 않게
+        const single = await mapLimit(chunk, DAILY_CONCURRENCY, (c) =>
+          this.client.get<Json[]>("/api/v1/prices", { symbols: c }).then(
+            (r) => ({ rows: (r ?? []).map((x) => ({ ...x, symbol: x["symbol"] ?? c })), rejected: false }),
+            (e2: unknown) => ({ rows: [] as Json[], rejected: isRejected(e2) }),
+          ),
+        );
+        const bad = chunk.filter((_, k) => single[k]!.rejected);
+        // 모두 거절되면 종목 탓이 아닐 수 있다(요청 자체의 문제) → 짧게만 쉰다
+        const until = this.now().getTime() + (bad.length === chunk.length ? REJECTED_ALL_MS : REJECTED_MS);
+        for (const c of bad) this.rejectedUntil.set(c, until);
+        rows = single.flatMap((x) => x.rows);
       }
       for (const r of rows) {
         const sym = String(r["symbol"] ?? "").toUpperCase();
