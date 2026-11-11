@@ -49,6 +49,8 @@ export interface TossOpenApiClientOptions {
 const REQUEST_TIMEOUT_MS = 10_000;
 /** 종목 마스터(마켓별 전체 종목)는 응답이 커서 더 기다린다 */
 const MASTER_TIMEOUT_MS = 30_000;
+/** 장 운영 달력 조회 제한 시간 */
+const CALENDAR_TIMEOUT_MS = 5_000;
 
 export interface TossOpenApiStatus {
   configured: boolean;
@@ -526,7 +528,8 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
    * 수능일·조기 폐장도 그날 시각으로 온다. 받지 못하면 던진다 (부르는 쪽이 요일·휴장일 목록으로 대신한다)
    */
   async marketCalendar(market: "KR" | "US"): Promise<TossMarketCalendar> {
-    const r = await this.client.get<Json>(`/api/v1/market-calendar/${market}`);
+    // 장 상태를 묻는 요청들이 오래 붙잡히지 않게 짧게 (예전 달력 조회와 같은 5초 — 넘으면 요일·휴장일 목록 추정)
+    const r = await this.client.get<Json>(`/api/v1/market-calendar/${market}`, {}, {}, { timeoutMs: CALENDAR_TIMEOUT_MS });
     if (!r || typeof r !== "object") throw new ProviderError(this.name, `장 운영 달력 응답이 비었습니다 (${market})`);
     const out = { previous: parseCalendarDay(market, r["previousBusinessDay"]), today: parseCalendarDay(market, r["today"]), next: parseCalendarDay(market, r["nextBusinessDay"]) };
     if (!out.today) throw new ProviderError(this.name, `장 운영 달력 응답 모양이 다릅니다 (${market})`);
