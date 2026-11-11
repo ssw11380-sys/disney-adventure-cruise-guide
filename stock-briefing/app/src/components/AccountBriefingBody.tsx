@@ -28,6 +28,8 @@ import { formatDateKo, formatIndexValue, formatPct, formatWon, SESSION_LABEL, sh
 import { viewState } from "@/lib/freshness";
 import { openSourceLink } from "@/lib/openSourceLink";
 import { quoteBasisChunks, quoteBasisSpeech } from "@/lib/numberBasis";
+import { usePlain } from "@/lib/plainFlag";
+import { plainText } from "@/lib/plainView";
 import { changeColor, font, fontCap, space, touch, useTheme } from "@/theme";
 import { foldBriefings as FB, layout as L } from "@/tokens";
 
@@ -135,6 +137,8 @@ function AccountBriefingView({
   themes?: boolean;
 }) {
   const t = useTheme();
+  // 군더더기 글 줄이기(plainView): 설명을 누가 썼는지(모델)를 화면에 쓰지 않는다
+  const plain = usePlain();
   const d = b.data;
   // 3-38: '다가오는 일정' 카드가 있으면 그 끝, 없으면 '오늘 일정' 카드 끝에 한 줄 (꺼지면 어느 카드에도 없음 — 카드 트리가 지금과 같다)
   const scheduleLink = schedule ? <ScheduleLink /> : null;
@@ -180,11 +184,11 @@ function AccountBriefingView({
   ) : null;
   const narrative = trim && b.template ? null : (
     <Card>
-      <SectionTitle right={b.template ? <Badge>기본 설명</Badge> : null}>{trim ? "모델이 쓴 설명" : "무엇이 계좌를 움직였나"}</SectionTitle>
+      <SectionTitle right={b.template ? <Badge>기본 설명</Badge> : null}>{plain ? "무엇이 계좌를 움직였나" : trim ? "모델이 쓴 설명" : "무엇이 계좌를 움직였나"}</SectionTitle>
       <MarkdownView>{b.detail}</MarkdownView>
       <Muted style={{ fontSize: font.tiny }}>
         {/* 자세한 이유(모델이 지어낸 숫자·오류 문구)는 화면에 옮기지 않는다 — 틀린 숫자를 실제 값으로 읽지 않게 */}
-        {b.template && d ? templateNote(d.narrative.reason) : "모델이 위 숫자만 옮겨 쓴 설명입니다. 입력에 없는 숫자나 매매·전망 표현이 나오면 기본 설명으로 바꿉니다."}
+        {b.template && d ? (plain ? plainText(templateNote(d.narrative.reason)) : templateNote(d.narrative.reason)) : plain ? "위 숫자를 풀어 쓴 설명입니다." : "모델이 위 숫자만 옮겨 쓴 설명입니다. 입력에 없는 숫자나 매매·전망 표현이 나오면 기본 설명으로 바꿉니다."}
       </Muted>
     </Card>
   );

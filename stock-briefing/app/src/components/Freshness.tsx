@@ -7,6 +7,7 @@ import { chartNotice, clockLabel, connection, liveLabel, OPEN_MAX_AGE_MS, staleB
 import { haptic } from "@/lib/haptics";
 import { feedHealthy, liveCounts, marketSessions, recheckIn, sessionStatus } from "@/lib/liveDot";
 import { useLiveStream } from "@/lib/liveStream";
+import { plainSessionStatus, plainStatusLine } from "@/lib/plainView";
 import { resetPollBackoff } from "@/lib/pollSaver";
 import { useNow } from "@/lib/useNow";
 import { font, fontCap, slopFor, space, useTheme } from "@/theme";
@@ -105,6 +106,8 @@ export function useFeedState(query: QueryLike, quotes: readonly (Quote | null | 
  * twoLine: 넓은 창 맨 위 띠 (3-42, 기능 플래그 foldLayout — 잔고 탭이 넓은 창에서만 켠다). 세션 / 나머지(실시간 N종목 · 시각 · 지연 수)를
  * 두 줄로 나눠 오른쪽에 붙이고(목업 '● 미국 프리마켓 · 한국 휴장 / 실시간 9종목 · 20:42:16'), 글자는 탭 머리와 같은 상한(fontCap.chrome).
  * 화면 읽기는 한 줄일 때와 같은 한 문장. 주지 않으면 지금과 똑같다
+ * plain: 군더더기 글 줄이기 (플래그 plainView). 열린 세션 이름 + 실시간/지연만 ("미국 정규장 · 실시간") — 닫힌 시장 이름·실시간 종목 수·보유 수는 쓰지 않고,
+ * 시각은 지연·끊김일 때만 붙인다 (lib/plainView). 점 색·판단은 그대로다. 주지 않으면 지금과 똑같다
  */
 export function LiveStatus({
   query,
@@ -115,6 +118,7 @@ export function LiveStatus({
   quotes,
   feed,
   twoLine = false,
+  plain = false,
 }: {
   query: QueryLike;
   open: boolean;
@@ -124,6 +128,7 @@ export function LiveStatus({
   quotes?: readonly (Quote | null)[];
   feed?: { now: number; feedOk: boolean };
   twoLine?: boolean;
+  plain?: boolean;
 }) {
   const t = useTheme();
   const stream = useLiveStream();
@@ -138,7 +143,7 @@ export function LiveStatus({
     // 줄의 점과 같은 기준 (useFeedState · quoteLive)
     const feedOk = feed?.feedOk ?? feedHealthy(stream.connected, connection(query, now, OPEN_MAX_AGE_MS));
     const counts = liveCounts(quotes ?? [], at, feedOk);
-    s = sessionStatus({ sessions, liveCount: counts.live, eligibleCount: counts.eligible, feedOk, offline: conn.offline });
+    s = (plain ? plainSessionStatus : sessionStatus)({ sessions, liveCount: counts.live, eligibleCount: counts.eligible, feedOk, offline: conn.offline });
     warn = s.tone === "offline" || s.tone === "delayed";
   } else {
     s = liveLabel({ open, closedLabel, streamFresh: fresh, offline: conn.offline, stale: conn.stale });
@@ -146,11 +151,12 @@ export function LiveStatus({
   }
   // suffix 가 비면(넓은 창 맨 위 띠 — 보유·관심 수는 표 머리에 있다, 3-42) 끝의 " · " 없이
   const clock = conn.asOf ? clockLabel(conn.asOf, now) : null;
-  const text = `${s.text}${clock ? ` · ${clock}` : ""}${suffix ? ` · ${suffix}` : ""}`;
+  const text = plain ? plainStatusLine({ text: s.text, warn, clock, suffix }) : `${s.text}${clock ? ` · ${clock}` : ""}${suffix ? ` · ${suffix}` : ""}`;
   if (twoLine) {
     const color = warn ? t.warn : t.muted;
-    const { top, rest } = statusLines(s.text, sessions.map((x) => x.label).join(" · "));
-    const bottom = [rest, clock, suffix].filter(Boolean).join(" · ");
+    // 짧은 글(plain)은 윗줄에 상태를 다 쓰고, 아랫줄에는 지연·끊김일 때의 시각과 지연 종목 수만
+    const { top, rest } = plain ? { top: s.text, rest: "" } : statusLines(s.text, sessions.map((x) => x.label).join(" · "));
+    const bottom = (plain ? [warn && clock ? `${clock} 기준` : null, suffix] : [rest, clock, suffix]).filter(Boolean).join(" · ");
     return (
       <View style={styles.twoLine} accessible accessibilityLabel={text}>
         <View style={styles.lineTop}>

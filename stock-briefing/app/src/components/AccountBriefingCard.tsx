@@ -11,6 +11,7 @@ import { KR_PREVIOUS_DAY_LINE, krPreviousDayLine, usPreviousDayLine } from "@/li
 import { formatDateKo, formatPct, formatWon, SESSION_LABEL, shownSign } from "@/lib/format";
 import { viewDateOf } from "@/lib/marketSummary";
 import { useNow } from "@/lib/useNow";
+import { usePlain } from "@/lib/plainFlag";
 import { changeColor, font, fontCap, space, touch, useTheme } from "@/theme";
 import { foldBriefings as FB } from "@/tokens";
 import { Badge, Card, Muted } from "./ui";
@@ -46,6 +47,8 @@ export function AccountBriefingCard({
   timeMark?: boolean;
 }) {
   const t = useTheme();
+  // 군더더기 글 줄이기(plainView): 숫자 위·아래의 단서 줄('작성 당시 종목 시세 기준 추정' · '숫자로 만든 요약 …')을 그리지 않는다 (고지 문구는 화면 맨 아래에 그대로)
+  const plain = usePlain();
   const h = briefing.headline;
   const block = contributors && !!h && h.top.length > 0;
   const top = block ? null : (h?.top[0] ?? null);
@@ -76,7 +79,7 @@ export function AccountBriefingCard({
           </View>
         ) : (
           <>
-            <Muted style={{ fontSize: font.tiny }}>작성 당시 종목 시세 기준 추정</Muted>
+            {plain ? null : <Muted style={{ fontSize: font.tiny }}>작성 당시 종목 시세 기준 추정</Muted>}
             <View style={styles.nums}>
               <View style={styles.col}>
                 <Muted>{hhmm ? `당일 손익 · ${hhmm} 기준` : "당일 손익"}</Muted>
@@ -106,7 +109,7 @@ export function AccountBriefingCard({
             {week ? <WeekLineText briefing={briefing} /> : null}
             {h.krPreviousDay ? <Muted>{trim ? krPreviousDayLine(briefing.date) : KR_PREVIOUS_DAY_LINE}</Muted> : null}
             {h.usPreviousDay ? <Muted>{usPreviousDayLine(briefing.date, h.usHolidayDate)}</Muted> : null}
-            {trim ? (
+            {plain ? null : trim ? (
               <Muted style={{ fontSize: font.tiny }}>{briefing.template ? "숫자로 만든 요약 · 매매 권유가 아닙니다" : "숫자로 만든 요약 · 설명은 AI가 쓴 글 · 매매 권유가 아닙니다"}</Muted>
             ) : briefing.template ? (
               <Muted style={{ fontSize: font.tiny }}>숫자로 만든 기본 설명 · 매매 권유가 아닙니다</Muted>
@@ -160,6 +163,7 @@ export function AccountBriefingRow({
   timeMark?: boolean;
 }) {
   const t = useTheme();
+  const plain = usePlain();
   const today = viewDateOf(new Date(useNow(60_000)));
   const h = briefing.headline;
   const block = contributors && !!h && h.top.length > 0;
@@ -191,7 +195,7 @@ export function AccountBriefingRow({
             내 계좌 브리핑
           </Text>
         </View>
-        {!failed && briefing.template ? <Badge cap={fontCap.row}>{trim ? "숫자 요약" : "기본 설명"}</Badge> : null}
+        {!failed && briefing.template && !plain ? <Badge cap={fontCap.row}>{trim ? "숫자 요약" : "기본 설명"}</Badge> : null}
         <View style={styles.rowEnd}>
           <Text style={[styles.rowWhen, { color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>
             {briefingWhen(briefing)}
@@ -229,7 +233,7 @@ export function AccountBriefingRow({
           ) : null}
         </View>
       )}
-      {!failed ? <Text style={{ color: t.muted, fontSize: font.tiny }} maxFontSizeMultiplier={fontCap.row}>작성 당시 종목 시세 기준 추정</Text> : null}
+      {!failed && !plain ? <Text style={{ color: t.muted, fontSize: font.tiny }} maxFontSizeMultiplier={fontCap.row}>작성 당시 종목 시세 기준 추정</Text> : null}
       {block && !failed ? <ContributorsBlock briefing={briefing} /> : null}
       {/* 기여 묶음 뒤, 휴장 줄 앞 (당일 손익 묶음을 가르지 않게) */}
       {since && !failed ? <SinceLineText briefing={briefing} cap={fontCap.row} /> : null}

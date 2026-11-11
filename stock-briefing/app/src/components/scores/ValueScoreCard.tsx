@@ -5,6 +5,7 @@ import { useIndicatorScores } from "@/api/hooks";
 import type { ValueFamilyRow, ValueMetricRow } from "@/api/types";
 import { Badge, Button, Card, Muted } from "@/components/ui";
 import { DISCLAIMER } from "@/lib/disclaimer";
+import { TitleNote } from "@/components/scores/TitleNote";
 import { familySpeech, metricMain, metricSpeech, nameWidth, SCORE_LABELS, stackRows, valueHasScore, valueSpeech, weightJoin } from "@/lib/scoreView";
 import { font, slopFor, space, touch, useFontScale, useTheme } from "@/theme";
 import { scores } from "@/tokens";
@@ -67,7 +68,7 @@ export function ValueScoreCard({ code, focus = false, onFocused }: { code: strin
         <Text style={[styles.head, { color: t.ink }]} accessibilityRole="header" accessibilityLabel={ok ? valueSpeech(v) : undefined}>
           {ok && v.headline ? v.headline : SCORE_LABELS.valueDetail}
         </Text>
-        <Text style={{ color: t.muted, fontSize: font.tiny, flexShrink: 1, textAlign: "right" }}>{s.text.titleNote}</Text>
+        <TitleNote text={s.text.titleNote} />
       </View>
       {ok ? (
         <>

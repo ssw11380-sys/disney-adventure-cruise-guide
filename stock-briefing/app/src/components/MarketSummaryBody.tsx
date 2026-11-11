@@ -46,6 +46,7 @@ import {
   type Seg,
 } from "@/lib/marketSummary";
 import { useNow } from "@/lib/useNow";
+import { usePlain } from "@/lib/plainFlag";
 import { changeColor, font, fontCap, space, touch, useFontScale, useTheme, type Theme } from "@/theme";
 import { marketSummary as MS, radius } from "@/tokens";
 import { MUTED_LH, SegText, Words } from "./MarketSummaryCard";
@@ -635,8 +636,9 @@ function NewsCard({ d }: { d: MarketSummaryData }) {
 /** 이 요약을 만든 기준 */
 function BasisCard({ d }: { d: MarketSummaryData }) {
   const t = useTheme();
+  const plain = usePlain();
   const bullets = [
-    "숫자는 모두 서버 코드가 공개 시세에서 계산합니다. AI(모델)가 쓴 문장은 없습니다.",
+    plain ? "숫자는 모두 공개 시세에서 계산합니다." : "숫자는 모두 서버 코드가 공개 시세에서 계산합니다. AI(모델)가 쓴 문장은 없습니다.",
     "원인 설명·앞으로의 전망·사고팔기 권유를 담지 않습니다. 뉴스는 언론사 제목 원문으로만 보여 줍니다.",
     SIMILAR_NOTE,
   ];

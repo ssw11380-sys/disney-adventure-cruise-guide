@@ -1,6 +1,7 @@
 import React from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { Badge } from "@/components/ui";
+import { usePlain } from "@/lib/plainFlag";
 import { SCORE_LABELS } from "@/lib/scoreView";
 import { font, space, useTheme } from "@/theme";
 
@@ -10,6 +11,16 @@ import { font, space, useTheme } from "@/theme";
  */
 export function AiTitle({ title }: { title: string }) {
   const t = useTheme();
+  // 군더더기 글 줄이기(plainView): 'AI ' 와 배지를 뺀 제목만 ('기업개요')
+  const plain = usePlain();
+  if (plain) {
+    const short = title.replace(/^AI\s+/, "");
+    return (
+      <View style={styles.row} accessible accessibilityRole="header" accessibilityLabel={short}>
+        <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700" }}>{short}</Text>
+      </View>
+    );
+  }
   return (
     <View style={styles.row} accessible accessibilityRole="header" accessibilityLabel={`${title}, ${SCORE_LABELS.aiBadge}`}>
       <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700" }}>{title}</Text>

@@ -33,6 +33,7 @@ import { holdingsLayoutKey, useHoldingsAnchor } from "@/lib/holdingsAnchor";
 import { useJournalOn } from "@/lib/journalFlag";
 import { bandOneLine, bandRates, holdingWeights, pickCols, pickWatchCols } from "@/lib/holdingsColumns";
 import { quoteLive, sessionOpen } from "@/lib/liveDot";
+import { usePlain } from "@/lib/plainFlag";
 import { excludedLabel, isHolding, sortHoldings, splitHoldings, summarize } from "@/lib/portfolio";
 import { removeConfirm, removeKind, removeLabel, watchRowA11yActions } from "@/lib/rowActions";
 import { SORT_OPTIONS, useSettings, type SortKey } from "@/lib/settings";
@@ -74,6 +75,9 @@ export default function StocksScreen() {
   const basisOn = useFeature("numberBasis", false);
   const tossSnapshotOn = useFeature("tossAccountSnapshot", false);
   const informationFocus = useFeature("informationFocus", false);
+  // 군더더기 글 줄이기 (2026-11-12, 플래그 plainView — fallback 꺼짐): 계좌 요약은 금액·평가손익·받은 시각만, 상태 줄은 "미국 정규장 · 실시간"처럼 짧게.
+  // 꺼져 있으면 아래에서 넘기는 속성이 지금과 같다 (그림 트리 그대로)
+  const plainOn = usePlain();
   // 매매일지 (3-37, 플래그 tradeJournal · tradeRecords): 휴대폰 기본은 계좌 패널 '비중' 앞 [매매일지], 촘촘·넓은 창은 보유 구역 머리에 아이콘만
   const journalOn = useJournalOn();
   // 촘촘 모드 (3-39): 서버 플래그 + 설정 '잔고 표시 촘촘'. 불러오는 중 화면도 쓰므로 일찍 돌아가는 줄보다 위에서 정한다
@@ -302,9 +306,11 @@ export default function StocksScreen() {
       quotes={quotes}
       feed={{ now, feedOk }}
       // 넓은 창 맨 위 띠: 보유·관심 수는 표 머리에 있으니 지연 종목 수만
-      suffix={wide ? (stale ? `시세 지연 ${stale}` : "") : holdingsSuffix({ held: summary.held, watch: summary.watch, stale })}
+      // 짧은 글(plainView): 보유·관심 수는 구역 머리('보유 18' · '관심 5')에 있으니 지연 종목 수만
+      suffix={wide || plainOn ? (stale ? `시세 지연 ${stale}` : "") : holdingsSuffix({ held: summary.held, watch: summary.watch, stale })}
       // 넓은 창 맨 위 띠: 세션 / 실시간·시각 두 줄 (목업과 같음), 글자는 탭 머리와 같은 상한 — 휴대폰 패널은 지금처럼 한 줄
       {...(wide ? { twoLine: true } : null)}
+      {...(plainOn ? { plain: true } : null)}
     />
   );
   // 넓은 창 맨 위 띠: 탭 화면 머리(숨김)를 대신하므로 상태 표시줄 높이만큼 내려 그리고, 검색 버튼을 오른쪽 끝에 둔다
@@ -358,7 +364,7 @@ export default function StocksScreen() {
   // 3-35 (플래그 holdingThemes): 토스 계좌 평가 요약이 계좌 패널을 접어 두므로 요약의 '종목 비중 보기' 옆에도 '내 종목 테마 보기' (꺼지면 지금 그대로)
   // 계정 A단계: 주인 아닌 계정은 맨 위에 '개인 종목 기능은 준비 중' 안내 (주인·플래그 꺼짐이면 없음)
   // 3-37 (플래그 tradeJournal · tradeRecords): 요약이 계좌 패널·띠(그 안의 [매매일지])를 접어 두므로 요약 끝에도 '매매일지 보기' (꺼지면 지금 그대로)
-  const wrapAccount = (content: React.ReactNode) => gated(tossSnapshotOn && !member, true) ? <TossAccountSummary focused={gated(informationFocus, true)} onAllocation={gated(allocationOn && summary.held > 0, openAllocation)} {...(themesOn && summary.held > 0 ? { onThemes: openThemes } : null)} {...(journalOn ? { onJournal: () => openJournal() } : null)}>{content}</TossAccountSummary> : content;
+  const wrapAccount = (content: React.ReactNode) => gated(tossSnapshotOn && !member, true) ? <TossAccountSummary focused={gated(informationFocus, true)} onAllocation={gated(allocationOn && summary.held > 0, openAllocation)} {...(themesOn && summary.held > 0 ? { onThemes: openThemes } : null)} {...(journalOn ? { onJournal: () => openJournal() } : null)} {...(plainOn && !wide ? { plain: true, status } : null)}>{content}</TossAccountSummary> : content;
   const header = wide ? (
     <View>
       <MemberNotice />

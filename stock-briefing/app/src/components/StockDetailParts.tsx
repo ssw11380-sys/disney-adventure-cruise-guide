@@ -10,6 +10,8 @@ import { MarkdownView } from "@/components/MarkdownView";
 import { ReportVerificationNotice } from "@/components/ReportVerification";
 import { Button, Card, ErrorView, LiveDot, Loading, Muted, SectionTitle, Stat } from "@/components/ui";
 import { VALUE_AI_NOTE } from "@/lib/disclaimer";
+import { usePlain } from "@/lib/plainFlag";
+import { PLAIN_ANALYSIS, PLAIN_VALUE_NOTE } from "@/lib/plainView";
 import { chunkRows, detailHeaderLayout, fillChartHeight, HEAD_PAD, headPriceParts, headTitleMaxWidth, markdownPreview, shortStamp } from "@/lib/detailLayout";
 import { formatDateKo, relativeTime } from "@/lib/format";
 import { openSourceLink } from "@/lib/openSourceLink";
@@ -58,7 +60,9 @@ export function Range52({ range, low, high, color, compact = false }: { range: n
  */
 function ValueAiNote({ kind }: { kind: AnalysisKind }) {
   const on = useFeature("valueAiSafeWording", true);
-  return kind === "value" && on ? <Muted>{VALUE_AI_NOTE}</Muted> : null;
+  // 군더더기 글 줄이기(plainView): 'AI가 쓴 글' 대신 '참고용 요약' (틀릴 수 있음·권유 아님은 그대로)
+  const plain = usePlain();
+  return kind === "value" && on ? <Muted>{plain ? PLAIN_VALUE_NOTE : VALUE_AI_NOTE}</Muted> : null;
 }
 
 /**
@@ -73,6 +77,7 @@ export function AnalysisTab({ code, kind, requested, onRequest }: { code: string
 
 function LegacyAnalysisTab({ code, kind, requested, onRequest }: { code: string; kind: AnalysisKind; requested: boolean; onRequest: (kind: AnalysisKind) => void }) {
   const t = useTheme();
+  const plain = usePlain();
   const a = useAnalysis(code, kind, requested);
   const { refreshAnalysis } = useStockMutations();
   // 갱신 실패는 조회 오류와 따로: 이전 분석은 두고 실패를 알린다 (AI-01)
@@ -80,8 +85,8 @@ function LegacyAnalysisTab({ code, kind, requested, onRequest }: { code: string;
   if (state === "ask")
     return (
       <Card>
-        <Muted>관심 종목이 아니라 AI 분석을 미리 만들지 않았습니다.</Muted>
-        <Button title="AI 분석 만들기" icon="sparkles" onPress={() => onRequest(kind)} />
+        <Muted>{plain ? PLAIN_ANALYSIS.notMade : "관심 종목이 아니라 AI 분석을 미리 만들지 않았습니다."}</Muted>
+        <Button title={plain ? PLAIN_ANALYSIS.make : "AI 분석 만들기"} icon="sparkles" onPress={() => onRequest(kind)} />
       </Card>
     );
   if (state === "loading") return <Card><Loading label="분석 생성 중" /></Card>;
@@ -97,7 +102,7 @@ function LegacyAnalysisTab({ code, kind, requested, onRequest }: { code: string;
       <ReportVerificationNotice verification={d.verification} />
       <ValueAiNote kind={kind} />
       <MarkdownView>{d.content}</MarkdownView>
-      {d.missing.length ? <Muted>데이터 미확인: {d.missing.join(", ")}</Muted> : null}
+      {d.missing.length && !plain ? <Muted>데이터 미확인: {d.missing.join(", ")}</Muted> : null}
       <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: space.xs }}>
         <Muted>
           보고서 생성 {formatDateKo(d.createdAt, true)}
@@ -136,6 +141,7 @@ function AnalysisPeek({ code, kind, title, lines, requested, onRequest, toggle }
 function LegacyAnalysisPeek({ code, kind, title, lines, requested, onRequest, toggle }: { code: string; kind: AnalysisKind; title: string; lines: number | null; requested: boolean; onRequest: (kind: AnalysisKind) => void; toggle: React.ReactNode }) {
   const t = useTheme();
   const a = useAnalysis(code, kind, requested);
+  const plain = usePlain();
   const { refreshAnalysis } = useStockMutations();
   const { state, refreshError } = analysisView({ requested, query: a, refresh: refreshAnalysis, code, kind });
   const d = state === "ready" ? a.data : undefined;
@@ -145,7 +151,7 @@ function LegacyAnalysisPeek({ code, kind, title, lines, requested, onRequest, to
       {state === "ask" ? (
         <View style={styles.askRow}>
           <Muted>관심 종목이 아니라 미리 만들지 않았습니다.</Muted>
-          <Button title="AI 분석 만들기" icon="sparkles" variant="secondary" compact onPress={() => onRequest(kind)} />
+          <Button title={plain ? PLAIN_ANALYSIS.make : "AI 분석 만들기"} icon="sparkles" variant="secondary" compact onPress={() => onRequest(kind)} />
         </View>
       ) : state === "error" ? (
         <ErrorView error={a.error} onRetry={() => void a.refetch()} />
@@ -159,7 +165,7 @@ function LegacyAnalysisPeek({ code, kind, title, lines, requested, onRequest, to
             </Text>
           ) : null}
           <ReportVerificationNotice verification={d.verification} />
-          {d.missing.length ? <Muted>데이터 미확인: {d.missing.join(", ")}</Muted> : null}
+          {d.missing.length && !plain ? <Muted>데이터 미확인: {d.missing.join(", ")}</Muted> : null}
           <ValueAiNote kind={kind} />
           {lines !== null ? (
             <Text style={{ color: t.ink, fontSize: font.body, lineHeight: foldDetail.previewLineH }} numberOfLines={lines}>
@@ -187,6 +193,7 @@ function AnalysisWaitBody({ code, kind, requested, onRequest, title, lines = nul
 }) {
   const t = useTheme();
   const a = useAnalysisRecovery(code, kind, requested);
+  const plain = usePlain();
   const d = a.data;
   const ask = !requested && !d && a.wait.phase === "idle";
   const unknown = a.wait.phase === "unknown";
@@ -195,8 +202,8 @@ function AnalysisWaitBody({ code, kind, requested, onRequest, title, lines = nul
       {title ? <PaneTitle title={title} note={d ? `생성 ${shortStamp(d.createdAt)}` : null} action={d || lines === null ? toggle : null} /> : null}
       {ask ? (
         <View style={{ gap: space.xs }}>
-          <Muted>관심 종목이 아니라 AI 분석을 미리 만들지 않았습니다.</Muted>
-          <Button title="AI 분석 만들기" icon="sparkles" onPress={() => onRequest(kind)} />
+          <Muted>{plain ? PLAIN_ANALYSIS.notMade : "관심 종목이 아니라 AI 분석을 미리 만들지 않았습니다."}</Muted>
+          <Button title={plain ? PLAIN_ANALYSIS.make : "AI 분석 만들기"} icon="sparkles" onPress={() => onRequest(kind)} />
         </View>
       ) : (
         <>
@@ -204,8 +211,8 @@ function AnalysisWaitBody({ code, kind, requested, onRequest, title, lines = nul
             <AnalysisWaitProgress wait={a.wait} previous={!!d} />
           ) : unknown ? (
             <View style={{ gap: space.xs }}>
-              <Text style={{ color: t.danger, fontSize: font.small }} accessibilityRole="alert" accessibilityLiveRegion="polite">{a.wait.message}</Text>
-              {d ? <Muted>이전 분석을 보여 주는 중입니다.</Muted> : null}
+              <Text style={{ color: t.danger, fontSize: font.small }} accessibilityRole="alert" accessibilityLiveRegion="polite">{plain ? (d ? PLAIN_ANALYSIS.unknownKept : PLAIN_ANALYSIS.unknown) : a.wait.message}</Text>
+              {d && !plain ? <Muted>이전 분석을 보여 주는 중입니다.</Muted> : null}
               <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.xs }}>
                 <Button title="결과 확인" variant="secondary" compact icon="refresh" onPress={a.check} />
                 <Button title="다시 만들기" variant="secondary" compact onPress={a.refresh} />
@@ -213,7 +220,7 @@ function AnalysisWaitBody({ code, kind, requested, onRequest, title, lines = nul
             </View>
           ) : !d ? <Loading label="저장된 분석 확인 중" /> : null}
           {d ? <ReportVerificationNotice verification={d.verification} /> : null}
-          {d?.missing.length ? <Muted>데이터 미확인: {d.missing.join(", ")}</Muted> : null}
+          {d?.missing.length && !plain ? <Muted>데이터 미확인: {d.missing.join(", ")}</Muted> : null}
           {d ? <ValueAiNote kind={kind} /> : null}
           {d ? lines !== null ? (
             <Text style={{ color: t.ink, fontSize: font.body, lineHeight: foldDetail.previewLineH }} numberOfLines={lines}>{markdownPreview(d.content)}</Text>

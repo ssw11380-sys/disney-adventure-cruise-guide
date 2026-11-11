@@ -8,6 +8,7 @@ import { useFeature, useHealth, useNotificationSettings } from "@/api/hooks";
 import { useLiveStream } from "@/lib/liveStream";
 import { saverLabel } from "@/lib/pollSaver";
 import { gated } from "@/lib/features";
+import { usePlain } from "@/lib/plainFlag";
 import { tradeRecordsLabel } from "@/lib/tradeRecords";
 import { condStats } from "@/api/condCache";
 import { AccountCard } from "@/components/AccountCard";
@@ -82,6 +83,8 @@ export default function SettingsScreen() {
   const stream = useLiveStream();
   // 끊겼을 때 데이터 절약 (3-25): 서버 줄에 폴링 방식과 최근 응답 비율
   const saverOn = useFeature("pollSaver", false);
+  // 군더더기 글 줄이기(plainView): 서버 상태의 '브리핑 모델' 줄을 그리지 않는다
+  const plain = usePlain();
   // 매매 기록 (3-36): 서버가 쌓는 일별 계좌 스냅샷 상태 한 줄 (읽기만). 꺼져 있거나 예전 서버면 줄 없음
   const tradeRecordsOn = useFeature("tradeRecords", false);
   const recordsLabel = owner ? tradeRecordsLabel(gated(tradeRecordsOn, health.data?.tradeRecords)) : null;
@@ -311,7 +314,7 @@ export default function SettingsScreen() {
           <Row label="뉴스" value={health.data.sources?.news ?? "-"} />
           <Row label="재무/공시" value={health.data.sources?.financials ?? "-"} />
           <Row label="수급" value={health.data.sources?.investorFlow ?? "-"} />
-          <Row label="브리핑 모델" value={health.data.sources?.llm ?? "-"} />
+          {plain ? null : <Row label="브리핑 모델" value={health.data.sources?.llm ?? "-"} />}
           {recordsLabel ? <Row label="매매 기록" value={recordsLabel} /> : null}
           {health.data.appErrors ? (
             <Row label="앱 오류 (7일)" value={`${health.data.appErrors.total}건${health.data.appErrors.fatal ? ` · 강제 종료 ${health.data.appErrors.fatal}건` : ""}`} />

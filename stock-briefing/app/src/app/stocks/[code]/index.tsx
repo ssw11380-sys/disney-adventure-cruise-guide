@@ -39,6 +39,8 @@ import { useUx } from "@/lib/uxFlags";
 import { usePriceAlerts } from "@/lib/priceAlertContext";
 import { alertButtonA11y, alertButtonText } from "@/lib/priceAlerts";
 import { AiTitle } from "@/components/scores/AiTitle";
+import { usePlain } from "@/lib/plainFlag";
+import { PLAIN_ANALYSIS } from "@/lib/plainView";
 import { IndicatorSummaryCard } from "@/components/scores/IndicatorSummaryCard";
 import { TrendScoreCard } from "@/components/scores/TrendScoreCard";
 import { ValueScoreCard } from "@/components/scores/ValueScoreCard";
@@ -152,6 +154,8 @@ export default function StockDetailScreen() {
   // 지표 점수 (3-44, 기능 플래그 indicatorScores — 앱 fallback 꺼짐): 기업개요 탭 맨 위 요약 카드 + 'AI 기업개요 [AI가 쓴 글]' 제목,
   // 기술분석 탭 맨 위 추세 상세 카드. 꺼져 있으면 서버에 묻지도 않고 탭 내용이 지금 그대로다
   const scoresOn = useFeature("indicatorScores", false);
+  // 군더더기 글 줄이기(plainView): 분석 제목에서 'AI ' 를 뺀다 (꺼져 있으면 지금 글 그대로)
+  const plain = usePlain();
   // 브리핑 3차 2 (플래그 briefingStatus, 앱 fallback 꺼짐): '최근 브리핑'의 실패 카드도 오류 원문 대신 쉬운 말 (브리핑 탭과 같게). 꺼지면 속성 없음 = 지금 그대로
   const plainFail = useFeature("briefingStatus", false) ? { plainFail: true } : {};
   // 가치 지표 (3-44 2단계, 서버 되돌리기 스위치 valueScore — 앱 fallback 꺼짐): 가치분석 탭 맨 위 상세 카드 + 'AI 가치분석' 제목,
@@ -886,9 +890,9 @@ export default function StockDetailScreen() {
             <View style={[styles.side, styles.sideEnd]}>
               {/* 지표 점수 요약 카드 (플래그 indicatorScores): AI 기업개요 미리보기 바로 위, 접힌 채 */}
               {scoresOn ? <IndicatorSummaryCard code={c} flat onOpenStock={openStock} /> : null}
-              <AnalysisPreview key={`${c}:company`} code={c} kind="company" title="AI 기업개요" lines={foldDetail.previewCompanyLines} requested={!unregistered || !!asked.company} onRequest={requestAi} />
-              <AnalysisPreview key={`${c}:technical`} code={c} kind="technical" title="AI 기술분석" lines={foldDetail.previewTechLines} requested={!unregistered || !!asked.technical} onRequest={requestAi} />
-              <AnalysisPreview key={`${c}:value`} code={c} kind="value" title="AI 가치분석" lines={0} defaultOpen={tabPick === "value"} requested={!unregistered || !!asked.value} onRequest={requestAi} />
+              <AnalysisPreview key={`${c}:company`} code={c} kind="company" title={plain ? PLAIN_ANALYSIS.company : "AI 기업개요"} lines={foldDetail.previewCompanyLines} requested={!unregistered || !!asked.company} onRequest={requestAi} />
+              <AnalysisPreview key={`${c}:technical`} code={c} kind="technical" title={plain ? PLAIN_ANALYSIS.technical : "AI 기술분석"} lines={foldDetail.previewTechLines} requested={!unregistered || !!asked.technical} onRequest={requestAi} />
+              <AnalysisPreview key={`${c}:value`} code={c} kind="value" title={plain ? PLAIN_ANALYSIS.value : "AI 가치분석"} lines={0} defaultOpen={tabPick === "value"} requested={!unregistered || !!asked.value} onRequest={requestAi} />
             </View>
           </View>
         </View>

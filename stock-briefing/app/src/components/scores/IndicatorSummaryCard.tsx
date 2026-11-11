@@ -4,6 +4,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useFeature, useIndicatorScores } from "@/api/hooks";
 import type { IndicatorScores, TrendScoreBlock, ValueScoreBlock } from "@/api/types";
 import { Badge, Button, Card, Muted } from "@/components/ui";
+import { usePlain } from "@/lib/plainFlag";
 import { compositeLine, familyLabel, familySpeech, flagPreview, moreFlagsText, nameWidth, reasonOnly, SCORE_LABELS, stackRows, summarySpeech, trendHasScore, trendSpeech, valueHasScore, valueSpeech } from "@/lib/scoreView";
 import { font, slopFor, space, touch, useFontScale, useTheme } from "@/theme";
 import { scores } from "@/tokens";
@@ -125,12 +126,14 @@ function Frame({ flat, children }: { flat: boolean; children: React.ReactNode })
 
 function Head({ note }: { note: string | null }) {
   const t = useTheme();
+  // 군더더기 글 줄이기(plainView): 제목 옆 '계산식 결과 · AI 글 아님' 을 그리지 않는다
+  const plain = usePlain();
   return (
     <View style={styles.head}>
       <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700", flexShrink: 0 }} accessibilityRole="header">
         {SCORE_LABELS.title}
       </Text>
-      {note ? (
+      {note && !plain ? (
         <Text style={{ color: t.muted, fontSize: font.tiny, flexShrink: 1, textAlign: "right" }} numberOfLines={2}>
           {note}
         </Text>

@@ -5,6 +5,7 @@ import { useIndicatorScores } from "@/api/hooks";
 import type { ScoreFamily } from "@/api/types";
 import { Badge, Button, Card, Muted } from "@/components/ui";
 import { DISCLAIMER } from "@/lib/disclaimer";
+import { TitleNote } from "@/components/scores/TitleNote";
 import { familySpeech, itemLine, nameWidth, reasonOnly, SCORE_LABELS, stackRows, trendHasScore, trendSpeech, weightJoin } from "@/lib/scoreView";
 import { font, space, touch, useFontScale, useTheme } from "@/theme";
 import { scores } from "@/tokens";
@@ -48,7 +49,7 @@ export function TrendScoreCard({ code, onOpenStock }: { code: string; onOpenStoc
         <Text style={[styles.head, { color: t.ink }]} accessibilityRole="header" accessibilityLabel={ok ? trendSpeech(tr) : undefined}>
           {ok ? tr.headline : "추세 지표 점수"}
         </Text>
-        <Text style={{ color: t.muted, fontSize: font.tiny, flexShrink: 1, textAlign: "right" }}>{s.text.titleNote}</Text>
+        <TitleNote text={s.text.titleNote} />
       </View>
       {ok ? (
         <>
