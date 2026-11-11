@@ -3,8 +3,10 @@ import { CODE_RE, isKrCode, normalizeCode } from "../../lib/codes.js";
 import { ProviderError, within } from "../../lib/errors.js";
 import { mapLimit } from "../../lib/concurrency.js";
 import { seoulIso } from "../../lib/time.js";
+import { truncPct } from "../../lib/pct.js";
 import { parseTossAccountTotals, type TossAccountTotals } from "../../services/tossAccountSnapshot.js";
 import type { InvestorFlowDay, InvestorFlowProvider } from "./investorFlow.js";
+import type { LiveTick, QuickPriceSource, StockSessionFacts } from "./tossRealtime.js";
 import type { FetchFn, MasterProvider, QuoteProvider } from "./types.js";
 
 /**
@@ -47,6 +49,8 @@ export interface TossOpenApiClientOptions {
 const REQUEST_TIMEOUT_MS = 10_000;
 /** 종목 마스터(마켓별 전체 종목)는 응답이 커서 더 기다린다 */
 const MASTER_TIMEOUT_MS = 30_000;
+/** 장 운영 달력 조회 제한 시간 */
+const CALENDAR_TIMEOUT_MS = 5_000;
 
 export interface TossOpenApiStatus {
   configured: boolean;
@@ -55,6 +59,10 @@ export interface TossOpenApiStatus {
   lastError: string | null;
   /** 403 edge-blocked 를 받았으면 true (허용 IP 미등록 가능성) */
   ipBlocked: boolean;
+  /** 경로별로 마지막에 받은 초당 허용 요청 수 (응답 머리글 X-RateLimit-Limit — 1초 시세 확인이 한도 안인지 운영에서 본다) */
+  rateLimits?: Record<string, number>;
+  /** 마지막으로 429(요청 한도 초과)를 받은 시각 */
+  lastRateLimitedAt?: string | null;
 }
 
 type Json = Record<string, unknown>;
@@ -99,7 +107,13 @@ export class TossOpenApiClient {
     this.baseUrl = opts.baseUrl ?? TOSS_OPENAPI_BASE;
     this.maxRetryWaitMs = opts.maxRetryWaitMs ?? 3000;
     this.timeoutMs = opts.timeoutMs ?? REQUEST_TIMEOUT_MS;
-    this.status = { configured: Boolean(opts.clientId && opts.clientSecret), tokenIssuedAt: null, lastOkAt: null, lastError: null, ipBlocked: false };
+    this.status = { configured: Boolean(opts.clientId && opts.clientSecret), tokenIssuedAt: null, lastOkAt: null, lastError: null, ipBlocked: false, rateLimits: {}, lastRateLimitedAt: null };
+  }
+
+  /** 응답 머리글의 초당 허용 요청 수를 경로별로 적어 둔다 (없으면 그대로) */
+  private noteRateLimit(path: string, res: Response): void {
+    const limit = num(res.headers?.get?.("x-ratelimit-limit"));
+    if (limit !== null && this.status.rateLimits) this.status.rateLimits[path] = limit;
   }
 
   /**
@@ -205,6 +219,8 @@ export class TossOpenApiClient {
         { network: `네트워크 오류: ${path}`, timeout: `응답 시간 초과: ${path}` },
         opts.timeoutMs ?? this.timeoutMs,
       );
+      this.noteRateLimit(path, res);
+      if (res.status === 429) this.status.lastRateLimitedAt = seoulIso(this.now());
       if (res.ok) {
         if (!body || typeof body !== "object") throw this.fail(new ProviderError(this.name, `응답 형식 오류: ${path}`));
         this.status.lastOkAt = seoulIso(this.now());
@@ -260,6 +276,59 @@ interface TossStockInfo {
   status?: string;
   currency?: string;
   sharesOutstanding?: string;
+  /** 국내 종목만: NXT 거래 대상·거래정지 (해외 종목은 null) */
+  koreanMarketDetail?: { liquidationTrading?: boolean; nxtSupported?: boolean; krxTradingSuspended?: boolean; nxtTradingSuspended?: boolean } | null;
+}
+
+/** 공식 장 운영 달력의 세션 하나 (한국 시간 ISO) */
+export interface TossCalendarSession {
+  startTime: string;
+  endTime: string;
+}
+
+/** 공식 장 운영 달력 하루: 한국은 통합(KRX+NXT) 프리·정규·애프터, 미국은 데이마켓·프리·정규·애프터. 쉬는 세션은 null */
+export interface TossCalendarDay {
+  /** 영업일 (한국은 서울 날짜, 미국은 현지 날짜) */
+  date: string;
+  /** 그날 거래가 있는 첫 세션 시작 ~ 마지막 세션 끝 (모두 쉬면 null). 한국: 08:00~20:00, 미국: 데이마켓 시작 ~ 애프터마켓 끝 */
+  open: TossCalendarSession | null;
+  /** 정규장 (쉬면 null) */
+  regular: TossCalendarSession | null;
+  sessions: { day: TossCalendarSession | null; pre: TossCalendarSession | null; regular: TossCalendarSession | null; after: TossCalendarSession | null };
+}
+
+/** 공식 장 운영 달력 응답: 전 영업일·오늘·다음 영업일 */
+export interface TossMarketCalendar {
+  previous: TossCalendarDay | null;
+  today: TossCalendarDay | null;
+  next: TossCalendarDay | null;
+}
+
+function calendarSession(v: unknown): TossCalendarSession | null {
+  const o = v as Json | null | undefined;
+  const start = o?.["startTime"], end = o?.["endTime"];
+  if (typeof start !== "string" || typeof end !== "string") return null;
+  const a = Date.parse(start), b = Date.parse(end);
+  return Number.isNaN(a) || Number.isNaN(b) || b <= a ? null : { startTime: start, endTime: end };
+}
+
+/** 공식 달력의 하루(today·previousBusinessDay·nextBusinessDay 중 하나)를 읽는다. 모양이 다르면 null */
+export function parseCalendarDay(market: "KR" | "US", v: unknown): TossCalendarDay | null {
+  const d = v as Json | null | undefined;
+  const date = typeof d?.["date"] === "string" ? d["date"].slice(0, 10) : "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const src = (market === "KR" ? (d!["integrated"] as Json | null | undefined) : d) ?? {};
+  const sessions = {
+    day: market === "US" ? calendarSession(src["dayMarket"]) : null,
+    pre: calendarSession(src["preMarket"]),
+    regular: calendarSession(src["regularMarket"]),
+    after: calendarSession(src["afterMarket"]),
+  };
+  const all = [sessions.day, sessions.pre, sessions.regular, sessions.after].filter((s): s is TossCalendarSession => s !== null);
+  const open = all.length
+    ? { startTime: all.reduce((a, s) => (Date.parse(s.startTime) < Date.parse(a) ? s.startTime : a), all[0]!.startTime), endTime: all.reduce((a, s) => (Date.parse(s.endTime) > Date.parse(a) ? s.endTime : a), all[0]!.endTime) }
+    : null;
+  return { date, open, regular: sessions.regular, sessions };
 }
 
 /** 거래소 현지 날짜(YYYY-MM-DD). 한국은 KST, 미국은 뉴욕 */
@@ -345,6 +414,12 @@ export function aggregateCandles(daily: Candle[], period: CandlePeriod): Candle[
 
 /** 한국 종목 기준가(krBase)를 기다리는 최대 시간 */
 const KR_BASE_WAIT_MS = 1_500;
+/** 현재가 묶음을 거절하게 만든 종목을 묶음에서 빼 두는 시간 */
+const REJECTED_MS = 10 * 60_000;
+/** 물은 종목이 모두 거절됐을 때(종목 탓이 아닐 수 있다) 쉬는 시간 */
+const REJECTED_ALL_MS = 60_000;
+/** 종목(심볼) 때문에 거절된 요청인지 — 모르는·상장폐지 종목은 400·404·422 */
+const isRejected = (e: unknown): boolean => e instanceof ProviderError && /HTTP 4(00|04|22)/.test(e.message);
 /** 시세용 일봉 개수 (52주 고저) */
 const QUOTE_DAILY = 260;
 /** 같은 거래일 안에서 최근 봉(오늘 시고저·거래량, 새로 열린 거래일 봉)만 다시 받는 간격 — 예전 시세 캐시와 같은 1분 */
@@ -353,6 +428,24 @@ const TODAY_REFRESH_MS = 60_000;
 const DAILY_CONCURRENCY = 4;
 /** 현재가 일괄 조회 한 번에 넣는 종목 수 */
 const PRICES_CHUNK = 50;
+/** 실시간 보조(getMany): 이 안에 받은 현재가는 다시 부르지 않는다 (1초 폴링·잔고 요청·상세 요청이 같은 응답을 나눠 쓴다) */
+const QUICK_FRESH_MS = 800;
+/** 실시간 보조: 앱이 붙어 있는 동안 서버가 현재가를 묻는 간격. 시세 그룹 한도는 초당 15회, 이 조회는 종목이 많아도 1초에 1~2회 */
+const QUICK_POLL_MS = 1_000;
+/**
+ * 실시간 보조: 토스가 이 서버 IP 의 시세 한도를 낮게 잡았으면(문서: 일부 IP 대역은 초당 1회) 현재가 확인을 이만큼으로 늦춘다 —
+ * 1초 확인이 한도를 다 써서 시세 스냅샷·일봉 조회가 429 로 밀리지 않게. 한도는 응답 머리글(X-RateLimit-Limit)로 안다
+ */
+const QUICK_FRESH_LOW_LIMIT_MS = 2_800;
+/** 이 값 이하의 초당 한도면 낮은 한도로 본다 */
+const LOW_RATE_LIMIT = 3;
+/** 실시간 보조: 요청 한도(429)에 걸리면 이만큼 쉰다 (다른 조회 — 일봉·계좌 — 가 밀리지 않게) */
+const QUICK_BACKOFF_MS = 5_000;
+/** 세션 자격(NXT 대상·거래정지)을 다시 받는 간격 — 거래정지는 장중에도 바뀔 수 있어 하루가 아니라 1시간 */
+const SESSION_INFO_TTL_MS = 60 * 60_000;
+/** 세션 자격 조회가 실패하면 이만큼 쉰다 */
+const SESSION_INFO_RETRY_MS = 5 * 60_000;
+const ETP_TYPES = new Set(["ETF", "FOREIGN_ETF", "ETN"]);
 
 export interface TossOpenApiProviderOptions {
   now?: () => Date;
@@ -365,8 +458,11 @@ export interface TossOpenApiProviderOptions {
   krBaseMany?: (codes: string[]) => Promise<Map<string, number>>;
 }
 
-export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider, MasterProvider {
+export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider, MasterProvider, QuickPriceSource {
   readonly name = "toss-openapi";
+  /** 현재가의 timestamp 는 실제 마지막 체결 시각 (시간외 체결 포함) */
+  readonly tradeTime = true;
+  readonly pollMs = QUICK_POLL_MS;
   private readonly now: () => Date;
   private readonly infoCache = new Map<string, { at: number; info: TossStockInfo }>();
   private fxCache: { at: number; rate: number } | null = null;
@@ -394,8 +490,16 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
       if (hit && t - hit.at < 24 * 3_600_000) out.set(s, hit.info);
       else need.push(s);
     }
-    for (let i = 0; i < need.length; i += 200) {
-      const chunk = need.slice(i, i + 200);
+    for (const [sym, r] of await this.fetchStockInfos(need)) out.set(sym, r);
+    return out;
+  }
+
+  /** 종목 정보를 새로 받아 캐시에 넣는다 (받아 둔 값이 있어도 다시 — 거래정지 같은 장중 변화를 보려는 쪽이 쓴다) */
+  private async fetchStockInfos(symbols: string[]): Promise<Map<string, TossStockInfo>> {
+    const out = new Map<string, TossStockInfo>();
+    const t = this.now().getTime();
+    for (let i = 0; i < symbols.length; i += 200) {
+      const chunk = symbols.slice(i, i + 200);
       const rows = (await this.client.get<TossStockInfo[]>("/api/v1/stocks", { symbols: chunk.join(",") })) ?? [];
       for (const r of rows) {
         const sym = String(r.symbol ?? "").toUpperCase();
@@ -420,6 +524,154 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
     } catch {
       return null;
     }
+  }
+
+  // ── 장 운영 달력 ─────────────────────────────────────────────────
+
+  /**
+   * 공식 장 운영 달력 (GET /api/v1/market-calendar/KR|US): 전 영업일·오늘·다음 영업일의 세션 시각.
+   * 한국은 통합(KRX+NXT) 프리 08:00 · 정규 · 애프터 ~20:00, 미국은 데이마켓·프리·정규·애프터. 휴장일은 세션이 모두 null,
+   * 수능일·조기 폐장도 그날 시각으로 온다. 받지 못하면 던진다 (부르는 쪽이 요일·휴장일 목록으로 대신한다)
+   */
+  async marketCalendar(market: "KR" | "US"): Promise<TossMarketCalendar> {
+    // 장 상태를 묻는 요청들이 오래 붙잡히지 않게 짧게 (예전 달력 조회와 같은 5초 — 넘으면 요일·휴장일 목록 추정)
+    const r = await this.client.get<Json>(`/api/v1/market-calendar/${market}`, {}, {}, { timeoutMs: CALENDAR_TIMEOUT_MS });
+    if (!r || typeof r !== "object") throw new ProviderError(this.name, `장 운영 달력 응답이 비었습니다 (${market})`);
+    const out = { previous: parseCalendarDay(market, r["previousBusinessDay"]), today: parseCalendarDay(market, r["today"]), next: parseCalendarDay(market, r["nextBusinessDay"]) };
+    if (!out.today) throw new ProviderError(this.name, `장 운영 달력 응답 모양이 다릅니다 (${market})`);
+    return out;
+  }
+
+  // ── 실시간 보조: 현재가 일괄 (QuickPriceSource) ─────────────────────
+
+  /** 종목별 마지막으로 받은 현재가 (체결 시각은 실제 마지막 체결 시각) */
+  private readonly quickTicks = new Map<string, LiveTick>();
+  /** 현재가가 없던 코드(체결 시각 없음·모르는 종목)를 물은 시각 — 잠깐은 그 코드 때문에 다시 부르지 않는다 */
+  private readonly quickMissAt = new Map<string, number>();
+  private readonly quickInflight: Array<{ codes: Set<string>; p: Promise<void> }> = [];
+  private quickFailedAt = -Infinity;
+  private quickBackoffUntil = -Infinity;
+  /** 종목별 세션 자격을 받은 시각 (1시간마다 다시) */
+  private readonly sessionInfoAt = new Map<string, number>();
+  private sessionInfoFailedAt = -Infinity;
+  private sessionInfoInflight: Promise<void> | null = null;
+
+  /**
+   * 여러 종목의 마지막 체결가를 요청 1개로 (/api/v1/prices — 정규장·시간외 모두 '최근 체결'). 웹소켓이 주지 않는 체결(유실·시간외·조용한 종목)을
+   * 1초 안에 따라잡는 보조 경로다. QUICK_FRESH_MS 안에 받은 값은 다시 부르지 않고, 같은 종목을 받는 요청이 나가 있으면 그것을 같이 기다린다.
+   * 요청 한도(429)에 걸리면 QUICK_BACKOFF_MS 동안 받아 둔 값만 돌려준다. 실패하면 던진다 (부르는 쪽은 직전 값을 쓴다)
+   */
+  async getMany(codes: string[]): Promise<Map<string, LiveTick>> {
+    const list = [...new Set(codes.map(normalizeCode))].filter((c) => CODE_RE.test(c));
+    if (list.length === 0) return new Map();
+    // 한도가 낮은 IP 면 확인 간격을 늦춘다 (받아 둔 값을 그만큼 더 쓴다)
+    const limit = this.client.status.rateLimits?.["/api/v1/prices"];
+    const QUICK_FRESH = limit !== undefined && limit <= LOW_RATE_LIMIT ? QUICK_FRESH_LOW_LIMIT_MS : QUICK_FRESH_MS;
+    const pick = () => {
+      const n = this.now().getTime();
+      return new Map(
+        list.flatMap((c) => {
+          const x = this.quickTicks.get(c);
+          return x && n - x.receivedAt < QUICK_FRESH ? [[c, x] as [string, LiveTick]] : [];
+        }),
+      );
+    };
+    const t = this.now().getTime();
+    const fresh = (c: string) => {
+      const x = this.quickTicks.get(c);
+      return (x !== undefined && t - x.receivedAt < QUICK_FRESH) || t - (this.quickMissAt.get(c) ?? -Infinity) < QUICK_FRESH;
+    };
+    if (list.every(fresh) || t < this.quickBackoffUntil) return pick();
+    const running = this.quickInflight.find((x) => list.every((c) => x.codes.has(c)));
+    if (running) {
+      await running.p;
+      return pick();
+    }
+    const entry = { codes: new Set(list), p: this.fetchQuick(list) };
+    this.quickInflight.push(entry);
+    try {
+      await entry.p;
+      return pick();
+    } finally {
+      this.quickInflight.splice(this.quickInflight.indexOf(entry), 1);
+    }
+  }
+
+  private async fetchQuick(list: string[]): Promise<void> {
+    let prices: Map<string, Json>;
+    try {
+      prices = await this.pricesMany(list);
+    } catch (e) {
+      const at = this.now().getTime();
+      this.quickFailedAt = at;
+      if (e instanceof Error && /HTTP 429/.test(e.message)) this.quickBackoffUntil = at + QUICK_BACKOFF_MS;
+      throw e;
+    }
+    const got = this.now().getTime();
+    for (const code of list) {
+      const p = prices.get(code);
+      const price = num(p?.["lastPrice"]);
+      const ts = typeof p?.["timestamp"] === "string" && !Number.isNaN(Date.parse(p["timestamp"])) ? p["timestamp"] : null;
+      // 체결 시각이 없으면(오늘 체결 없음 등) 붙일 체결이 아니다 — 스냅샷 값을 그대로 둔다
+      if (price === null || ts === null) {
+        this.quickMissAt.set(code, got);
+        continue;
+      }
+      this.quickTicks.set(code, { code, price, volume: null, timestamp: ts, receivedAt: got });
+      this.quickMissAt.delete(code);
+    }
+  }
+
+  /**
+   * 종목별 세션 사실 (초록 점 판단 — services/liveSession): NXT 대상·거래정지·ETF/ETN 은 공식 종목 정보(/api/v1/stocks)에서.
+   * 미국 주간거래 대상 여부는 공식 API 에 없어 모름(null) — 그 세션에 체결이 있었던 종목만 점이 켜진다.
+   * 받아 둔 값만 바로 돌려주고, 없거나 1시간 지난 종목은 뒤에서 새로 받는다 (잔고 응답을 기다리게 하지 않는다)
+   */
+  sessionFacts(codes: string[]): Map<string, StockSessionFacts> {
+    const list = [...new Set(codes.map(normalizeCode))].filter((c) => CODE_RE.test(c));
+    void this.refreshSessionInfos(list);
+    const out = new Map<string, StockSessionFacts>();
+    for (const c of list) {
+      const info = this.sessionInfoAt.has(c) ? (this.infoCache.get(c)?.info ?? null) : null;
+      const kr = info?.koreanMarketDetail ?? null;
+      const tick = this.quickTicks.get(c);
+      const flag = (v: unknown): boolean | null => (typeof v === "boolean" ? v : null);
+      out.set(c, {
+        daytime: null,
+        nxt: flag(kr?.nxtSupported),
+        halted: flag(kr?.krxTradingSuspended),
+        nxtHalted: flag(kr?.nxtTradingSuspended),
+        etp: info?.securityType ? ETP_TYPES.has(info.securityType) : null,
+        exchange: null,
+        // 그 뒤 현재가 조회가 실패했으면 받는 중이 아니다
+        pricedAt: tick && tick.receivedAt > this.quickFailedAt ? tick.receivedAt : null,
+      });
+    }
+    return out;
+  }
+
+  /** 세션 자격을 새로 받는다 (없거나 1시간 지난 종목만). 실패하면 5분 쉬고, 나가 있는 요청이 있으면 그것을 기다린다 */
+  refreshSessionInfos(codes: string[]): Promise<void> {
+    if (this.sessionInfoInflight) return this.sessionInfoInflight;
+    const t = this.now().getTime();
+    if (t - this.sessionInfoFailedAt < SESSION_INFO_RETRY_MS) return Promise.resolve();
+    const need = codes.filter((c) => t - (this.sessionInfoAt.get(c) ?? -Infinity) >= SESSION_INFO_TTL_MS);
+    if (need.length === 0) return Promise.resolve();
+    const p = (async () => {
+      // 하루 캐시(infoCache)를 건너뛰고 새로 받는다 — 거래정지는 장중에 바뀐다
+      await this.fetchStockInfos(need);
+      const at = this.now().getTime();
+      // 응답에 없는 종목도 받은 것으로 적어 1시간 동안 다시 묻지 않는다 (자격은 모름)
+      for (const c of need) this.sessionInfoAt.set(c, at);
+    })()
+      .catch(() => {
+        this.sessionInfoFailedAt = this.now().getTime();
+      })
+      .finally(() => {
+        this.sessionInfoInflight = null;
+      });
+    this.sessionInfoInflight = p;
+    return p;
   }
 
   // ── 캔들 ────────────────────────────────────────────────────────
@@ -533,19 +785,46 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
     return p;
   }
 
+  /** 현재가 묶음을 거절하게 만든 종목(공식 API 가 모르는·상장폐지 종목)과 다시 넣어 볼 시각 — 그동안은 묶음에서 뺀다 */
+  private readonly rejectedUntil = new Map<string, number>();
+
   /** 현재가 일괄 조회 (/prices 는 symbols 를 콤마로 여러 개 받는다) */
   private async pricesMany(codes: string[]): Promise<Map<string, Json>> {
     const out = new Map<string, Json>();
-    for (let i = 0; i < codes.length; i += PRICES_CHUNK) {
-      const chunk = codes.slice(i, i + PRICES_CHUNK);
+    const t = this.now().getTime();
+    // 묶음을 거절하게 만든 종목은 한동안 묻지 않는다 (그 종목만 '시세 없음' → 체인이 다음 소스로)
+    const ask = codes.filter((c) => {
+      const until = this.rejectedUntil.get(c);
+      if (until === undefined) return true;
+      if (until > t) return false;
+      this.rejectedUntil.delete(c);
+      return true;
+    });
+    for (let i = 0; i < ask.length; i += PRICES_CHUNK) {
+      const chunk = ask.slice(i, i + PRICES_CHUNK);
       let rows: Json[];
       try {
         rows = (await this.client.get<Json[]>("/api/v1/prices", { symbols: chunk.join(",") })) ?? [];
       } catch (e) {
-        // 모르는·상장폐지 종목 하나 때문에 묶음 전체가 4xx 로 거절되면 종목마다 다시 물어 나머지는 살린다
-        if (chunk.length === 1 || !(e instanceof ProviderError) || !/HTTP 4(00|04|22)/.test(e.message)) throw e;
-        const single = await mapLimit(chunk, DAILY_CONCURRENCY, (c) => this.client.get<Json[]>("/api/v1/prices", { symbols: c }).then((r) => (r ?? []).map((x) => ({ ...x, symbol: x["symbol"] ?? c })), () => [] as Json[]));
-        rows = single.flat();
+        if (!isRejected(e)) throw e;
+        if (chunk.length === 1) {
+          // 한 종목만 물었는데 거절: 잠깐 다시 묻지 않는다 (상세 화면을 보는 동안 1초마다 두드리지 않게)
+          this.rejectedUntil.set(chunk[0]!, this.now().getTime() + REJECTED_ALL_MS);
+          throw e;
+        }
+        // 모르는·상장폐지 종목 하나 때문에 묶음 전체가 4xx 로 거절되면 종목마다 다시 물어 나머지는 살린다.
+        // 거절된 종목은 기억해 두고 한동안 묶음에서 뺀다 — 1초 확인(getMany)이 매번 '묶음 1 + 종목 수'만큼 부르지 않게
+        const single = await mapLimit(chunk, DAILY_CONCURRENCY, (c) =>
+          this.client.get<Json[]>("/api/v1/prices", { symbols: c }).then(
+            (r) => ({ rows: (r ?? []).map((x) => ({ ...x, symbol: x["symbol"] ?? c })), rejected: false }),
+            (e2: unknown) => ({ rows: [] as Json[], rejected: isRejected(e2) }),
+          ),
+        );
+        const bad = chunk.filter((_, k) => single[k]!.rejected);
+        // 모두 거절되면 종목 탓이 아닐 수 있다(요청 자체의 문제) → 짧게만 쉰다
+        const until = this.now().getTime() + (bad.length === chunk.length ? REJECTED_ALL_MS : REJECTED_MS);
+        for (const c of bad) this.rejectedUntil.set(c, until);
+        rows = single.flatMap((x) => x.rows);
       }
       for (const r of rows) {
         const sym = String(r["symbol"] ?? "").toUpperCase();
@@ -628,9 +907,10 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
     // 다음 소스(기준가를 주는 토스 웹)로 넘긴다 — 상장 첫날 +280% 종목이 "0 · 0.00%"로 보이지 않게
     if (prevClose === null)
       throw new ProviderError(this.name, dailyError ? `${code} 일봉을 받지 못해 전일 종가를 모름` : `${code} 전일 종가 없음 (상장 첫날)`, dailyError ?? undefined);
-    // 등락률은 반올림 전 차이로 — 센트로 반올림한 등락으로 내면 $0.0500 → $0.0537 이 0.00% 가 된다 (+7.40%)
+    // 등락률은 반올림 전 차이로 — 센트로 반올림한 등락으로 내면 $0.0500 → $0.0537 이 0.00% 가 된다 (+7.40%).
+    // 소수 둘째 자리 아래는 토스증권처럼 버린다 (lib/pct)
     const change = round4(price - prevClose);
-    const changeRate = prevClose ? round2(((price - prevClose) / prevClose) * 100) : 0;
+    const changeRate = prevClose ? truncPct(((price - prevClose) / prevClose) * 100) : 0;
     const currency = String(p["currency"] ?? (kr ? "KRW" : "USD")) === "USD" ? "USD" : "KRW";
     const shares = num(info?.sharesOutstanding);
     const yearAgo = new Date(this.now().getTime() - 365 * 86_400_000).toISOString().slice(0, 10);

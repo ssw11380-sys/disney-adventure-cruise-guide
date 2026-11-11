@@ -44,7 +44,7 @@ describe("BH-38: 반올림하면 0 인 평가손익", () => {
     const row = draw(holding("005930", quote("005930", 1833), 1, 1833.33));
     expect(row.main).toBe("0");
     expect(row.mainColor).toBe(light.ink);
-    expect(row.sub).toBe("-0.02%"); // 수익률은 보이는 대로 손실
+    expect(row.sub).toBe("-0.01%"); // 수익률은 보이는 대로 손실
     expect(row.subColor).toBe(light.down);
     expect(row.label).toContain("손익 없음");
   });

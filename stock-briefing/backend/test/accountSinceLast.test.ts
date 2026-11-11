@@ -419,7 +419,7 @@ describe("계좌 브리핑 저장: positions·sinceLast (서비스)", () => {
     const s = d.sinceLast!;
     expect(s.prev.id).toBe(fri.id);
     // 엔비디아 값이 금요일 합계에만 있어도 가짜 '줄어듦'이 나오지 않는다: 3,300,000 → 3,450,000
-    expect(s.value).toEqual({ from: 3_300_000, to: 3_450_000, change: 150_000, rate: 4.55 });
+    expect(s.value).toEqual({ from: 3_300_000, to: 3_450_000, change: 150_000, rate: 4.54 });
     expect(s.weights).toEqual([]);
     expect(s.scope).toBe("common");
     expect(s.oneSide).toEqual([{ code: "NVDA", name: "엔비디아", side: "now", why: "fx" }]);

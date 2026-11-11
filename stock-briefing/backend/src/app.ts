@@ -238,16 +238,21 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     enabled: async () => await features.enabled("accountLiveRefresh") && await features.enabled("tossAccountSnapshot"),
     now: () => now().getTime(),
   }) : null;
+  const quickPrices = opts.providers.quickPrices;
   const priceStream = new PriceStream({
     onActiveChange: (active) => accountLiveRefresh?.setActive(active),
     live: opts.providers.live,
-    quickPrices: opts.providers.quickPrices,
+    quickPrices,
+    // 공식 API 현재가는 1초마다 (출처가 정한 간격), 토스 웹은 예전처럼 3초
+    ...(quickPrices?.pollMs ? { pollMs: quickPrices.pollMs } : {}),
     codes: () => stockService.streamCodes(),
     // 등록 종목 시장의 거래 세션이 모두 닫혀 있으면 토스 웹 폴링을 30초로 늦춘다 (달력은 5분 캐시).
     // 토스 달력 isOpen 은 미국 정규장만이라 세션(프리·애프터·주간거래 포함)으로 본다 — 그래야 웹소켓이 없는 종목도 3초마다 바뀐다
     marketOpen: async (codes) => anySessionOpen(codes, await opts.providers.calendar.status(), now()),
-    // 웹소켓이 이번 세션 체결을 주는 종목만 폴링에서 뺀다 (초록 점과 같은 기준 — 구독만으로 빼면 점은 켜졌는데 가격은 30초마다만 바뀐다)
-    wsServed: (codes) => stockService.wsServed(codes),
+    // 웹소켓이 이번 세션 체결을 주는 종목만 폴링에서 뺀다 (초록 점과 같은 기준 — 구독만으로 빼면 점은 켜졌는데 가격은 30초마다만 바뀐다).
+    // 공식 API 현재가(체결 시각이 실제 체결 시각)는 빼지 않고 모든 종목을 한 요청으로 확인한다 — 웹소켓 시세는 유실이 있는 채널이라,
+    // 놓친 체결을 1초 안에 메우고 체결 시각이 더 새로울 때만 앱에 보낸다 (PriceStream.poll)
+    wsServed: quickPrices?.tradeTime ? async () => new Set<string>() : (codes) => stockService.wsServed(codes),
     // 미국 공식 API 시세의 애프터마켓·주말엔 토스 웹 가격이 정규장 종가라 보내지 않는다 (앱이 시간외 가격을 덮어쓰지 않게)
     webOff: (codes) => stockService.webOff(codes),
     log,
@@ -540,6 +545,10 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
     llmConfigured: opts.providers.generator.model !== "disabled",
     appErrors: await appErrors.counts(7).catch(() => null),
     quotes: stockService.quoteStatus(),
+    // 한국 종목 기준가 출처 상태 (받아 둔 종목 수·마지막 성공·실패) — 기준가를 못 받으면 quotes.baseFallbacks 가 늘어난다
+    ...(opts.providers.krBase ? { krBase: opts.providers.krBase.status() } : {}),
+    // 토스 웹(비공식) 주소가 요청을 막아 쉬는 중인지 — 막혀 있어도 시세는 공식 API·네이버로 돈다 (상품 정보·배당 요약 등 부가 자료만 대체 경로)
+    ...(opts.providers.tossWeb ? { tossWeb: opts.providers.tossWeb.blockStatus() } : {}),
     candles: stockService.candleStatus(),
     fundamentalsCache: opts.providers.fundamentals?.cacheStats() ?? null,
     notificationDelivery: await notificationService.deliveryStatus().catch(() => null),

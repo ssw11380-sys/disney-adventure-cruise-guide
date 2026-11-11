@@ -102,7 +102,7 @@ describe("BH-38: 상세 잔고 칸", () => {
     const d = open(holding("005930", quote("005930", 1833), 1, 1833.33));
     expect(d.stat("평가손익")).toEqual({ value: "0원", color: light.ink });
     // 수익률은 보이는 대로 손실
-    expect(d.stat("수익률")).toEqual({ value: "-0.02%", color: light.down });
+    expect(d.stat("수익률")).toEqual({ value: "-0.01%", color: light.down });
   });
 
   it("미국 소수점 보유: '$0.00'·'0.00%' 기본 글자색, 원화 기준 줄도 같게", () => {

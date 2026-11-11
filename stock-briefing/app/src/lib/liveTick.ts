@@ -1,4 +1,5 @@
 import type { Currency, Evaluation, Quote, RegisteredStock } from "@/api/types";
+import { truncPct } from "./format";
 import { sameTradingDay } from "./marketTime";
 
 /** 서버 /api/stream 이 보내는 체결 1건 */
@@ -79,7 +80,8 @@ export function applyTick(quote: Quote | null, tick: StreamTick): Quote | null {
   // 틀린다 ($0.4321 → $0.4381 이 +1.39% 대신 +2.31%, 당일 손익도 등락 × 수량이라 함께). 서버 applyTick 과 같은 식
   const diff = prevClose !== null ? tick.price - prevClose : null;
   const change = diff !== null ? Math.round(diff * 1e4) / 1e4 : quote.change;
-  const changeRate = prevClose && diff !== null ? Math.round((diff / prevClose) * 10000) / 100 : quote.changeRate;
+  // 소수 둘째 자리 아래는 토스증권처럼 버린다 (lib/format truncPct)
+  const changeRate = prevClose && diff !== null ? truncPct((diff / prevClose) * 100) : quote.changeRate;
   const fx = quote.fxRate ?? (quote.priceKrw && quote.price ? quote.priceKrw / quote.price : null);
   const priceKrw = fx ? Math.round(tick.price * fx) : (quote.priceKrw ?? null);
   return {
@@ -104,7 +106,7 @@ export function evaluate(s: Pick<RegisteredStock, "quantity" | "avgPrice">, q: Q
   const marketValue = q.price * s.quantity;
   const costBasis = prev?.costBasis ?? s.avgPrice * s.quantity;
   const profit = marketValue - costBasis;
-  const pct = (p: number) => (costBasis > 0 ? Math.round((p / costBasis) * 10000) / 100 : 0);
+  const pct = (p: number) => (costBasis > 0 ? truncPct((p / costBasis) * 100) : 0);
   const costRate = prev?.costRate ?? null;
   const after = costRate !== null && costRate !== undefined ? marketValue * (1 - costRate) : null;
   return {

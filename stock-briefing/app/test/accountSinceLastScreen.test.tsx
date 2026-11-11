@@ -207,7 +207,7 @@ describe("계좌 상세: '지난 오전 브리핑과 비교' 카드", () => {
     expect(names[at + 1]).toBe("보유분·지수·환율");
     const card = sinceCard(r)!;
     const text = rawOf(card);
-    for (const s of [MONDAY.app.range, "총 평가금액", "-419,338원", " (-3.40%)", "평가손익", "+546,000원", "수량이 바뀐 종목", "비중 변화가 큰 종목", ...MONDAY.app.notes]) expect(text, s).toContain(s);
+    for (const s of [MONDAY.app.range, "총 평가금액", "-419,338원", " (-3.39%)", "평가손익", "+546,000원", "수량이 바뀐 종목", "비중 변화가 큰 종목", ...MONDAY.app.notes]) expect(text, s).toContain(s);
     // 줄바꿈 묶음 줄(묶음마다 글 하나)을 ' '로 이은 한 줄
     const lines = chunkRows(card);
     expect(lines).toContain("12,345,678원 → 11,926,340원");
@@ -228,8 +228,8 @@ describe("계좌 상세: '지난 오전 브리핑과 비교' 카드", () => {
       const n = allOf(card).filter((x) => x.type === "Text" && rawOf(x) === s);
       return n.map((x) => (Array.isArray(x.props.style) ? Object.assign({}, ...(x.props.style as object[])) : (x.props.style as { color?: string }))?.color);
     };
-    expect(colorOf("-419,338원 (-3.40%)")).toEqual([dark.down]);
-    expect(colorOf(" (-3.40%)")).toEqual([dark.down]);
+    expect(colorOf("-419,338원 (-3.39%)")).toEqual([dark.down]);
+    expect(colorOf(" (-3.39%)")).toEqual([dark.down]);
     expect(colorOf("+546,000원")).toEqual([dark.up]);
     expect(colorOf("(+4.5%p)")).toEqual([dark.up]);
     const fromTo = allOf(card).find((x) => x.type === "Muted" && rawOf(x) === "12,345,678원")!;

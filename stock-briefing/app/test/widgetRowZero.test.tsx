@@ -79,12 +79,12 @@ describe("BH-38: 위젯 종목 줄 — 0 으로 보이는 손익은 기본 글�
     const gain = holding("000660", quote("000660", 1900, { asOf: AT }), 1, 1833, undefined, "하이닉스");
     const tx = draw([loss, gain]);
     expect(find(tx, "-1.80% -66원").color).toBe(DOWN);
-    expect(find(tx, "+3.66% +67원").color).toBe(UP);
+    expect(find(tx, "+3.65% +67원").color).toBe(UP);
   });
 
-  it("국내 1주 평단 1,833.33원·현재가 1,833원: 금액은 0원이어도 수익률 '-0.02%' 가 보이면 하락 색", () => {
+  it("국내 1주 평단 1,833.33원·현재가 1,833원: 금액은 0원이어도 수익률 '-0.01%' 가 보이면 하락 색", () => {
     const tx = draw([holding("005930", quote("005930", 1833, { asOf: AT }), 1, 1833.33, undefined, "삼성전자")]);
-    expect(find(tx, "-0.02% 0원").color).toBe(DOWN);
+    expect(find(tx, "-0.01% 0원").color).toBe(DOWN);
   });
 });
 
@@ -116,7 +116,7 @@ describe("BH-38: 다듬은 잔고 위젯(widgetPolish)의 종목 줄도 같은 �
     const gain = holding("000660", quote("000660", 1900, { asOf: AT }), 1, 1833, undefined, "하이닉스");
     const tx = polished([loss, gain]);
     expect(find(tx, "수익 -1.80% -66원").color).toBe(DOWN);
-    expect(find(tx, "수익 +3.66% +67원").color).toBe(UP);
+    expect(find(tx, "수익 +3.65% +67원").color).toBe(UP);
   });
 
   it("'오늘 0.00%': 현재가는 하락 색, 등락률 '0.00%' 는 기본 글자색 (1센트 하락한 230달러 종목)", () => {

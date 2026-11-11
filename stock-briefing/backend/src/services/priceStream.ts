@@ -1,7 +1,8 @@
 import type { EventEmitter } from "node:events";
-import { normalizeCode } from "../lib/codes.js";
+import { CODE_RE, normalizeCode } from "../lib/codes.js";
 import type { LiveTick, LiveTicks, QuickPriceSource } from "../providers/market/tossRealtime.js";
 import type { ChainLogger } from "../providers/market/chain.js";
+import { laterThan, polledOverWs } from "./tickOrder.js";
 
 /**
  * 서버 → 앱 실시간 가격 스트림 (웹소켓 /api/stream).
@@ -16,7 +17,12 @@ import type { ChainLogger } from "../providers/market/chain.js";
  *    웹소켓이 맡은 종목 = wsServed(초록 점·가격 출처와 같은 기준: 구독 중이고, 세션이 닫혔거나 그 종목 가격을 이번 세션 웹소켓 체결이 따라감 — StockService.wsFollows). 없으면 구독 목록(wsCovered)
  *    토스 웹 가격이 정규장 종가일 뿐인 종목(webOff — 미국 공식 API 시세의 애프터마켓·장 마감·휴장)도 폴링하지 않는다
  *  - 앱은 tick 의 price 로 등락·환산가를 스스로 계산한다(prevClose·환율은 이미 받은 시세에 있음).
+ *  - 앱이 {type:"view", codes:[...]} 를 보내면 그 종목들도(등록하지 않은 종목 상세 — 발견·검색에서 연 종목) 붙어 있는 동안 같이 확인해 보낸다.
+ *    보낸 목록이 그 앱의 전체다(다시 보내면 바뀐다, 빈 배열이면 없음). 앱마다 VIEW_MAX 개까지
  */
+
+/** 앱 하나가 "보고 있는 종목"으로 더할 수 있는 수 (등록 종목 밖 — 상세 화면 하나·넘겨 보기 여유) */
+const VIEW_MAX = 8;
 
 export interface StreamTick {
   code: string;
@@ -67,6 +73,8 @@ export class PriceStream {
   private readonly clients = new Set<StreamSocket>();
   /** {type:"hello", batch:true} 를 보낸 앱 (한 통에 여러 종목) */
   private readonly batchClients = new WeakSet<StreamSocket>();
+  /** 앱마다 지금 보고 있는 종목 (등록 종목 밖의 상세 화면). 붙어 있는 동안만 폴링에 더한다 */
+  private readonly viewing = new Map<StreamSocket, string[]>();
   /** 다음 묶음에 보낼 종목별 마지막 체결 */
   private readonly pending = new Map<string, StreamTick>();
   private flushTimer: NodeJS.Timeout | null = null;
@@ -95,8 +103,9 @@ export class PriceStream {
     socket.on("error", drop);
     socket.on("message", (raw: unknown) => {
       try {
-        const m = JSON.parse(String(raw)) as { type?: string; batch?: boolean };
+        const m = JSON.parse(String(raw)) as { type?: string; batch?: boolean; codes?: unknown };
         if (m.type === "hello" && m.batch) this.batchClients.add(socket);
+        else if (m.type === "view" && this.clients.has(socket)) this.setViewing(socket, m.codes);
       } catch {
         /* 모르는 메시지는 무시 */
       }
@@ -111,10 +120,14 @@ export class PriceStream {
   /** 접속 직후: 웹소켓이 들고 있는 마지막 체결 + 지금까지 보낸 값 전부를 한 번에. 그 뒤 폴링 소스가 있으면 바로 한 번 읽는다 */
   private async sendSnapshot(socket: StreamSocket): Promise<void> {
     try {
-      for (const code of await this.deps.codes()) {
+      const codes = await this.pollCodes();
+      for (const code of codes) {
         const t = this.deps.live?.get(code);
         if (t) this.remember({ ...t, source: "toss-openapi" });
       }
+      // 등록 종목도, 누가 보고 있는 종목도 아닌 값은 버린다 (잠깐 본 종목이 서버를 다시 켤 때까지 스냅샷에 실리지 않게)
+      const keep = new Set(codes);
+      for (const code of this.last.keys()) if (!keep.has(code)) this.last.delete(code);
     } catch {
       /* 종목 목록을 못 읽어도 스냅샷은 보낸다 */
     }
@@ -122,7 +135,24 @@ export class PriceStream {
     void this.poll();
   }
 
+  /** 앱이 보고 있는 종목을 바꾼다 (전체 교체). 새 종목이 생겼으면 바로 한 번 읽어 그 앱에 가격이 곧 가게 한다 */
+  private setViewing(socket: StreamSocket, raw: unknown): void {
+    const codes = [...new Set((Array.isArray(raw) ? raw : []).filter((c): c is string => typeof c === "string").map(normalizeCode))].filter((c) => CODE_RE.test(c)).slice(0, VIEW_MAX);
+    const had = this.viewing.get(socket) ?? [];
+    if (codes.length) this.viewing.set(socket, codes);
+    else this.viewing.delete(socket);
+    if (codes.some((c) => !had.includes(c))) void this.poll();
+  }
+
+  /** 폴링할 종목: 등록 종목(구독 상한에서 먼저) + 앱들이 보고 있는 종목 */
+  private async pollCodes(): Promise<string[]> {
+    const base = await this.deps.codes();
+    if (this.viewing.size === 0) return base;
+    return [...new Set([...base, ...[...this.viewing.values()].flat()])];
+  }
+
   private detach(socket: StreamSocket): void {
+    this.viewing.delete(socket);
     if (!this.clients.delete(socket)) return;
     if (this.clients.size === 0) {
       this.stopTimers();
@@ -142,6 +172,7 @@ export class PriceStream {
     }
     if (this.clients.size > 0) this.deps.onActiveChange?.(false);
     this.clients.clear();
+    this.viewing.clear();
   }
 
   private startTimers(): void {
@@ -165,7 +196,7 @@ export class PriceStream {
     if (!q || this.polling || this.clients.size === 0) return;
     this.polling = true;
     try {
-      const all = await this.deps.codes();
+      const all = await this.pollCodes();
       // 등록 종목 시장이 모두 닫혀 있으면(세션 기준) closedPollMs(기본 30초)에 한 번만
       const open = this.deps.marketOpen ? await this.deps.marketOpen(all).catch(() => true) : true;
       if (!open && Date.now() - this.lastPollAt < (this.deps.closedPollMs ?? 30_000)) return;
@@ -182,9 +213,10 @@ export class PriceStream {
       const ticks = await q.getMany(codes);
       for (const [code, tick] of ticks) {
         const ws = this.deps.live?.get(code);
-        // 웹소켓 체결이 폴링 값보다 새로우면 폴링 값은 버린다
-        if (ws && Date.parse(ws.timestamp) >= Date.parse(tick.timestamp)) continue;
-        this.publish({ code, price: tick.price, volume: tick.volume, timestamp: tick.timestamp, source: q.name });
+        // 웹소켓 체결이 폴링 값보다 새로우면 폴링 값은 버린다. 같은 초 안에서 웹소켓이 놓친 체결은 살린다 (services/tickOrder — 가격 출처 고르기와 같은 규칙)
+        const use = ws ? polledOverWs(ws, tick) : tick;
+        if (!use) continue;
+        this.publish({ code, price: use.price, volume: use.volume, timestamp: use.timestamp, source: q.name });
       }
     } catch (e) {
       this.deps.log?.warn({ err: e instanceof Error ? e.message : String(e) }, "실시간 스트림 폴링 실패");
@@ -196,7 +228,8 @@ export class PriceStream {
   /** 마지막 값 갱신. 가격이 실제로 바뀌었을 때만 true (같은 가격의 새 체결은 시각만 갱신) */
   private remember(tick: StreamTick): boolean {
     const prev = this.last.get(tick.code);
-    if (prev && prev.timestamp > tick.timestamp) return false;
+    // 시각은 읽어서 견준다 — 출처마다 표기(+09:00 · Z)가 달라도 순서가 뒤집히지 않게
+    if (prev && laterThan(prev.timestamp, tick.timestamp)) return false;
     this.last.set(tick.code, tick);
     return !prev || prev.price !== tick.price;
   }

@@ -68,22 +68,22 @@ describe("계좌 띠 (AccountBand)", () => {
   it("펼친 폴드8 가로 한 줄 띠: 국내·해외에 수익률까지 (설계 '국내+% | 해외·환율+%')", () => {
     const r = render(<AccountBand data={DATA} oneLine rates pad={12} />);
     const all = r.text();
-    expect(all).toContain("31,451,551원 +20.69%");
-    expect(all).toContain("$28,741.88 +36.61%");
+    expect(all).toContain("31,451,551원 +20.68%");
+    expect(all).toContain("$28,741.88 +36.60%");
     expect(all).toContain("해외 · 환율 1,391.5");
   });
 
   it("좁은 한 줄 띠(rates 꺼짐)는 국내·해외 금액만, 화면 읽기 문장에는 수익률이 그대로", () => {
     const r = render(<AccountBand data={DATA} oneLine rates={false} pad={12} />);
-    expect(r.text()).not.toContain("+20.69%");
+    expect(r.text()).not.toContain("+20.68%");
     expect(r.text()).toContain("31,451,551원");
     const sentence = r.all().find((n) => typeof n.props.accessibilityLabel === "string" && String(n.props.accessibilityLabel).startsWith("총 평가금액"))!;
-    expect(String(sentence.props.accessibilityLabel)).toContain("20.69%");
+    expect(String(sentence.props.accessibilityLabel)).toContain("20.68%");
   });
 
   it("두 줄 띠는 늘 수익률 · 매입금액", () => {
     const r = render(<AccountBand data={DATA} oneLine={false} rates={false} pad={12} />);
-    expect(r.text()).toContain("31,451,551원 +20.69%");
+    expect(r.text()).toContain("31,451,551원 +20.68%");
     expect(r.text()).toContain("54,699,110원");
   });
 

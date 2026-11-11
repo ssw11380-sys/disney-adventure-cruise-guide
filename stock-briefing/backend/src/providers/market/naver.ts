@@ -2,6 +2,7 @@ import { isIntraday, type AfterMarketQuote, type Candle, type CandlePeriod, type
 import { isKrCode } from "../../lib/codes.js";
 import { isTimeoutError, ProviderError } from "../../lib/errors.js";
 import { seoulIso } from "../../lib/time.js";
+import { truncPct } from "../../lib/pct.js";
 import { fetchWithTimeout } from "../../lib/timedFetch.js";
 import type { FetchFn, QuoteProvider } from "./types.js";
 
@@ -103,7 +104,8 @@ export class NaverFinanceProvider implements QuoteProvider {
       currency: "KRW",
       price,
       change,
-      changeRate: round2(changeRate),
+      // 네이버가 준 등락률은 반올림 값이다 → 기준가로 다시 계산해 토스증권처럼 버린다 (lib/pct). 기준가를 모르면 받은 값 그대로
+      changeRate: price - change > 0 ? truncPct((change / (price - change)) * 100) : round2(changeRate),
       open: parseNum(d["openPriceRaw"]) ?? parseNum(d["openPrice"]),
       high: parseNum(d["highPriceRaw"]) ?? parseNum(d["highPrice"]),
       low: parseNum(d["lowPriceRaw"]) ?? parseNum(d["lowPrice"]),
@@ -155,13 +157,15 @@ function toAfterMarket(o: Json | undefined): AfterMarketQuote | null {
   const sign = signOf(o["compareToPreviousPrice"]);
   const session = String(o["tradingSessionType"] ?? "");
   const asOfRaw = String(o["localTradedAt"] ?? "");
+  const change = signed(parseNum(o["compareToPreviousClosePriceRaw"]) ?? parseNum(o["compareToPreviousClosePrice"]), sign);
   return {
     venue: "NXT",
     session: session === "PRE_MARKET" || session === "AFTER_MARKET" ? session : "UNKNOWN",
     status: String(o["overMarketStatus"] ?? "").toUpperCase() === "OPEN" ? "OPEN" : "CLOSE",
     price,
-    change: signed(parseNum(o["compareToPreviousClosePriceRaw"]) ?? parseNum(o["compareToPreviousClosePrice"]), sign),
-    changeRate: round2(signed(parseNum(o["fluctuationsRatioRaw"]) ?? parseNum(o["fluctuationsRatio"]), sign)),
+    change,
+    // 기준가로 다시 계산해 버린다 (네이버 값은 반올림). 기준가를 모르면 받은 값 그대로
+    changeRate: price - change > 0 ? truncPct((change / (price - change)) * 100) : round2(signed(parseNum(o["fluctuationsRatioRaw"]) ?? parseNum(o["fluctuationsRatio"]), sign)),
     volume: parseNum(o["accumulatedTradingVolumeRaw"]) ?? parseNum(o["accumulatedTradingVolume"]),
     // "2026-09-22T20:00:00.000000+09:00" 처럼 마이크로초가 붙어 오면 잘라서 표준 ISO 로
     asOf: asOfRaw ? asOfRaw.replace(/(\.\d{3})\d+/, "$1") : seoulIso(),

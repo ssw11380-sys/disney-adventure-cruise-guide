@@ -1,3 +1,4 @@
+import { truncPct } from "./format";
 /**
  * 화면 읽기 프로그램(TalkBack)이 읽을 문장 (3-22). 화면의 기호(+ − ▲ ▼ $)를 말로 바꾸고, 한 줄을 한 문장으로 묶는다.
  * React Native 를 불러오지 않는 순수 모듈 (테스트에서 문장을 그대로 확인한다).
@@ -30,7 +31,8 @@ export function speakAmount(text: string): string {
 /** 등락률: "2.86% 상승" · "1.20% 하락" · "보합" */
 export function speakRate(v: number | null | undefined): string | null {
   if (v === null || v === undefined || !Number.isFinite(v)) return null;
-  const a = Math.abs(v);
+  // 화면 글자(formatPct)와 같은 숫자로 읽는다 — 소수 둘째 자리 아래는 버림
+  const a = Math.abs(truncPct(v));
   const s = a >= 1000 ? a.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : a.toFixed(2);
   // 화면에 "0.00%" 로 보이는 값은 보합으로 읽는다 (BH-38)
   if (!/[1-9]/.test(s)) return "보합";

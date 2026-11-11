@@ -16,6 +16,7 @@ import type {
   DividendInfo,
   FinancialsProvider,
 } from "../providers/dart/types.js";
+import { truncPct } from "../lib/pct.js";
 
 /**
  * 프롬프트에 넣을 데이터를 모은다.
@@ -172,7 +173,7 @@ export class DataCollector {
         ? {
             marketValue: quote.price * stock.quantity,
             profit: (quote.price - stock.avgPrice) * stock.quantity,
-            profitRate: Math.round(((quote.price - stock.avgPrice) / stock.avgPrice) * 10000) / 100,
+            profitRate: truncPct(((quote.price - stock.avgPrice) / stock.avgPrice) * 100),
           }
         : null;
     return {
@@ -266,5 +267,5 @@ export function orderMissing(missing: string[]): string[] {
 
 function pct(numer: number | null, denom: number | null): number | null {
   if (numer === null || denom === null || denom === 0) return null;
-  return Math.round((numer / denom) * 10000) / 100;
+  return truncPct((numer / denom) * 100);
 }

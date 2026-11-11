@@ -420,7 +420,7 @@ describe("StockService + 실시간", () => {
     const live = { get: (c: string) => ticks.get(c) ?? null, setCodes: () => {}, status: () => ({ enabled: true, connected: true, subscribed: [], lastMessageAt: null, lastError: null }) };
     const service = new StockService({ db, quotes: new FakeQuoteProvider("x"), search: new FakeSearchProvider(), master: new FakeMasterProvider(), live, now: NOW });
     const q = await service.getQuote("000660"); // 가짜 시세: 100,000원, 전일 99,000, asOf 09:00
-    expect(q).toMatchObject({ price: 101500, change: 2500, changeRate: 2.53, live: true, asOf: "2026-09-22T14:30:00+09:00", high: 101500 });
+    expect(q).toMatchObject({ price: 101500, change: 2500, changeRate: 2.52, live: true, asOf: "2026-09-22T14:30:00+09:00", high: 101500 });
     ticks.set("000660", { code: "000660", price: 100500, volume: 1, timestamp: "2026-09-22T08:00:00+09:00", receivedAt: 0 }); // 스냅샷보다 오래된 체결은 무시
     expect((await service.getQuote("000660")).live).toBeUndefined();
     await db.destroy();
@@ -587,10 +587,10 @@ describe("1달러 미만 미국 종목 등락", () => {
     const q = await p.getQuote("DCX");
     expect(q).toMatchObject({ currency: "USD", price: 0.0537, prevClose: 0.05, change: 0.0037, changeRate: 7.4 });
     // 1달러 이상은 예전과 같다
-    expect(await p.getQuote("TSLA")).toMatchObject({ change: 2.2, changeRate: 0.59 });
+    expect(await p.getQuote("TSLA")).toMatchObject({ change: 2.2, changeRate: 0.58 });
   });
 
-  it("서버 실시간 체결 반영: $0.4321 → $0.4381 은 +$0.006 · +1.39%, $0.4340 은 +0.44%", async () => {
+  it("서버 실시간 체결 반영: $0.4321 → $0.4381 은 +$0.006 · +1.38%, $0.4340 은 +0.43% (버림)", async () => {
     const db = await createMigratedDb(":memory:");
     const penny: Quote = { ...makeQuote("DCX", "x"), currency: "USD", price: 0.4321, change: 0, changeRate: 0, open: 0.43, high: 0.44, low: 0.43, prevClose: 0.4321, asOf: "2026-09-22T10:00:00+09:00", fxRate: 1390, priceKrw: 601 };
     const quotes = new FakeQuoteProvider("x");
@@ -598,9 +598,9 @@ describe("1달러 미만 미국 종목 등락", () => {
     const ticks = new Map([["DCX", { code: "DCX", price: 0.4381, volume: 10, timestamp: "2026-09-22T14:30:00+09:00", receivedAt: 0 }]]);
     const live = { get: (c: string) => ticks.get(c) ?? null, setCodes: () => {}, status: () => ({ enabled: true, connected: true, subscribed: [], lastMessageAt: null, lastError: null }) };
     const service = new StockService({ db, quotes, search: new FakeSearchProvider(), master: new FakeMasterProvider(), live, now: NOW });
-    expect(await service.getQuote("DCX")).toMatchObject({ price: 0.4381, change: 0.006, changeRate: 1.39, live: true });
+    expect(await service.getQuote("DCX")).toMatchObject({ price: 0.4381, change: 0.006, changeRate: 1.38, live: true });
     ticks.set("DCX", { code: "DCX", price: 0.434, volume: 1, timestamp: "2026-09-22T14:31:00+09:00", receivedAt: 0 });
-    expect(await service.getQuote("DCX")).toMatchObject({ price: 0.434, change: 0.0019, changeRate: 0.44 });
+    expect(await service.getQuote("DCX")).toMatchObject({ price: 0.434, change: 0.0019, changeRate: 0.43 });
     await db.destroy();
   });
 });

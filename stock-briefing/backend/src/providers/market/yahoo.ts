@@ -5,6 +5,7 @@ import { seoulIso } from "../../lib/time.js";
 import { fetchWithTimeout } from "../../lib/timedFetch.js";
 import { aggregateCandles } from "./tossOpenApi.js";
 import type { FetchFn, QuoteProvider, StockSearchProvider } from "./types.js";
+import { truncPct } from "../../lib/pct.js";
 
 /**
  * Yahoo Finance 비공식 엔드포인트 (yfinance 가 내부적으로 쓰는 것과 동일).
@@ -141,7 +142,7 @@ export class YahooProvider implements QuoteProvider, StockSearchProvider {
       currency,
       price,
       change,
-      changeRate: round2(changeRate),
+      changeRate: truncPct(changeRate),
       open: last?.open ?? null,
       high: num(meta["regularMarketDayHigh"]) ?? last?.high ?? null,
       low: num(meta["regularMarketDayLow"]) ?? last?.low ?? null,

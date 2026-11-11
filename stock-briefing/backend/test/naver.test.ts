@@ -96,7 +96,7 @@ describe("NaverFinanceProvider", () => {
     expect(q.currency).toBe("KRW");
     expect(q.price).toBe(201000);
     expect(q.change).toBe(3100);
-    expect(q.changeRate).toBe(1.57);
+    expect(q.changeRate).toBe(1.56); // 3,100 ÷ 197,900 = 1.5664…% → 버림 (네이버가 준 1.57 은 반올림 값)
     expect(q.prevClose).toBe(197900);
     expect(q.volume).toBe(494786);
     expect(q.marketCap).toBe(30570968169000);
@@ -110,7 +110,7 @@ describe("NaverFinanceProvider", () => {
       status: "CLOSE",
       price: 201500,
       change: 3600,
-      changeRate: 1.82,
+      changeRate: 1.81, // 기준가로 다시 계산해 버림 (네이버가 준 1.82 는 반올림 값)
       volume: 554100,
       asOf: "2026-09-22T20:00:00.000+09:00",
     });
@@ -125,7 +125,7 @@ describe("NaverFinanceProvider", () => {
     const p = new NaverFinanceProvider(fakeFetch({ ...ROUTES, "polling.finance.naver.com/api/realtime/domestic/stock/035420": down }));
     const q = await p.getQuote("035420");
     expect(q.change).toBe(-2000);
-    expect(q.changeRate).toBe(-0.99);
+    expect(q.changeRate).toBe(-0.98); // 기준가로 다시 계산해 버림 (네이버가 준 -0.99 는 반올림 값)
   });
 
   it("지표 API 가 실패해도 현재가는 낸다", async () => {

@@ -206,7 +206,7 @@ describe("화면 읽기 문장", () => {
     expect(speakAmount("$3.5M")).toBe("350만 달러");
     expect(speakAmount("$1.20T")).toBe("1.2조 달러");
     expect(speakAmount("5.5조원")).toBe("5.5조원");
-    expect(speakRate(2.856)).toBe("2.86% 상승");
+    expect(speakRate(2.856)).toBe("2.85% 상승"); // 소수 둘째 자리 아래는 버림 (화면 글자와 같은 숫자)
     expect(speakRate(-1.2)).toBe("1.20% 하락");
     expect(speakRate(0)).toBe("보합");
     expect(speakRate(null)).toBeNull();

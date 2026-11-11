@@ -23,7 +23,7 @@ const SEARCH_ITEMS: Record<string, unknown[]> = {
 const PRICES: Record<string, unknown> = {
   A035420: { exchange: "integrated", productCode: "A035420", currency: "KRW", base: 197900, close: 201500, changeType: "UP", volume: 1050258 },
   US20100629001: { productCode: "US20100629001", currency: "USD", base: 375.3, baseKrw: 519527, close: 376.31, closeKrw: 520925, changeType: "UP", volume: 11094719, afterMarketClose: 377.0, afterMarketCloseKrw: 521880 },
-  // 1달러 미만 미국 종목 (2026-09 실제 값 모양): 전일 $0.0603 → $0.0562 (-6.80%)
+  // 1달러 미만 미국 종목 (2026-09 실제 값 모양): 전일 $0.0603 → $0.0562 (-6.7993…% → 버림 -6.79%)
   US20240101001: { productCode: "US20240101001", currency: "USD", base: 0.0603, baseKrw: 83, close: 0.0562, closeKrw: 78, changeType: "DOWN", volume: 101000000 },
 };
 
@@ -105,7 +105,7 @@ describe("TossProvider", () => {
       currency: "KRW",
       price: 201500,
       change: 3600,
-      changeRate: 1.82,
+      changeRate: 1.81, // 버림 (토스증권과 같은 표기 — lib/pct)
       prevClose: 197900,
       open: 198200,
       high: 203500,
@@ -127,7 +127,7 @@ describe("TossProvider", () => {
     const calls: string[] = [];
     const p = new TossProvider(fakeFetch(calls), store, NOW);
     const q = await p.getQuote("tsla");
-    expect(q).toMatchObject({ code: "TSLA", currency: "USD", price: 376.31, change: 1.01, changeRate: 0.27, priceKrw: 520925, priceBasis: "정규장" });
+    expect(q).toMatchObject({ code: "TSLA", currency: "USD", price: 376.31, change: 1.01, changeRate: 0.26, priceKrw: 520925, priceBasis: "정규장" });
     expect(q.afterMarket).toMatchObject({ venue: "US", price: 377, change: 1.7, changeRate: 0.45 });
     expect(store.map.get("toss:product:TSLA")).toBe("US20100629001");
     expect(calls.filter((c) => c.includes("search-all")).length).toBe(1);
@@ -141,12 +141,12 @@ describe("TossProvider", () => {
     expect(calls2.some((c) => c.includes("/us-s/US20100629001/day:1?count=2"))).toBe(true);
   });
 
-  // 버그 점검 BH-29 · BH-54: 등락을 센트로 반올림한 뒤 등락률을 내면 1달러 미만 종목이 -6.80% 대신 0.00% 가 된다
+  // 버그 점검 BH-29 · BH-54: 등락을 센트로 반올림한 뒤 등락률을 내면 1달러 미만 종목이 -6.79% 대신 0.00% 가 된다 (소수 둘째 자리 아래는 버림)
   it("1달러 미만 미국 종목: 등락률은 반올림 전 차이로, 등락은 소수 4자리까지", async () => {
     const store = new MemoryStore();
     store.map.set("toss:product:DCX", "US20240101001");
     const q = await new TossProvider(fakeFetch(), store, NOW).getQuote("DCX");
-    expect(q).toMatchObject({ code: "DCX", currency: "USD", price: 0.0562, prevClose: 0.0603, change: -0.0041, changeRate: -6.8 });
+    expect(q).toMatchObject({ code: "DCX", currency: "USD", price: 0.0562, prevClose: 0.0603, change: -0.0041, changeRate: -6.79 });
   });
 
   it("getMany 는 여러 종목 현재가를 요청 1개로 받고 2초 동안 재사용한다", async () => {

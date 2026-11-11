@@ -94,7 +94,7 @@ describe("위젯 정보 기준과 작은 화면", () => {
   it("실제 커버 위젯 크기 508×223·115%에서 목록을 없애지 않는다", () => {
     const t = build(<HoldingsWidget {...props} {...clarity} width={508} height={223} fontScale={1.15} pnlToggle />);
     expect(nodes(t).some((n) => n.type === "ListWidget")).toBe(true);
-    expect(words(t)).toContain("+100,000원 (+16.67%)");
+    expect(words(t)).toContain("+100,000원 (+16.66%)");
     expect(nodes(t).some((n) => n.type === "TextWidget" && String(n.props.text).startsWith("시세 ") && String(n.props.text).includes("종목 전일 대비"))).toBe(true);
     const list = nodes(t).find((n) => n.type === "ListWidget")!;
     const row = list.children?.[0];

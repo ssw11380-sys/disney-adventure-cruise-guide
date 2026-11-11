@@ -48,7 +48,7 @@
         "marketValue": 723000,
         "costBasis": 700000,
         "profit": 23000,
-        "profitRate": 3.29,
+        "profitRate": 3.28,
         "costRate": null,
         "afterCost": null,
         "costBasisKrw": null,
@@ -194,7 +194,7 @@
         "marketValue": 1333500,
         "costBasis": 1262345,
         "profit": 71155,
-        "profitRate": 5.64,
+        "profitRate": 5.63,
         "costRate": 0.0021,
         "afterCost": {
           "marketValue": 1330699.65,
@@ -293,7 +293,7 @@
         "marketValue": 206750,
         "costBasis": 200000,
         "profit": 6750,
-        "profitRate": 3.38,
+        "profitRate": 3.37,
         "costRate": null,
         "afterCost": null,
         "costBasisKrw": null,
@@ -433,7 +433,7 @@
         "marketValue": 54015,
         "costBasis": 52500,
         "profit": 1515,
-        "profitRate": 2.89,
+        "profitRate": 2.88,
         "costRate": null,
         "afterCost": null,
         "costBasisKrw": null,
@@ -443,7 +443,7 @@
         "marketValue": 54037.5,
         "costBasis": 52500,
         "profit": 1537.5,
-        "profitRate": 2.93,
+        "profitRate": 2.92,
         "costRate": null,
         "afterCost": null,
         "costBasisKrw": null,
@@ -603,7 +603,7 @@
         "afterCost": {
           "marketValue": 1570.464,
           "profit": 124.34400000000005,
-          "profitRate": 8.6
+          "profitRate": 8.59
         },
         "costBasisKrw": 1952310,
         "krwCostSource": "exact"
@@ -713,7 +713,7 @@
         "afterCost": {
           "marketValue": 523.4879999999999,
           "profit": 23.487999999999943,
-          "profitRate": 4.7
+          "profitRate": 4.69
         },
         "costBasisKrw": 670000,
         "krwCostSource": "estimated"
@@ -803,12 +803,12 @@
         "marketValue": 1228.5,
         "costBasis": 1200,
         "profit": 28.5,
-        "profitRate": 2.38,
+        "profitRate": 2.37,
         "costRate": 0.0025,
         "afterCost": {
           "marketValue": 1225.42875,
           "profit": 25.428750000000036,
-          "profitRate": 2.12
+          "profitRate": 2.11
         },
         "costBasisKrw": null,
         "krwCostSource": null
@@ -889,7 +889,7 @@
         "afterCost": {
           "marketValue": 164.5875,
           "profit": 14.587500000000006,
-          "profitRate": 9.73
+          "profitRate": 9.72
         },
         "costBasisKrw": 202500,
         "krwCostSource": "estimated"
@@ -1130,12 +1130,12 @@
         "marketValue": 1006.25,
         "costBasis": 900,
         "profit": 106.25,
-        "profitRate": 11.81,
+        "profitRate": 11.8,
         "costRate": 0.0025,
         "afterCost": {
           "marketValue": 1003.734375,
           "profit": 103.734375,
-          "profitRate": 11.53
+          "profitRate": 11.52
         },
         "costBasisKrw": 1210000,
         "krwCostSource": "exact"

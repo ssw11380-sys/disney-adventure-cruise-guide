@@ -234,12 +234,12 @@ describe("체결이 오면 그 자리에서 울린다 (3초 안)", () => {
     r.act(() => w.message(tick(88_700)));
     await settle(r); // 가짜 시계로 0ms — 3초보다 한참 안
     expect(Date.now() - T0).toBeLessThan(3_000);
-    expect(bannerRows(r).map(texts)).toEqual(["삼성전자 · 88,600원 이상|지금 88,700원 · 전일 대비 +8.97% · 10:12 기준"]);
+    expect(bannerRows(r).map(texts)).toEqual(["삼성전자 · 88,600원 이상|지금 88,700원 · 전일 대비 +8.96% · 10:12 기준"]);
     expect(haptics).toEqual(["notificationAsync:warning"]);
-    expect(notified).toEqual([{ title: "가격 알림 · 삼성전자", body: "88,600원 이상 · 지금 88,700원 · 전일 대비 +8.97% · 10:12 기준", data: { type: "priceAlert", code: "005930", ruleId: 12 } }]);
+    expect(notified).toEqual([{ title: "가격 알림 · 삼성전자", body: "88,600원 이상 · 지금 88,700원 · 전일 대비 +8.96% · 10:12 기준", data: { type: "priceAlert", code: "005930", ruleId: 12 } }]);
     expect(srv.fired).toEqual([[12, { date: "2026-12-08", at: new Date(T0).toISOString(), value: 88_700 }]]);
     expect(JSON.parse(h.store.get(FIRED_KEY)!)).toEqual({ "12": "2026-12-08" });
-    expect(h.announce).toEqual(["가격 알림, 삼성전자, 88,600원 이상에 닿음, 지금 88,700원, 8.97% 상승, 10시 12분 기준"]);
+    expect(h.announce).toEqual(["가격 알림, 삼성전자, 88,600원 이상에 닿음, 지금 88,700원, 8.96% 상승, 10시 12분 기준"]);
     // 카드에는 accessibilityLiveRegion 이 없다 (알림 말 한 번과 겹쳐 두 번 읽지 않게)
     expect(r.all().some((n) => "accessibilityLiveRegion" in n.props)).toBe(false);
     // 조건 목록 캐시는 바로 '오늘 울림'

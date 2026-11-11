@@ -1,4 +1,5 @@
 import { isTimeoutError, ProviderError } from "../../lib/errors.js";
+import { retruncRate } from "../../lib/pct.js";
 import type { FetchFn } from "./types.js";
 
 /**
@@ -200,7 +201,8 @@ export function krStock(it: Json): DiscoverStock | null {
     currency: "KRW",
     price,
     change: num(it["fluctuations"]) ?? 0,
-    changeRate: num(it["fluctuationsRatio"]) ?? 0,
+    // 출처 등락률은 반올림 값 → 가격·전일 대비로 다시 계산해 토스증권처럼 버린다 (lib/pct retruncRate)
+    changeRate: retruncRate(price, num(it["fluctuations"]), num(it["fluctuationsRatio"])) ?? 0,
     volume: num(it["accumulatedTradingVolume"]),
     tradingValue: num(it["accumulatedTradingValue"]),
     marketCap: num(it["marketValue"]),
@@ -240,7 +242,7 @@ export function usRankStock(it: Json): DiscoverStock | null {
     currency: "USD",
     price,
     change: num(it["compareToPreviousClosePriceRaw"]) ?? 0,
-    changeRate: num(it["fluctuationsRatioRaw"]) ?? 0,
+    changeRate: retruncRate(price, num(it["compareToPreviousClosePriceRaw"]), num(it["fluctuationsRatioRaw"])) ?? 0,
     volume: num(it["accumulatedTradingVolumeRaw"]),
     tradingValue: num(it["accumulatedTradingValueRaw"]),
     marketCap: num(it["marketValueRaw"]),
@@ -283,7 +285,8 @@ export function usStock(it: Json): DiscoverStock | null {
     currency: "USD",
     price,
     change: num(it["fluctuations"]) ?? 0,
-    changeRate: num(it["fluctuationsRatio"]) ?? 0,
+    // 출처 등락률은 반올림 값 → 가격·전일 대비로 다시 계산해 토스증권처럼 버린다 (lib/pct retruncRate)
+    changeRate: retruncRate(price, num(it["fluctuations"]), num(it["fluctuationsRatio"])) ?? 0,
     volume: num(it["accumulatedTradingVolume"]),
     tradingValue: num(it["accumulatedTradingValue"]),
     marketCap: num(it["marketValue"]),

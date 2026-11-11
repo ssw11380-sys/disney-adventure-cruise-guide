@@ -36,6 +36,7 @@
 
 import { isKrTradingDate, isUsTradingDate, tradingDate } from "./marketContext.js";
 import { addDays } from "./tradeRecordCalc.js";
+import { truncPct } from "../lib/pct.js";
 
 export type Cur = "KRW" | "USD";
 export type Side = "BUY" | "SELL";
@@ -359,7 +360,7 @@ function apply(s: State, f: LedgerFill, opts: LedgerOptions, out: Out): void {
       avgCost: round4(s.cost / s.qty),
       costAmount: roundMoney(c, cur),
       gross,
-      rate: c > 0 ? round2(((f.amount - c) / c) * 100) : null,
+      rate: c > 0 ? truncPct(((f.amount - c) / c) * 100) : null,
       costs,
       net: costs.total !== null ? roundMoney(gross - costs.total, cur) : null,
       krw: null,

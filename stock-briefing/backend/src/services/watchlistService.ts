@@ -5,6 +5,7 @@ import type { Quote } from "../domain/types.js";
 import { isKrCode } from "../lib/codes.js";
 import { mapLimit } from "../lib/concurrency.js";
 import { AppError } from "../lib/errors.js";
+import { truncPct } from "../lib/pct.js";
 import { tradingDate } from "./marketContext.js";
 import type { StockService } from "./stockService.js";
 import type { FeatureService } from "./featureService.js";
@@ -20,6 +21,13 @@ export function movementLevel(price: number, basis: number): number {
   if (!(Number.isFinite(price) && price > 0 && Number.isFinite(basis) && basis > 0)) return 0;
   const rate = (price - basis) / basis * 100;
   return Math.sign(rate) * Math.floor((Math.abs(rate) + 1e-9) / 5) * 5;
+}
+
+/** 시세 시각을 한국 시각 "HH:MM" 으로 (알림 본문 — 기계식 시각 문자열을 그대로 보이지 않게). 못 읽으면 빈 글 */
+export function clock(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  return new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(t));
 }
 
 export function movementDate(q: Quote, now: Date): string | null {
@@ -146,11 +154,14 @@ export class WatchlistService {
     await db.insertInto("movement_marks").values({ mark_key: key, up: 0, down: 0, created_at: this.deps.now().toISOString() }).onConflict(c => c.column("mark_key").doNothing()).execute();
     const mark = await db.selectFrom("movement_marks").selectAll().where("mark_key", "=", key).executeTakeFirstOrThrow();
     if (mark[field] >= value) return;
-    const format = (n: number) => q.currency === "USD" ? `$${n.toLocaleString("en-US", { maximumFractionDigits: 2 })}` : `${n.toLocaleString("ko-KR", { maximumFractionDigits: 0 })}원`;
+    const rate = truncPct(((q.price - basis) / basis) * 100);
+    const format = (n: number) => q.currency === "USD" ?`$${n.toLocaleString("en-US", { maximumFractionDigits: 2 })}` : `${n.toLocaleString("ko-KR", { maximumFractionDigits: 0 })}원`;
     // 영속 발송 기록이 같은 구간의 다중 인스턴스·재시작 중복 발송을 차단한다.
     const message: PushMessage = { channelId: "prices",
-      title: `${name} ${scope === "watch" ? "관심 기준" : "전일 대비"} ${level > 0 ? "+" : "−"}${value}% 구간 도달`,
-      body: `${label} ${format(basis)} 대비 ${level > 0 ? "상승" : "하락"}\n현재 ${format(q.price)} · 실제 ${((q.price - basis) / basis * 100).toFixed(2)}%\n시세 ${q.asOf}`,
+      // 알림 글은 짧게: 제목은 종목·기준·구간, 본문은 지금 가격(실제 등락률 — 토스증권처럼 버림)·기준 가격·한국 시각 HH:MM
+      // (예전 본문은 '시세 2026-11-11T19:59:59.000+09:00' 처럼 기계식 시각 문자열이 그대로 보였다)
+      title: `${name} ${scope === "watch" ? "관심 기준" : "전일 대비"} ${level > 0 ? "+" : "−"}${value}%`,
+      body: `${format(q.price)} (${rate > 0 ? "+" : ""}${rate.toFixed(2)}%) · ${label} ${format(basis)}\n${clock(q.asOf)} 기준`,
       data: { type: "movementAlert", code: q.code, scope, level, basis, asOf: q.asOf } };
     const eventKey = `movement:${key}:${field}:${value}`;
     // 푸시 미지원 설치본도 다음 기기 확인에서 같은 사건을 받을 수 있게 발송 전에 보존한다.

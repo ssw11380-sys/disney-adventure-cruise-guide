@@ -5,6 +5,7 @@ import { seoulIso } from "../../lib/time.js";
 import type { ProductFacts } from "../../analysis/leveraged.js";
 import type { LiveTick, StockSessionFacts } from "./tossRealtime.js";
 import type { FetchFn, QuoteProvider, StockSearchProvider } from "./types.js";
+import { truncPct } from "../../lib/pct.js";
 
 /**
  * 토스증권 웹(tossinvest.com)이 쓰는 내부 API. 공식 개발자 API 가 아니라 예고 없이 바뀔 수 있으므로
@@ -29,6 +30,10 @@ const BASE = "https://wts-info-api.tossinvest.com/api";
 const CERT_BASE = "https://wts-cert-api.tossinvest.com/api";
 /** 토스 웹 요청 하나의 최대 대기 (응답이 멈추면 시세 체인이 다음 소스로 넘어가게) */
 const REQUEST_TIMEOUT_MS = 8_000;
+/** 연달아 이만큼 '요청 막힘'(HTTP 400 invalid-client-state)이면 쉰다 */
+const BLOCK_AFTER = 3;
+/** 막혔을 때 쉬는 시간 — 끝나면 한 번 다시 물어 보고, 또 막혀 있으면 다시 쉰다 */
+const BLOCK_REST_MS = 10 * 60_000;
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36";
 
 const TOSS_MARKET: Record<string, Market> = { KSP: "KOSPI", KSQ: "KOSDAQ", NSQ: "NASDAQ", NYS: "NYSE", AMX: "AMEX" };
@@ -211,8 +216,21 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
     private readonly now: () => Date = () => new Date(),
   ) {}
 
+  /** 토스 웹이 요청을 막은 채(HTTP 400 invalid-client-state)로 연달아 답한 횟수와, 그래서 쉬는 끝 시각 */
+  private blockedStreak = 0;
+  private blockedUntil = -Infinity;
+
+  /** 운영 확인용 (/health): 토스 웹 주소가 막혀 쉬는 중인지 */
+  blockStatus(): { blocked: boolean; until: string | null; streak: number } {
+    const blocked = this.now().getTime() < this.blockedUntil;
+    return { blocked, until: blocked ? new Date(this.blockedUntil).toISOString() : null, streak: this.blockedStreak };
+  }
+
   private async request(path: string, init: RequestInit = {}, base: string = BASE): Promise<unknown> {
     const url = `${base}${path}`;
+    // 토스 웹이 브라우저 밖 요청을 막았으면(2026-11 부터 모든 경로 HTTP 400 invalid-client-state) 요청마다 두드리지 않는다:
+    // 연달아 BLOCK_AFTER 번 막히면 BLOCK_REST_MS 동안 바로 실패 → 시세 체인·검색이 기다리지 않고 다음 출처로 넘어간다. 쉬는 시간이 끝나면 한 번 다시 물어 본다
+    if (this.now().getTime() < this.blockedUntil) throw new ProviderError(this.name, `토스 웹 주소가 막혀 쉬는 중: ${url}`);
     let res: Response;
     try {
       res = await this.fetchFn(url, {
@@ -230,7 +248,14 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
     } catch (e) {
       throw new ProviderError(this.name, `네트워크 오류: ${url}`, e);
     }
-    if (!res.ok) throw new ProviderError(this.name, `HTTP ${res.status}: ${url}`);
+    if (!res.ok) {
+      if (res.status === 400 && (await res.text().catch(() => "")).includes("invalid-client-state")) {
+        if (++this.blockedStreak >= BLOCK_AFTER) this.blockedUntil = this.now().getTime() + BLOCK_REST_MS;
+        throw new ProviderError(this.name, `HTTP 400 invalid-client-state (토스 웹이 요청을 막음): ${url}`);
+      }
+      throw new ProviderError(this.name, `HTTP ${res.status}: ${url}`);
+    }
+    this.blockedStreak = 0;
     let json: unknown;
     try {
       json = await res.json();
@@ -348,7 +373,7 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
     if (price === null) throw new ProviderError(this.name, `${code} 현재가 없음`);
     // 등락률은 반올림 전 차이로 (센트로 반올림한 등락으로 내면 1달러 미만 미국 종목이 0.00% 가 된다), 등락은 소수 4자리까지
     const change = base !== null ? round4(price - base) : 0;
-    const changeRate = base ? round2(((price - base) / base) * 100) : 0;
+    const changeRate = base ? truncPct(((price - base) / base) * 100) : 0;
     const currency = String(p["currency"] ?? (kr ? "KRW" : "USD")) === "USD" ? "USD" : "KRW";
     const latest = chart.at(-1) ?? null; // 오늘(또는 마지막 거래일) 봉
     const shares = num(info?.["sharesOutstanding"]);
@@ -363,7 +388,7 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
             status: "CLOSE",
             price: afterClose,
             change: round2(afterClose - (base ?? price)),
-            changeRate: base ? round2(((afterClose - base) / base) * 100) : 0,
+            changeRate: base ? truncPct(((afterClose - base) / base) * 100) : 0,
             volume: null,
             asOf: seoulIso(this.now()),
           }
@@ -724,7 +749,7 @@ function toListed(it: Json): ListedStock | null {
     isinCode: null,
     groupCode: companyCode.startsWith("EF") ? "EF" : "ST",
     price,
-    changeRate: price !== null && basePrice ? round2(((price - basePrice) / basePrice) * 100) : null,
+    changeRate: price !== null && basePrice ? truncPct(((price - basePrice) / basePrice) * 100) : null,
     currency: kr ? "KRW" : "USD",
   };
 }

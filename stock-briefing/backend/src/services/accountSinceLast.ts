@@ -1,4 +1,5 @@
 import { weightPct, type AccountData, type AccountOneSide, type AccountPosition, type AccountQtyChange, type AccountSinceLast, type AccountWeightChange } from "./accountNumbers.js";
+import { truncPct } from "../lib/pct.js";
 
 /**
  * 브리핑 3차 3 — 지난 브리핑과 비교 (플래그 accountSinceLast). DB·네트워크를 모르는 순수 함수.
@@ -58,7 +59,7 @@ export function compareSinceLast(prev: { id: number; data: SinceLastInput }, now
   const change = vTo - vFrom;
   const out: AccountSinceLast = {
     prev: { id: prev.id, date: p.date, session: p.session, asOf: p.asOf },
-    value: { from: vFrom, to: vTo, change, rate: vFrom > 0 ? round2((change / vFrom) * 100) : null },
+    value: { from: vFrom, to: vTo, change, rate: vFrom > 0 ? truncPct((change / vFrom) * 100) : null },
     profit: { from: pFrom, to: pTo, change: pTo - pFrom },
     positions: null,
     weights: null,

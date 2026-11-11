@@ -93,6 +93,14 @@ describe("관심 가격과 5% 구간", () => {
     h.q.price = 95; await h.service.check(); expect(h.messages[2]?.data?.level).toBe(-5);
     h.setTime("2026-10-06T10:00:00+09:00"); h.q.price = 105; await h.service.check(); expect(h.messages).toHaveLength(4);
   });
+  it("알림 글은 짧게: 제목 '종목 전일 대비 +5%', 본문 '지금 가격 (등락률 — 버림) · 기준 가격 / HH:MM 기준' — 기계식 시각 문자열을 보이지 않는다", async () => {
+    const h = await setup(); h.q.price = 106.789;
+    await h.service.check();
+    expect(h.messages[0]).toMatchObject({ title: "보유 전일 대비 +5%", body: "107원 (+6.78%) · 전일 종가 100원\n10:00 기준" });
+    expect(h.messages[0]!.body).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
+    h.q.price = 94.111; await h.service.check();
+    expect(h.messages[1]).toMatchObject({ title: "보유 전일 대비 −5%", body: "94원 (-5.88%) · 전일 종가 100원\n10:00 기준" });
+  });
   it("관심 구간은 날짜가 바뀌어도 기억하고 시작 가격 변경에만 새로 시작한다", async () => {
     const h = await setup(); await h.service.setSettings(false);
     await h.service.save("005930", { startPrice: 100, desiredPrice: 80, alerts: true });

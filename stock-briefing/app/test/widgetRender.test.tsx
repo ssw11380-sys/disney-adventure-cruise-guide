@@ -729,15 +729,15 @@ describe("다듬은 잔고 위젯 (widgetPolish · 위젯 검토 '전부 수정�
     const nvda = list.children![0]!;
     const w = words(nvda);
     expect(w[0]).toBe("엔비디아");
-    // 원화 매입금액(6,288,000원) 기준: 7,292 × 1,391.5 − 6,288,000 = 3,858,818원, +61.37% (달러 기준 +51.92% 가 아니라 합계와 같은 원화 기준)
-    expect(w[1]).toBe("수익 +61.37% +3,858,818원");
+    // 원화 매입금액(6,288,000원) 기준: 7,292 × 1,391.5 − 6,288,000 = 3,858,818원, +61.36% (달러 기준 +51.91% 가 아니라 합계와 같은 원화 기준)
+    expect(w[1]).toBe("수익 +61.36% +3,858,818원");
     expect(w).toContain("$182.30");
     expect(w).toContain("오늘");
     expect(w).toContain("+1.18%");
     expect(texts(nvda).find((p) => p.text === "오늘")!.color).toBe(dark.muted);
-    expect(nvda.props.accessibilityLabel).toBe("엔비디아 182.30달러, 오늘 1.18% 상승, 수익 61.37% 상승");
+    expect(nvda.props.accessibilityLabel).toBe("엔비디아 182.30달러, 오늘 1.18% 상승, 수익 61.36% 상승");
     // 설정 '위젯 종목 금액: 종목 통화'면 달러
-    expect(words(nodes(draw({ rowKrw: false })).find((n) => n.type === "ListWidget")!.children![0]!)[1]).toBe("수익 +51.92% +$2,492.00");
+    expect(words(nodes(draw({ rowKrw: false })).find((n) => n.type === "ListWidget")!.children![0]!)[1]).toBe("수익 +51.91% +$2,492.00");
     // 가격 칸은 원화 표시 설정(showKrw)을 따른다
     expect(words(nodes(draw({ showKrw: true })).find((n) => n.type === "ListWidget")!.children![0]!)).toContain("253,670원");
     // 관심 종목은 그대로 "관심", 시세가 없는 줄에는 "오늘"이 없다
@@ -975,10 +975,10 @@ describe("다듬은 잔고 위젯 (widgetPolish · 위젯 검토 '전부 수정�
     const t = draw({}, WIDE, usOnly);
     expect(words(t)).toContain("$7,292.00"); // 합계 $
     const row = nodes(t).find((n) => n.type === "ListWidget")!.children![0]!;
-    expect(words(row)[1]).toBe("수익 +51.92% +$2,492.00");
+    expect(words(row)[1]).toBe("수익 +51.91% +$2,492.00");
     // 원화 표시를 켜면 합계·줄 모두 원화
     const krw = nodes(draw({ showKrw: true }, WIDE, usOnly)).find((n) => n.type === "ListWidget")!.children![0]!;
-    expect(words(krw)[1]).toBe("수익 +61.37% +3,858,818원");
+    expect(words(krw)[1]).toBe("수익 +61.36% +3,858,818원");
   });
 });
 

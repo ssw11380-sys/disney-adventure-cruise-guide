@@ -1,4 +1,5 @@
 import type { Candle, CandlePeriod, CandleSeries } from "../../domain/types.js";
+import { retruncRate } from "../../lib/pct.js";
 import { localIso, aggregateCandles, aggregateIntraday } from "./tossOpenApi.js";
 import type { FetchFn } from "./types.js";
 
@@ -156,6 +157,9 @@ export class MarketIndices {
       if (value === null || change === null) return null;
       // 등락률 부호가 빠지는 경우가 있어 전일 대비 부호에 맞춘다
       if (rate !== null && change < 0 && rate > 0) rate = -rate;
+      // 네이버가 준 등락률은 반올림 값이다 → 전일 값(지금 값 − 전일 대비)으로 다시 계산해 토스증권처럼 버린다 (lib/pct retruncRate).
+      // 2026-11-11 코스닥 +37.49 ÷ 667.61 = 5.6156…%: 네이버 5.62% · 토스 5.61%. 칸끼리 기준이 다르면 받은 값 그대로
+      rate = retruncRate(value, change, rate);
       return {
         code: src.code,
         name: src.name,
