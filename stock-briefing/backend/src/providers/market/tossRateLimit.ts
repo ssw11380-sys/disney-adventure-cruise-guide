@@ -60,7 +60,10 @@ export function pacedPerWindow(limit: number): number {
 }
 
 export interface PacerOptions {
-  /** 지금 시각(ms). 기본 Date.now — 테스트는 가짜 시계 */
+  /**
+   * 지금 시각(ms). 기본은 뒤로 가지 않는 시계(performance.now) — 벽시계(Date.now)는 시각 맞춤으로 뒤로 갈 수 있고,
+   * 그러면 '아직 구간 안'으로 보여 줄이 그만큼 멈춘다. 테스트는 가짜 시계
+   */
   clock?: () => number;
   /** 기다리기. 기본 setTimeout — 테스트는 가짜 시계를 돌린다 */
   sleep?: (ms: number) => Promise<void>;
@@ -93,7 +96,7 @@ export class RequestPacer {
   readonly stats: Record<string, PaceStat> = {};
 
   constructor(opts: PacerOptions = {}) {
-    this.clock = opts.clock ?? (() => Date.now());
+    this.clock = opts.clock ?? (() => performance.now());
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.windowMs = opts.windowMs ?? PACE_WINDOW_MS;
     this.maxWaitMs = opts.maxWaitMs ?? PACE_MAX_WAIT_MS;
@@ -110,9 +113,10 @@ export class RequestPacer {
 
   /**
    * 보낼 차례를 기다린다. limit = 그 그룹의 지금 초당 한도 (문서 값과 토스가 응답 머리글로 알려 준 값 중 낮은 쪽).
+   * 함수로 주면 차례가 왔을 때 다시 읽는다 — 줄에 서 있는 동안 토스가 더 낮은 한도를 알려 주면 그 뒤 요청부터 바로 따른다.
    * 너무 오래 기다리게 되면 ProviderError (보내지 않음)
    */
-  take(group: string, limit: number): Promise<void> {
+  take(group: string, limit: number | (() => number)): Promise<void> {
     const s = this.state(group);
     const queuedAt = this.clock();
     const turn = s.tail.then(() => this.slot(group, s, limit, queuedAt));
@@ -121,11 +125,15 @@ export class RequestPacer {
     return turn;
   }
 
-  private async slot(group: string, s: GroupState, limit: number, queuedAt: number): Promise<void> {
-    const allowed = pacedPerWindow(limit);
+  private async slot(group: string, s: GroupState, limit: number | (() => number), queuedAt: number): Promise<void> {
     for (;;) {
       const t = this.clock();
+      // 시계가 뒤로 갔으면(가짜 시계·시각 맞춤) 지난 기록으로 구간을 잴 수 없다 → 기록을 버리고 지금부터 다시 센다 (줄이 그 차이만큼 멈추지 않게)
+      if (s.sent.length && t < s.sent[s.sent.length - 1]!) s.sent.length = 0;
+      if (s.pausedUntil - t > this.maxWaitMs) s.pausedUntil = t;
+      if (queuedAt > t) queuedAt = t;
       while (s.sent.length && t - s.sent[0]! >= this.windowMs) s.sent.shift();
+      const allowed = pacedPerWindow(typeof limit === "function" ? limit() : limit);
       const wait = Math.max(0, t < s.pausedUntil ? s.pausedUntil - t : s.sent.length >= allowed ? s.sent[0]! + this.windowMs - t : 0);
       const waited = t - queuedAt;
       // 이미 오래 기다렸거나 더 기다리면 넘는다: 보내지 않는다 (부르는 쪽은 벌써 다른 길로 갔다 — 늦게 보내 봐야 줄만 길어진다)
@@ -135,7 +143,8 @@ export class RequestPacer {
       }
       if (wait === 0) {
         s.sent.push(t);
-        if (waited > 0) {
+        // 1ms 이상 기다린 요청만 센다 (앞 요청이 자리를 받는 몇 마이크로초는 세지 않는다)
+        if (waited >= 1) {
           const st = (this.stats[group] ??= { waited: 0, maxWaitMs: 0, dropped: 0 });
           st.waited++;
           st.maxWaitMs = Math.max(st.maxWaitMs, Math.round(waited));

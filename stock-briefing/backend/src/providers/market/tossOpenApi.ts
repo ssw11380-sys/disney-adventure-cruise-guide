@@ -246,7 +246,7 @@ export class TossOpenApiClient {
       rejected = null;
       if (this.pacer && group) {
         try {
-          await this.pacer.take(group.group, this.limitOf(group));
+          await this.pacer.take(group.group, () => this.limitOf(group));
         } catch (e) {
           throw this.fail(e instanceof ProviderError ? new ProviderError(this.name, `${e.message}: ${path}`) : new ProviderError(this.name, `요청 한도 대기 실패: ${path}`, e));
         }
@@ -1010,17 +1010,26 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
     if (hit && !hit.fromStart && hit.pages < want) hit = undefined;
     let bars: Candle[] | null = null;
     if (hit && hit.bars.length) {
-      // 마지막 두 구간은 다시 만든다: 마지막 봉은 진행 중이었고, 그 앞 봉도 받는 순간 아직 덜 찼을 수 있다
+      // 마지막 두 구간은 다시 만든다: 마지막 봉은 진행 중이었고, 그 앞 봉도 받는 순간 아직 덜 찼을 수 있다.
+      // 그 앞 봉(뒤에서 셋째 — 지난번에 이미 끝나 있던 봉)까지 받아 받아 둔 것과 견준다: 다르면 지난 봉이 고쳐진 것이다
+      // (액면분할·무상증자 뒤의 수정주가 — 분할 전 봉에 분할 뒤 봉을 이어 붙이면 가격이 끊기고 거래량 급증이 몇 배로 잘못 나온다) → 처음부터 다시
+      const check = hit.bars.length >= 3 ? hit.bars.at(-3)! : null;
       const redoFrom = Date.parse((hit.bars.at(-2) ?? hit.bars.at(-1)!).time!) - HALF_HOUR_MS;
-      const tail = await this.minutePages(code, { maxPages: HALF_HOUR_TAIL_PAGES, sinceMs: redoFrom });
+      const since = check ? Date.parse(check.time!) - HALF_HOUR_MS : redoFrom;
+      const tail = await this.minutePages(code, { maxPages: HALF_HOUR_TAIL_PAGES, sinceMs: since });
       if (tail.reached) {
-        const kept = hit.bars.filter((b) => Date.parse(b.time!) <= redoFrom);
-        bars = [...kept, ...aggregateHalfHours(tail.candles.filter((c) => Date.parse(c.time!) > redoFrom), kr)].slice(-HALF_HOUR_KEEP);
-        // 쓸 때마다 맨 뒤로 (오래 안 쓴 종목부터 버리게)
-        this.halfHourBook.delete(code);
-        this.halfHourBook.set(code, { bars, pages: hit.pages, fromStart: hit.fromStart });
+        const fresh = aggregateHalfHours(tail.candles.filter((c) => Date.parse(c.time!) > since), kr);
+        const again = check ? fresh.find((b) => b.time === check.time) : null;
+        const same = !check || (!!again && again.open === check.open && again.high === check.high && again.low === check.low && again.close === check.close && again.volume === check.volume);
+        if (same) {
+          const kept = hit.bars.filter((b) => Date.parse(b.time!) <= redoFrom);
+          bars = [...kept, ...fresh.filter((b) => Date.parse(b.time!) > redoFrom)].slice(-HALF_HOUR_KEEP);
+          // 쓸 때마다 맨 뒤로 (오래 안 쓴 종목부터 버리게)
+          this.halfHourBook.delete(code);
+          this.halfHourBook.set(code, { bars, pages: hit.pages, fromStart: hit.fromStart });
+        }
       }
-      // 닿지 못했으면(오래 비어 있었다) 사이가 빈 봉을 이어 붙이지 않고 처음부터 다시 받는다
+      // 닿지 못했으면(오래 비어 있었다) 사이가 빈 봉을 이어 붙이지 않고 처음부터 다시 받는다 — 지난 봉이 고쳐졌을 때도
     }
     if (!bars) {
       const cold = await this.minutePages(code, { maxPages: want });

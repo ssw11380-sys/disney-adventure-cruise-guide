@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ProviderError } from "../src/lib/errors.js";
 import { TossOpenApiClient, TossOpenApiProvider } from "../src/providers/market/tossOpenApi.js";
 import { PACE_WINDOW_MS, pacedPerWindow, rateGroupOf, RequestPacer } from "../src/providers/market/tossRateLimit.js";
@@ -122,6 +122,48 @@ describe("줄 세우기 (RequestPacer)", () => {
     expect(c.clock() - t0).toBe(3_000);
     await pacer.take("MARKET_INFO", 3); // 다른 그룹은 그대로
     expect(c.clock() - t0).toBe(3_000);
+  });
+
+  it("한도는 차례가 왔을 때 다시 읽는다 — 줄에 서 있는 동안 토스가 더 낮은 한도를 알려 주면 그 뒤 요청부터 따른다 (검토 지적)", async () => {
+    const c = fakeClock();
+    let limit = 20;
+    // 처음 기다리는 순간(= 첫 17개가 나간 뒤) 한도가 초당 2회로 내려갔다고 알게 된다
+    const sleep = async (ms: number) => {
+      limit = 2;
+      await c.sleep(ms);
+    };
+    const pacer = new RequestPacer({ clock: c.clock, sleep, maxWaitMs: 60_000 });
+    const t0 = c.clock();
+    const at: number[] = [];
+    await Promise.all(Array.from({ length: 21 }, () => pacer.take("MARKET_DATA_CHART", () => limit).then(() => void at.push(c.clock() - t0))));
+    // 17개는 바로, 그 뒤는 1.1초에 하나씩 (예전에는 줄 설 때의 한도로 17·4)
+    expect(at.slice(0, 17).every((x) => x === 0)).toBe(true);
+    expect(at.slice(17)).toEqual([1100, 2200, 3300, 4400]);
+  });
+
+  it("시계가 뒤로 가도 줄이 멈추지 않는다 (검토 지적 — 예전에는 뒤로 간 만큼 맨 앞 요청이 자고 뒤 요청이 모두 막혔다)", async () => {
+    const c = fakeClock();
+    const pacer = new RequestPacer({ clock: c.clock, sleep: c.sleep });
+    for (let i = 0; i < 4; i++) await pacer.take("STOCK", 5);
+    pacer.pause("STOCK", 2_000);
+    c.advance(-5 * 60_000); // 시각 맞춤으로 5분 뒤로
+    const before = c.clock();
+    const results = await Promise.allSettled(Array.from({ length: 6 }, () => pacer.take("STOCK", 5)));
+    expect(results.every((r) => r.status === "fulfilled")).toBe(true);
+    // 지난 기록·쉬는 시각을 버리고 지금부터 다시 센다: 4개는 바로, 2개는 다음 구간
+    expect(c.clock() - before).toBe(1100);
+    expect(pacer.stats["STOCK"]?.dropped ?? 0).toBe(0);
+  });
+
+  it("기본 시계는 뒤로 가지 않는 시계다 (벽시계를 쓰지 않는다)", async () => {
+    const wall = vi.spyOn(Date, "now");
+    try {
+      const pacer = new RequestPacer();
+      await pacer.take("STOCK", 5);
+      expect(wall).not.toHaveBeenCalled();
+    } finally {
+      wall.mockRestore();
+    }
   });
 });
 

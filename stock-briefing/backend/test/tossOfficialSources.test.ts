@@ -13,7 +13,7 @@ import { parseSectors, parseSectorStocks, switchTics, TossSectorTics } from "../
 import type { TicsSource } from "../src/providers/market/tossTics.js";
 import { FeatureService } from "../src/services/featureService.js";
 import { FLOW_TEXT } from "../src/services/flowText.js";
-import { withSectorTics } from "../src/services/holdingThemeMaps.js";
+import { HoldingThemeMaps, withSectorTics } from "../src/services/holdingThemeMaps.js";
 import { buildFlowBody, isFinalRow } from "../src/services/investorFlowCalc.js";
 import { InvestorFlowService, type InvestorFlowSources } from "../src/services/investorFlowService.js";
 import { UsThemeBook } from "../src/services/usThemes.js";
@@ -230,10 +230,21 @@ describe("수급 탭: 공식 투자자별 매매동향 → 줄 (예전 토스 �
     expect(() => parseOpenApiTrend({ body: [] })).toThrow(/모양 바뀜/);
     expect(() => parseOpenApiTrend(null)).toThrow(ProviderError);
     expect(bad([{ ...TREND.records[1], date: "20260928" }])).toThrow(/모양 바뀜: date/);
-    expect(bad([{ ...TREND.records[1], foreigner: null }])).toThrow(/foreigner 가 없습니다/);
+    expect(bad([{ ...TREND.records[1], foreigner: "없음" }])).toThrow(/foreigner 가 객체가 아닙니다/);
     expect(bad([{ ...TREND.records[1], institution: { netBuyVolume: "많음" } }])).toThrow(/institution\.netBuyVolume/);
     expect(bad([{ ...TREND.records[1], individual: {} }])).toThrow(/individual\.netBuyVolume/);
     expect(bad([{ ...TREND.records[1], foreignerHolding: "없음" }])).toThrow(/foreignerHolding/);
+  });
+
+  it("외국인·기관 값이 비어 온 줄: 70줄을 모두 버리지 않고 그 값만 비운다 — 그 줄은 '모두 나옴'이 아니고 합계에서는 빠진 날로 센다 (검토 지적)", () => {
+    const rows = parseOpenApiTrend({ records: [{ ...TREND.records[1], foreigner: null }, { ...TREND.records[2], institution: null }] }, CLOSES);
+    expect(rows[0]).toMatchObject({ date: "2026-09-28", individual: 700_000, foreign: null, institution: -300_000, hasAll: false });
+    expect(rows[1]).toMatchObject({ date: "2026-09-23", foreign: 550_000, institution: null, hasAll: false });
+    // 오늘 줄이면 확정으로 보지 않는다 (저녁에 받았어도)
+    expect(isFinalRow({ ...rows[0]!, date: "2026-09-29", updatedAt: "2026-09-29T20:16:03.000+09:00" }, "toss-openapi", new Date("2026-09-29T20:40:00+09:00"))).toBe(false);
+    // 지난 날이면 확정 줄로 두되 빈 값은 더하지 않고 '빠진 날'로
+    const body = buildFlowBody({ code: "005930", source: "toss-openapi", rows, fetchedAt: new Date("2026-09-29T10:10:00+09:00"), stale: false, check: null, now: new Date("2026-09-29T10:10:00+09:00") });
+    expect(body.sums["5"]).toMatchObject({ foreign: 550_000, institution: -300_000, days: 2, missing: 2 });
   });
 
   it("출처: 요청 하나(70줄) + 정규장 종가 한 번 — 종가를 받지 못해도 수급은 준다", async () => {
@@ -483,13 +494,19 @@ const SECTOR_STOCK_INFO: Record<string, { symbol: string; name: string; englishN
   AMD: { symbol: "AMD", name: "AMD", market: "AMEX", status: "ACTIVE" },
 };
 
-function sectorWorld(now: { at: Date } = { at: new Date("2026-11-12T21:00:00+09:00") }) {
+/** 중분류 여섯 개 더 (IT 아래) — 섹터가 12개면 하나의 실패는 8% */
+const MORE_SECTORS = [1, 2, 3, 4, 5, 6].map((i) => ({ sectorId: String(9000 + i), name: `덧섹터${i}`, depth: 1, parentSectorId: "87", members: [`XA${i}`, `XB${i}`, `XC${i}`] }));
+
+/** extra: 더 넣을 섹터 (실패 비율을 낮춰 보는 테스트용) */
+function sectorWorld(now: { at: Date } = { at: new Date("2026-11-12T21:00:00+09:00") }, extra: Array<{ sectorId: string; name: string; depth: number; parentSectorId: string | null; members: string[] }> = []) {
+  const SECTORS_ALL = [...SECTORS, ...extra.map(({ members: _members, ...sector }) => sector)];
+  const MEMBERS_ALL: Record<string, string[]> = { ...MEMBERS, ...Object.fromEntries(extra.map((x) => [x.sectorId, x.members])) };
   const calls: string[] = [];
   const state = { failStocks: new Set<string>(), failDetail: false, failAll: false };
   const get = async (path: string, params: Record<string, string | number | boolean | undefined> = {}) => {
     calls.push(`${path}${Object.keys(params).length ? `?${new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)])).toString()}` : ""}`);
     if (state.failAll) throw new ProviderError("toss-openapi", `HTTP 500 internal-error (${path})`);
-    if (path === "/api/v1/sectors") return { sectors: SECTORS };
+    if (path === "/api/v1/sectors") return { sectors: SECTORS_ALL };
     if (path === "/api/v1/sectors/rankings") {
       // 순위에는 대·중분류만 (소분류 955 는 없다)
       const rows = [
@@ -502,13 +519,13 @@ function sectorWorld(now: { at: Date } = { at: new Date("2026-11-12T21:00:00+09:
     const m = /^\/api\/v1\/sectors\/(\d+)(\/stocks)?$/.exec(path);
     if (m && m[2]) {
       if (state.failStocks.has(m[1]!)) throw new ProviderError("toss-openapi", `HTTP 500 internal-error (${path})`);
-      const list = MEMBERS[m[1]!];
+      const list = MEMBERS_ALL[m[1]!];
       if (!list) throw new ProviderError("toss-openapi", `HTTP 404 sector-not-found (${path})`);
       return { stocks: list.map((symbol, i) => ({ symbol, name: SECTOR_STOCK_INFO[symbol]?.name ?? symbol, volume: "1", tradingAmount: "1", marketCapitalization: String(1_000_000 - i), currency: "KRW" })) };
     }
     if (m) {
       if (state.failDetail) throw new ProviderError("toss-openapi", `HTTP 500 internal-error (${path})`);
-      const s = SECTORS.find((x) => x.sectorId === m[1]);
+      const s = SECTORS_ALL.find((x) => x.sectorId === m[1]);
       if (!s) throw new ProviderError("toss-openapi", `HTTP 404 sector-not-found (${path})`);
       return { ...s, summary: s.sectorId === "956" ? "양자컴퓨팅 하드웨어, 소프트웨어, 서비스를 개발하거나 제공하는 업체" : null, performance: { changeRates: DETAIL_RATES } };
     }
@@ -664,22 +681,53 @@ describe("미국 테마: 공식 섹터 API → 테마 분류 (예전 토스 웹 
     expect(w.count(/\/stocks\?/)).toBe(12);
   });
 
-  it("거꾸로 찾는 표: 테마북을 만들며 받은 구성 종목을 다시 받지 않는다 · 많이 실패하면 반쪽 표를 만들지 않는다", async () => {
+  it("거꾸로 찾는 표: 테마북을 만들며 받은 구성 종목을 다시 받지 않는다", async () => {
     const w = sectorWorld();
     for (const id of ["89", "389", "955", "956", "179", "295"]) await w.tics.stocksPage(id, "US", 1);
     expect(w.count(/\/stocks\?/)).toBe(6);
     expect((await w.tics.majorFor("MSTR")).map((t) => t.id)).toEqual(["955"]);
     expect(w.count(/\/stocks\?/)).toBe(6);
+  });
 
-    const bad = sectorWorld();
-    bad.state.failStocks = new Set(["956"]); // 6개 가운데 1개 실패 = 17% > 10%
-    await expect(bad.tics.majorFor("RGTI")).rejects.toThrow(/구성 종목 조회 실패가 많습니다 \(1\/6\)/);
+  it("구성 종목을 받지 못한 섹터가 하나라도 있으면 표를 만들지 않는다 — 반쪽 표로 '테마 없음'이라 답하지 않는다 (검토 지적: 그 답이 7일 동안 굳는다)", async () => {
+    const bad = sectorWorld(undefined, MORE_SECTORS);
+    bad.state.failStocks = new Set(["956"]); // 12개 가운데 양자컴퓨터 하나만 실패 (8%)
+    // 예전: 실패가 10% 이하면 반쪽 표를 써서 아이온큐가 '소프트웨어'만, 양자컴퓨터에만 든 종목은 '테마 없음'
+    await expect(bad.tics.majorFor("IONQ")).rejects.toThrow(/받지 못한 섹터가 있습니다 \(1\/12\)/);
+    await expect(bad.tics.majorFor("QBTS")).rejects.toThrow(/받지 못한 섹터가 있습니다/);
+    // 받지 못한 섹터는 그 자리에서 한 번 더 물어 본다 (12 + 1), 다음 시도는 받지 못한 섹터만 다시 (받은 열한 개는 그대로)
+    expect(bad.count(/\/stocks\?/)).toBe(13 + 2);
+    expect(bad.count(/\/sectors\/956\/stocks/)).toBe(4);
     bad.state.failStocks.clear();
-    expect((await bad.tics.majorFor("RGTI")).map((t) => t.id)).toEqual(["89", "956"]); // 다음에 다시 만든다
-    // 한 번 만든 뒤에 새로 만들지 못하면 전에 만든 표를 쓴다
+    expect((await bad.tics.majorFor("IONQ")).map((t) => t.id)).toEqual(["956", "389"]);
+    expect((await bad.tics.majorFor("QBTS")).map((t) => t.id)).toEqual(["956"]);
+    expect(bad.count(/\/stocks\?/)).toBe(13 + 2 + 1);
+    // 한 번 만든 뒤에 새로 만들지 못하면 전에 만든 (온전한) 표를 쓴다
     bad.now.at = new Date(bad.now.at.getTime() + 24 * 3_600_000 + 1);
     bad.state.failAll = true;
     expect((await bad.tics.majorFor("RGTI")).map((t) => t.id)).toEqual(["89", "956"]);
+  });
+
+  it("출처가 내려가 있으면 여덟 번 실패한 뒤 그만둔다 (섹터 수만큼 차례로 기다리지 않는다)", async () => {
+    const down = sectorWorld(undefined, MORE_SECTORS);
+    await down.tics.overview("956"); // 섹터 목록은 받아 둔 상태
+    down.state.failStocks = new Set(["89", "389", "955", "956", "179", "295", ...MORE_SECTORS.map((x) => x.sectorId)]);
+    await expect(down.tics.majorFor("IONQ")).rejects.toThrow(/실패가 많습니다 \(8번 실패 뒤 그만둠\)/);
+    expect(down.count(/\/stocks\?/)).toBe(8); // 12개를 다 묻지도, 한 번 더 묻지도 않는다
+  });
+
+  it("내 종목 테마 캐시까지: 표를 만들지 못한 동안은 '받지 못함'(5분 뒤 다시)이고, 받으면 그때 테마가 붙는다", async () => {
+    const w = sectorWorld(undefined, MORE_SECTORS);
+    w.state.failStocks = new Set(["956"]);
+    const maps = new HoldingThemeMaps({ sources: withSectorTics({ usTics: async () => [], usIndustry: null, krIndustry: null }, w.tics, async () => true), now: () => w.now.at });
+    const first = (await maps.lookup(["IONQ"])).get("IONQ")!;
+    expect(first).toMatchObject({ item: null, failed: true }); // 다 받은 것으로 기억하지 않는다
+    w.state.failStocks.clear();
+    w.now.at = new Date(w.now.at.getTime() + 5 * 60_000 + 1);
+    expect((await maps.lookup(["IONQ"])).get("IONQ")!.item?.tics).toEqual([
+      { id: "956", title: "양자컴퓨터" },
+      { id: "389", title: "소프트웨어" },
+    ]);
   });
 
   it("플래그 themeOpenApi: 켜면 공식 섹터, 끄면 예전 출처(토스 웹) 그대로 — 부를 때마다 본다", async () => {
@@ -828,6 +876,28 @@ describe("30분봉: 공식 1분봉을 묶어 만든다 (공식 API 에는 1분�
     // 봉 시각은 늘 오름차순 · 겹침 없음
     const times = s.candles.map((b) => Date.parse(b.time!));
     expect(times.every((t, i) => i === 0 || t > times[i - 1]!)).toBe(true);
+  });
+
+  it("지난 봉이 고쳐졌으면(액면분할 뒤 수정주가) 분할 전 봉에 이어 붙이지 않고 처음부터 다시 받는다 (검토 지적: 가격이 끊기고 거래량 급증이 5배로 잘못 나온다)", async () => {
+    const w = officialWorld();
+    const days = [...DAYS6, "2026-11-11"];
+    w.state.minutes["005930"] = krMinutes(days, "10:10");
+    const before = await w.provider.getCandles("005930", "30m", 60);
+    const cold = w.candleCalls();
+    // 5:1 액면분할: 지난 1분봉이 모두 가격 1/5 · 거래량 5배로 고쳐져 온다
+    const split = (rows: MinuteRow[]): MinuteRow[] =>
+      rows.map((r) => ({ ...r, openPrice: String(Number(r.openPrice) / 5), highPrice: String(Number(r.highPrice) / 5), lowPrice: String(Number(r.lowPrice) / 5), closePrice: String(Number(r.closePrice) / 5), volume: String(Number(r.volume) * 5) }));
+    w.state.minutes["005930"] = split(krMinutes(days, "10:42"));
+    const after = await w.provider.getCandles("005930", "30m", 60);
+    // 이어 붙이기(한 쪽)에서 이미 끝난 봉(09:30)이 받아 둔 것과 달라 처음부터 다시 받았다 (10쪽)
+    expect(w.candleCalls()).toBe(cold + 1 + 10);
+    // 모든 봉이 분할 뒤 값이다 — 분할 전 봉(고가 1,100대)이 섞여 있지 않다
+    expect(after.candles.every((b) => b.high < 300)).toBe(true);
+    expect(before.candles.find((b) => b.time === "2026-11-10T20:00:00+09:00")).toMatchObject({ volume: 300 });
+    expect(after.candles.find((b) => b.time === "2026-11-10T20:00:00+09:00")).toMatchObject({ volume: 1_500 });
+    // 고쳐진 것이 없으면 다음부터는 다시 한 쪽씩
+    await w.provider.getCandles("005930", "30m", 60);
+    expect(w.candleCalls()).toBe(cold + 1 + 10 + 1);
   });
 
   it("봉이 없으면 던진다 (체인이 다음 출처로 — 지금은 다음 출처가 없어 차트가 '받지 못함')", async () => {

@@ -53,8 +53,8 @@ const STOCKS_TTL_MS = 10 * 60_000;
 const DETAIL_TTL_MS = 10 * 60_000;
 /** 종목 → 섹터 표(거꾸로 찾기)를 다시 만드는 간격 */
 const INDEX_TTL_MS = 24 * 3_600_000;
-/** 거꾸로 찾는 표를 만들 때 구성 종목을 받지 못한 섹터가 이 비율을 넘으면 실패로 (반쪽 표로 '테마 없음'이라 답하지 않게) */
-const INDEX_MAX_FAIL = 0.1;
+/** 거꾸로 찾는 표를 만들다 구성 종목 조회가 이만큼 실패하면 그만둔다 (출처가 내려간 것 — 남은 섹터를 묻지 않는다) */
+const INDEX_GIVE_UP = 8;
 /** 토스 웹 구성 종목과 같게 한 쪽 10개 */
 const PAGE_SIZE = 10;
 const DURATION: Record<TicsDuration, string> = { "1d": "1d", "1w": "1w", "1m": "1mo", "3m": "3mo", "1y": "1y" };
@@ -283,7 +283,9 @@ export class TossSectorTics implements TicsSource {
 
   /**
    * 미국 티커 → 그 종목이 든 섹터 (가장 깊은 것만 — 중분류 '양자컴퓨터'에 들었으면 대분류 'IT'는 빼고, 소분류에 들었으면 그 위 중분류도 뺀다).
-   * 좁은 섹터(미국 종목 수가 적은 것)부터. 어느 섹터에도 없으면(ETF 등) 빈 배열. 표를 만들지 못하면 던진다 (부르는 쪽이 5분 뒤 다시)
+   * 좁은 섹터(미국 종목 수가 적은 것)부터. 어느 섹터에도 없으면(ETF 등) 빈 배열. 표를 만들지 못하면 던진다 (부르는 쪽이 5분 뒤 다시).
+   * 구성 종목을 받지 못한 섹터가 하나라도 있으면 표를 만들지 않는다 — 반쪽 표로 답하면 그 섹터에만 든 종목이 '테마 없음'(또는 윗 섹터)으로 나가고,
+   * 부르는 쪽(HoldingThemeMaps)은 그것을 다 받은 것으로 7일 동안 기억한다
    */
   async majorFor(code: string): Promise<CompanyTic[]> {
     return (await this.usIndex()).get(code.trim().toUpperCase()) ?? [];
@@ -312,14 +314,26 @@ export class TossSectorTics implements TicsSource {
     const all = await this.sectors();
     // 대분류는 받지 않는다 — 너무 넓고(IT 한 곳에 미국 종목 500개), 테마북에도 없다 (하위 섹터에 든 종목은 하위 섹터로 잡힌다)
     const targets = all.filter((n) => n.depth >= 1);
-    let failed = 0;
+    // 실패가 쌓이면(INDEX_GIVE_UP) 출처가 내려간 것으로 보고 남은 섹터는 묻지 않는다 — 응답이 멈춘 출처에 260번을 차례로 기다리지 않게
+    let fails = 0;
     const lists = await mapLimit(targets, this.deps.concurrency ?? 4, (n) =>
-      this.stockList(n.id, "US", INDEX_TTL_MS).catch(() => {
-        failed++;
-        return null;
-      }),
+      fails >= INDEX_GIVE_UP
+        ? Promise.resolve(null)
+        : this.stockList(n.id, "US", INDEX_TTL_MS).catch(() => {
+            fails++;
+            return null;
+          }),
     );
-    if (targets.length && failed / targets.length > INDEX_MAX_FAIL) throw new ProviderError(NAME, `섹터 구성 종목 조회 실패가 많습니다 (${failed}/${targets.length})`);
+    if (fails >= INDEX_GIVE_UP) throw new ProviderError(NAME, `섹터 구성 종목 조회 실패가 많습니다 (${fails}번 실패 뒤 그만둠)`);
+    // 받지 못한 섹터는 한 번 더 (잠깐 끊긴 것일 수 있다). 그래도 남으면 표를 만들지 않는다 —
+    // 받은 목록은 하루 동안 그대로 두므로 다음 시도(부르는 쪽이 5분 뒤)는 받지 못한 섹터만 다시 묻는다
+    let failed = 0;
+    for (let i = 0; i < targets.length; i++) {
+      if (lists[i]) continue;
+      lists[i] = await this.stockList(targets[i]!.id, "US", INDEX_TTL_MS).catch(() => null);
+      if (!lists[i]) failed++;
+    }
+    if (failed) throw new ProviderError(NAME, `섹터 구성 종목을 받지 못한 섹터가 있습니다 (${failed}/${targets.length})`);
     const size = new Map<string, number>();
     const holders = new Map<string, Set<string>>();
     targets.forEach((n, i) => {

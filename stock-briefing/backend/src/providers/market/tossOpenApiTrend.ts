@@ -31,12 +31,12 @@ function numOrNull(v: unknown, key: string): number | null {
   return n;
 }
 
-/** 분류 하나의 순매수: 분류가 없으면(null — 아직 나오지 않음) null, 있는데 netBuyVolume 이 없으면 모양이 바뀐 것 */
-function netOf(v: unknown, key: string, required: boolean): number | null {
-  if (v === null || v === undefined) {
-    if (required) throw new ProviderError(NAME, `수급 출처 모양 바뀜: ${key} 가 없습니다`);
-    return null;
-  }
+/**
+ * 분류 하나의 순매수: 분류가 없으면(null — 아직 나오지 않음) null, 있는데 netBuyVolume 이 없으면 모양이 바뀐 것.
+ * 문서로는 외국인·기관이 늘 있지만, 비어 온 줄 하나 때문에 70줄을 모두 버리지 않도록 그 값만 비운다 (그 줄은 '모두 나옴'이 아니게 — 합계에서는 빠진 날로 센다)
+ */
+function netOf(v: unknown, key: string): number | null {
+  if (v === null || v === undefined) return null;
   if (typeof v !== "object" || Array.isArray(v)) throw new ProviderError(NAME, `수급 출처 모양 바뀜: ${key} 가 객체가 아닙니다`);
   const n = numOrNull((v as Json)["netBuyVolume"], `${key}.netBuyVolume`);
   if (n === null) throw new ProviderError(NAME, `수급 출처 모양 바뀜: ${key}.netBuyVolume 이 없습니다`);
@@ -55,7 +55,9 @@ export function parseOpenApiTrend(result: unknown, closes: ReadonlyMap<string, n
     const r = raw as Json;
     const date = r["date"];
     if (typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new ProviderError(NAME, `수급 출처 모양 바뀜: date=${JSON.stringify(date)}`);
-    const individual = netOf(r["individual"], "individual", false);
+    const individual = netOf(r["individual"], "individual");
+    const foreign = netOf(r["foreigner"], "foreigner");
+    const institution = netOf(r["institution"], "institution");
     const holding = r["foreignerHolding"];
     if (holding !== null && holding !== undefined && (typeof holding !== "object" || Array.isArray(holding))) throw new ProviderError(NAME, "수급 출처 모양 바뀜: foreignerHolding 이 객체가 아닙니다");
     const h = (holding ?? null) as Json | null;
@@ -65,17 +67,17 @@ export function parseOpenApiTrend(result: unknown, closes: ReadonlyMap<string, n
     return {
       date,
       individual,
-      foreign: netOf(r["foreigner"], "foreigner", true),
-      institution: netOf(r["institution"], "institution", true),
-      otherCorp: netOf(r["otherCorporation"], "otherCorporation", false),
+      foreign,
+      institution,
+      otherCorp: netOf(r["otherCorporation"], "otherCorporation"),
       // 소수 비율 → % (소수 둘째 자리 — 0.4599 × 100 = 45.989999… 를 45.99 로)
       foreignRatio: rate === null ? null : Math.round(rate * 10_000) / 100,
       foreignHolding: h ? numOrNull(h["holdingQuantity"], "foreignerHolding.holdingQuantity") : null,
       foreignLimit: h ? numOrNull(h["limitQuantity"], "foreignerHolding.limitQuantity") : null,
       close: close !== undefined && Number.isFinite(close) && close > 0 ? close : null,
       inMarketTime: null,
-      // 개인 값은 확정치가 반영될 때부터 온다 (당일 잠정 기록에는 null) — 외국인·기관은 늘 있다
-      hasAll: individual !== null,
+      // 개인 값은 확정치가 반영될 때부터 온다 (당일 잠정 기록에는 null) — 외국인·기관은 문서로는 늘 있다
+      hasAll: individual !== null && foreign !== null && institution !== null,
       updatedAt: typeof updated === "string" && updated ? updated : null,
     };
   });

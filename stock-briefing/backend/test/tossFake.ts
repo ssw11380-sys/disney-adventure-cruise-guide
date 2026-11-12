@@ -138,6 +138,11 @@ export function fakeFetch(opts: { calls?: Call[]; tokenStatus?: number; priceSta
   }) as typeof fetch;
 }
 
+/**
+ * 가짜 서버에 붙은 클라이언트. 요청 한도 줄 세우기(tossRateLimit — 실제 시간으로 기다린다)는 끈다:
+ * 가짜 서버는 한도가 없고, 켜 두면 계좌 목록(초당 1회)을 잇달아 부르는 동기화 테스트가 호출마다 1.1초씩 기다린다.
+ * 줄 세우기 자체는 test/tossRateLimit.test.ts 가 가짜 시계로 본다
+ */
 export function client(opts: Parameters<typeof fakeFetch>[0] = {}, calls: Call[] = []) {
-  return new TossOpenApiClient({ clientId: "c_1", clientSecret: "s_1", fetchFn: fakeFetch({ ...opts, calls }), now: NOW, maxRetryWaitMs: 0 });
+  return new TossOpenApiClient({ clientId: "c_1", clientSecret: "s_1", fetchFn: fakeFetch({ ...opts, calls }), now: NOW, maxRetryWaitMs: 0, pace: false });
 }
