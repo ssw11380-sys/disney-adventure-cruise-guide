@@ -1142,6 +1142,8 @@ export type InvestorFlow =
       code: string;
       supported: true;
       source: "toss-web" | "naver";
+      /** 받은 길: 'openapi' = 토스증권 공식 Open API (서버 플래그 flowOpenApi). source 는 'toss-web' 그대로 — 기준·칸이 같다. 없으면 토스 웹 공개 화면(또는 네이버) */
+      via?: "openapi";
       basis: "KRX+NXT" | "KRX";
       asOf: string;
       fetchedAt: string;

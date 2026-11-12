@@ -12,7 +12,9 @@ import { MarketCalendar } from "./market/calendar.js";
 import { QuoteProviderChain, StockSearchChain, type ChainLogger } from "./market/chain.js";
 import { TossProvider, type CodeStore } from "./market/toss.js";
 import { TossOpenApiClient, TossOpenApiProvider } from "./market/tossOpenApi.js";
+import { TossOpenApiTrend } from "./market/tossOpenApiTrend.js";
 import { TossTics } from "./market/tossTics.js";
+import { TossSectorTics } from "./market/tossSectors.js";
 import { TossRealtime, type QuickPriceSource } from "./market/tossRealtime.js";
 import type { InvestorFlowProvider } from "./market/investorFlow.js";
 import { KisProvider } from "./market/kis.js";
@@ -57,8 +59,13 @@ export interface Providers {
   fundamentals: NaverFundamentals | null;
   /** 발견 탭(순위·테마·업종). 없으면 기본 네이버 공개 JSON */
   discover?: NaverDiscover | null;
-  /** 발견 탭 미국 테마(토스 테마 분류). 없으면 미국은 산업 분류만 */
+  /** 발견 탭 미국 테마(토스 웹 테마 분류). 없으면 미국은 산업 분류만 */
   tics?: TossTics | null;
+  /**
+   * 토스 공식 Open API 섹터 (키 있을 때만 — 토스 웹 테마 분류와 같은 분류·같은 번호). 플래그 themeOpenApi 가 켜져 있으면 미국 테마북·기간 등락률·
+   * 내 종목 테마의 미국 분류를 여기서 받는다 (app.ts 가 고른다). 없으면(테스트 기본·키 없음) 토스 웹 테마 분류만
+   */
+  sectorTics?: TossSectorTics | null;
   search: StockSearchProvider; // 외부 검색 (토스 → Yahoo)
   searchRemoteFirst?: boolean; // true 면 로컬 마스터보다 외부 검색을 먼저 쓴다
   master: MasterProvider;
@@ -80,7 +87,7 @@ export interface Providers {
    * 네트워크 없이 도는 테스트 기본값(fakeProviders)이 쓴다 (플래그 marketSummary 가 켜져 있어도 출처를 부르지 않게)
    */
   marketSummary?: MarketSummarySources | null;
-  /** 토스 웹 상품 정보 (ETF·레버리지 배수·단일 종목형 — 지표 점수 3-44). 없으면 이름 규칙·정적 표로만 가린다 */
+  /** 상품 정보 (ETF·레버리지 배수·우선주·정리매매 — 지표 점수 3-44): 토스 공식 Open API 종목 정보 → 모르면 토스 웹. 없으면 이름 규칙·정적 표로만 가린다 */
   productInfo?: { productFacts(code: string): Promise<ProductFacts | null> } | null;
   /** 지표 점수 자료 묶음 (없으면 app.ts 가 차트 일봉·네이버 지수·종목 목록으로 만든다 — 테스트는 기록한 일봉을 넣는다) */
   scoreSources?: ScoreSources | null;
@@ -103,8 +110,9 @@ export interface Providers {
   secFilings?: FilingSource | null;
   investorFlow: InvestorFlowProvider | null; // KIS 키 없으면 null
   /**
-   * 종목 상세 '수급' 탭 출처 묶음 (3-33 — 토스 웹 공개 자료 → 네이버, 토스 Open API 는 대조만). 없으면(테스트 기본) 경로 404 · 외부 호출 0.
-   * 브리핑 수집기의 investorFlow(KIS·토스 Open API)와 따로 둔다 — 화면 자료는 공개 자료로만
+   * 종목 상세 '수급' 탭 출처 묶음 (3-33 — 토스 웹 공개 자료 → 네이버, 토스 Open API 는 대조). 없으면(테스트 기본) 경로 404 · 외부 호출 0.
+   * 플래그 flowOpenApi 가 켜져 있으면 토스 공식 Open API 를 맨 앞 출처로 (official — 토스 웹 주소가 2026-11 부터 막혀 네이버로만 돌던 것).
+   * 브리핑 수집기의 investorFlow(KIS·토스 Open API)와 따로 둔다
    */
   investorFlowSources?: InvestorFlowSources | null;
   generator: TextGenerator;
@@ -192,6 +200,8 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
     tossWeb: toss,
     fundamentals,
     tics: new TossTics(),
+    // 공식 섹터 API: 종목 정보(거래소)는 시세와 같은 인스턴스의 하루 캐시를 쓴다
+    sectorTics: official ? new TossSectorTics({ get: (path, params) => official.client.get(path, params), stockInfos: (symbols) => official.stockInfos(symbols) }) : null,
     search: new StockSearchChain([toss, yahoo], log),
     searchRemoteFirst: true, // 토스 검색은 한글로 미국 종목도 찾고 순위도 좋아 마스터보다 먼저 쓴다
     master: tossOpenApi ?? new KisMasterProvider(), // 토스 마스터는 한국+미국 종목(한글명)까지
@@ -206,8 +216,11 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
     krValueSources: defaultKrValueSources(new NaverFinanceClient(), new NaverDiscover()),
     // 토스 달력과 휴장일 목록이 다르면 로그로 경고 (시장·날짜마다 한 번). 키가 있으면 공식 장 운영 달력
     calendar: new MarketCalendar(fetch, () => new Date(), 5 * 60_000, log, official ? (m) => official.marketCalendar(m) : null),
+    // 미국 정규장 종가: 토스 웹(막혀 있으면 바로 실패) → Yahoo. 공식 API 일봉도 지난 거래일 종가가 Yahoo 정규장 종가와 같았지만(2026-11-12 애플·브로드컴 3일),
+    // 장 마감 직후(애프터마켓 중)에도 그날 봉 종가가 정규장 종가 그대로인지는 그 시간에 확인하지 못해 넣지 않았다
     regularCloseSources: { KR: [naver], US: [toss, yahoo] },
-    productInfo: toss,
+    // 상품 정보: 공식 종목 정보(레버리지 배수·종목 유형·우선주·정리매매)를 먼저, 공식 API 가 모르는 종목만 토스 웹(다시 열리면 쓰이고, 막혀 있으면 바로 null)
+    productInfo: official ? { productFacts: async (code) => (await official.productFacts(code)) ?? (await toss.productFacts(code)) } : toss,
     // 다가오는 일정 (브리핑 3차 5): 토스 웹(시세와 같은 인스턴스 — 상품 코드 캐시 공유) + 네이버(같은 fundamentals 1시간 캐시)
     holdingEvents: {
       dividends: (code) => toss.dividendSummary(code),
@@ -218,8 +231,18 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
     // 내 종목 테마 (3-35): 미국은 토스 웹 상품 코드(시세와 같은 인스턴스 — meta 캐시 공유) → 회사 → 주요 사업 테마, 업종 번호는 네이버(로이터 코드는 같은 자동완성)
     holdingThemes: holdingThemeSources(toss, fundamentals),
     investorFlow: kis ?? tossOpenApi,
-    // 수급 탭 (3-33): 토스 웹 → 네이버 (로그인 없음). 토스 Open API 는 그 인스턴스만 대조에 (KIS 는 쓰지 않음)
-    investorFlowSources: defaultInvestorFlowSources(tossOpenApi),
+    // 수급 탭 (3-33): 토스 웹 → 네이버 (로그인 없음). 토스 Open API 는 그 인스턴스만 대조에 (KIS 는 쓰지 않음).
+    // 플래그 flowOpenApi 가 켜져 있으면 공식 Open API 투자자별 매매동향을 맨 앞에 — 종가는 한국거래소 정규장 일봉(네이버)에서, 상장 주식 수는 공식 종목 정보에서
+    investorFlowSources: defaultInvestorFlowSources(
+      tossOpenApi,
+      official
+        ? new TossOpenApiTrend({
+            get: (path, params) => official.client.get(path, params),
+            listedShares: (code) => official.listedShares(code),
+            closes: async (code, days) => new Map((await naver.getCandles(code, "D", days)).candles.map((c) => [c.date, c.close])),
+          })
+        : null,
+    ),
     generator,
     dart,
     push: new ExpoPushSender(cfg.EXPO_ACCESS_TOKEN || undefined),

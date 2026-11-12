@@ -535,10 +535,11 @@ describe("공식 API 현재가 일괄 — 1초 확인 (실시간 보조)", () =>
     now = new Date(now.getTime() + 1_000);
     expect((await p.getMany(["ZZZZ"])).size).toBe(0);
     expect(priceCalls()).toBe(9);
-    // 10분 뒤에는 다시 넣어 본다 (다시 상장·오타 수정 등)
+    // 10분 뒤에는 다시 물어 본다 (다시 상장·오타 수정 등) — 묶음에 넣지 않고 따로 한 번: 아는 종목 묶음 1 + 그 종목 1
+    // (예전에는 묶음에 다시 넣어 묶음 전체가 또 거절되고 종목마다 다시 물었다 — test/tossRateLimit.test.ts)
     now = new Date(now.getTime() + 10 * 60_000);
     await p.getMany(["035420", "ZZZZ"]);
-    expect(priceCalls()).toBe(9 + 1 + 2);
+    expect(priceCalls()).toBe(9 + 1 + 1);
   });
 
   it("한 종목만 물었는데 거절되면 1분 동안 다시 묻지 않는다", async () => {

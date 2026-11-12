@@ -67,7 +67,19 @@ function num(v: unknown): number | null {
   return null;
 }
 
-export class TossTics {
+/**
+ * 테마 분류 출처가 주는 것 (미국 테마북 services/usThemes · 발견 탭 기간 등락률 services/discoverService 가 쓴다).
+ * 토스 웹 테마 분류(TossTics — 아래)와 토스 공식 Open API 섹터(tossSectors.ts TossSectorTics)가 같은 모양으로 준다
+ */
+export interface TicsSource {
+  ranking(nation: TicsNation, duration: TicsDuration, sortBy?: "FLUCTUATION_RATE" | "TRADING_AMOUNT"): Promise<TicsRankRow[]>;
+  periodRate(id: string, nation: TicsNation, duration: TicsDuration): Promise<number | null>;
+  overview(id: string): Promise<{ id: string; name: string; summary: string | null; nodes: TicsNode[] }>;
+  stocksPage(id: string, nation: TicsNation, page: number): Promise<{ total: number; stocks: TicsStock[] }>;
+  stockInfos(codes: string[]): Promise<Map<string, TicsStockInfo>>;
+}
+
+export class TossTics implements TicsSource {
   constructor(
     private readonly fetchFn: FetchFn = fetch,
     private readonly retryDelayMs = 800,

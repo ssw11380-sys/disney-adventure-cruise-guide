@@ -138,6 +138,8 @@ export const limitNote = (limitPct: string, usedPct: string) => `이 종목은 �
 
 // 출처
 export const sourceToss = (when: string) => `자료: 토스증권 웹 공개 화면 · 한국거래소와 넥스트레이드 거래를 합친 값 · ${when} 반영`;
+/** 토스증권 공식 Open API 로 받은 자료 (서버 플래그 flowOpenApi — 응답 via 'openapi'). 기준·숫자는 토스 웹 공개 화면 자료와 같다 */
+export const sourceTossApi = (when: string) => `자료: 토스증권 · 한국거래소와 넥스트레이드 거래를 합친 값 · ${when} 반영`;
 /**
  * 네이버: 받은 시각만으로는 자료가 언제까지인지 모르므로(거래정지 종목은 7월에 끝남) 마지막 자료 날도 적는다. last 는 '9월 28일 (월)' (자료가 없으면 null).
  * 까닭은 '기준이 다르다'까지만 — ETF·ETN 은 넥스트레이드에서 거래되지 않아 '넥스트레이드 거래가 빠져'가 틀린 말이고, 앱은 종목 종류를 모른다.

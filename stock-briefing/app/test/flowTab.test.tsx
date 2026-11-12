@@ -235,6 +235,21 @@ describe("한국 종목 (삼성전자, 토스 웹 자료)", () => {
     expect(all).toContain("토스증권 Open API 원자료와 최근 20일 비교: 20일 모두 같음 (9월 29일 (화) 21:05 확인)");
     expect(all.some((s) => s.startsWith("새 자료를 받지 못해"))).toBe(false);
   });
+
+  it("공식 Open API 로 받은 자료 (서버 플래그 flowOpenApi — 응답 via 'openapi'): 출처 글만 '토스증권'으로, 그 밖의 화면은 토스 웹 자료일 때와 한 글자도 같다", () => {
+    const web = clone(FX.cases.samsung);
+    web.check = null; // 화면 자료가 공식 Open API 면 서버가 대조 줄을 주지 않는다
+    const api = clone(web);
+    api.via = "openapi";
+    const all = texts(open(api));
+    expect(all).toContain("자료: 토스증권 · 한국거래소와 넥스트레이드 거래를 합친 값 · 9월 28일 (월) 20:15 반영");
+    expect(all.some((s) => s.includes("웹 공개 화면") || s.includes("네이버"))).toBe(false);
+    expect(all.some((s) => s.startsWith("토스증권 Open API 원자료와"))).toBe(false);
+    // 기타법인 줄·기준 글·읽는 법 등은 그대로 (source 가 'toss-web' 이라 옛 앱도 토스 자료로 그린다)
+    const rest = (xs: string[]) => xs.filter((s) => !s.startsWith("자료: "));
+    expect(rest(all)).toEqual(rest(texts(open(web))));
+    expect(texts(open(web))).toContain("자료: 토스증권 웹 공개 화면 · 한국거래소와 넥스트레이드 거래를 합친 값 · 9월 28일 (월) 20:15 반영");
+  });
 });
 
 describe("다른 경우", () => {

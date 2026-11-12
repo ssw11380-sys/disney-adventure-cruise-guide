@@ -32,7 +32,7 @@ export interface PriceAlertRule {
   registered: boolean;
 }
 
-/** 한도: 한 종목 5개, 모두 30개, 거래량 조건은 모두 10개 (거래량은 종목마다 30분봉 450개를 30초마다 받으므로 토스 웹 요청을 묶어 두려고) */
+/** 한도: 한 종목 5개, 모두 30개, 거래량 조건은 모두 10개 (거래량은 종목마다 30분봉 450개를 30초마다 받으므로 요청을 묶어 두려고 — 30분봉은 2026-11 부터 토스 공식 API 1분봉을 묶어 만든다: 처음 한 번만 여러 쪽, 그 뒤에는 한 쪽씩) */
 export const PRICE_ALERT_LIMITS = { perCode: 5, all: 30, volume: 10 } as const;
 /** 거래량 상태를 한 번에 묻는 종목 수 */
 export const VOLUME_MAX_CODES = 10;

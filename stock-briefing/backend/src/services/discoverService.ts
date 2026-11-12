@@ -3,7 +3,7 @@ import { seoulIso } from "../lib/time.js";
 import { fallbackState, type MarketCalendar, type MarketState } from "../providers/market/calendar.js";
 import { isMostlyZero, isPreopenQuotes, type DiscoverMarket, type ExchangeSession, type ExchangeStatus, type DiscoverStock, type NaverDiscover, type RankCategory, type SectorDetail, type ThemeKind, type ThemePeriod, type ThemeSummary, type UsQuote } from "../providers/market/naverDiscover.js";
 import type { CodeStore } from "../providers/market/toss.js";
-import type { TicsRankRow, TossTics } from "../providers/market/tossTics.js";
+import type { TicsRankRow, TicsSource } from "../providers/market/tossTics.js";
 import { latestTradeDay, pool, usThemeSummary, UsThemesBuildingError, type UsThemeBook, type UsThemeBookData } from "./usThemes.js";
 
 /**
@@ -201,7 +201,7 @@ export class DiscoverService {
       now?: () => Date;
       /** 미국 테마 (토스 테마 분류 + 네이버 정규장 시세). 없으면 미국은 산업 분류만 */
       usThemes?: UsThemeBook | null;
-      tics?: TossTics | null;
+      tics?: TicsSource | null;
       /** 미국 테마북을 처음 만드는 동안 기다리는 최대 시간 (기본 3초) */
       bookWaitMs?: number;
       /** 미국 테마 기간 등락률의 "정규장 중" 스냅숏을 남길 곳 (meta 표) */

@@ -10,6 +10,7 @@ export const FLOW_TEXT = {
   upstream: "수급 자료를 받지 못했습니다",
   noOpenApi: "토스 Open API 키가 없어 비교하지 않았습니다",
   noTossWeb: "토스증권 웹 자료를 받지 못해 비교하지 않았습니다",
+  sameSource: "화면 자료가 토스증권 Open API 자료여서 비교하지 않았습니다",
 } as const;
 
 /**

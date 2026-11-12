@@ -1,6 +1,6 @@
 import type { DiscoverStock, NaverDiscover, ThemeSummary } from "../providers/market/naverDiscover.js";
 import type { CodeStore } from "../providers/market/toss.js";
-import { reutersCandidates, type TicsDuration, type TicsNode, type TossTics } from "../providers/market/tossTics.js";
+import { reutersCandidates, type TicsDuration, type TicsNode, type TicsSource } from "../providers/market/tossTics.js";
 
 /**
  * 미국 테마북: 토스 테마 분류(TICS)의 구성 종목에 네이버 정규장 시세를 붙여 테마 등락률을 직접 계산한다.
@@ -81,7 +81,7 @@ export class UsThemeBook {
 
   constructor(
     private readonly deps: {
-      tics: TossTics;
+      tics: TicsSource;
       naver: NaverDiscover;
       store?: CodeStore | null;
       now?: () => Date;
