@@ -900,6 +900,21 @@ describe("30분봉: 공식 1분봉을 묶어 만든다 (공식 API 에는 1분�
     expect(w.candleCalls()).toBe(cold + 1 + 10 + 1);
   });
 
+  it("늦게 들어온 체결로 끝난 봉의 거래량만 조금 달라진 것은 처음부터 다시 받지 않고 그 봉만 새 값으로 바꾼다", async () => {
+    const w = officialWorld();
+    const days = [...DAYS6, "2026-11-11"];
+    w.state.minutes["005930"] = krMinutes(days, "10:10");
+    const before = await w.provider.getCandles("005930", "30m", 60);
+    const cold = w.candleCalls();
+    expect(before.candles.find((b) => b.time === "2026-11-11T09:30:00+09:00")).toMatchObject({ volume: 300 });
+    // 09:20 봉(이미 끝난 09:30 구간)에 늦은 체결 5주가 더해졌다 — 가격은 그대로
+    w.state.minutes["005930"] = krMinutes(days, "10:42").map((r) => (r.timestamp === "2026-11-11T09:20:00.000+09:00" ? { ...r, volume: "15" } : r));
+    const after = await w.provider.getCandles("005930", "30m", 60);
+    expect(w.candleCalls()).toBe(cold + 1); // 한 쪽만
+    expect(after.candles.find((b) => b.time === "2026-11-11T09:30:00+09:00")).toMatchObject({ volume: 305 });
+    expect(after.candles.at(-1)).toMatchObject({ time: "2026-11-11T11:00:00+09:00", volume: 120 });
+  });
+
   it("봉이 없으면 던진다 (체인이 다음 출처로 — 지금은 다음 출처가 없어 차트가 '받지 못함')", async () => {
     const w = officialWorld();
     await expect(w.provider.getCandles("005930", "30m", 60)).rejects.toThrow(/분봉 데이터 없음/);

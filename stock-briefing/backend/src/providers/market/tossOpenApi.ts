@@ -487,6 +487,15 @@ export function aggregateHalfHours(minutes: Candle[], kr: boolean): Candle[] {
   return out;
 }
 
+/** 받아 둔 봉과 다시 받은 봉의 가격이 이만큼(비율) 넘게 다르면 지난 봉이 고쳐진 것으로 본다 (수정주가 — 호가 한 칸·늦은 체결 정도는 아님) */
+const PRICE_REVISED_RATIO = 0.001;
+
+/** 이미 끝난 봉이 고쳐졌는지: 시가나 종가가 0.1% 넘게 다르다 (거래량만 조금 다른 것은 늦게 들어온 체결이라 고쳐진 것으로 보지 않는다) */
+function priceRevised(kept: Candle, fresh: Candle): boolean {
+  const off = (a: number, b: number) => Math.abs(a - b) > Math.max(Math.abs(a), Math.abs(b)) * PRICE_REVISED_RATIO;
+  return off(kept.open, fresh.open) || off(kept.close, fresh.close);
+}
+
 export function toCandle(c: TossCandle, kr: boolean, intraday = false): Candle | null {
   const ts = c.timestamp ?? "";
   const o = num(c.openPrice), h = num(c.highPrice), l = num(c.lowPrice), cl = num(c.closePrice);
@@ -991,7 +1000,8 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
 
   /**
    * 30분봉 (공식 API 에는 1분봉·일봉만 있어 1분봉을 묶어 만든다 — 예전에는 토스 웹 차트 min:30 한 번이었는데 그 주소가 막혔고, 네이버·Yahoo 는 분봉을 주지 않는다).
-   * 처음에는 청한 개수만큼의 1분봉(count × 30개, 60쪽까지)을 차례로 받고, 그 뒤에는 받아 둔 봉의 마지막 두 구간부터만 다시 받아 이어 붙인다(보통 한 쪽).
+   * 처음에는 청한 개수만큼의 1분봉(count × 30개, 60쪽까지)을 차례로 받고, 그 뒤에는 받아 둔 봉의 마지막 세 구간부터만 다시 받아 이어 붙인다(보통 한 쪽).
+   * 그때 이미 끝나 있던 봉의 가격이 달라져 있으면(수정주가) 처음부터 다시 받는다.
    * 처음 받은 묶음의 맨 앞 날은 앞부분이 잘렸을 수 있어 뺀다 (하루 치가 다 있는 날만 — 거래량 급증이 날마다 같은 시각까지의 거래량을 견준다)
    */
   private halfHours(code: string, count: number): Promise<Candle[]> {
@@ -1010,20 +1020,19 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
     if (hit && !hit.fromStart && hit.pages < want) hit = undefined;
     let bars: Candle[] | null = null;
     if (hit && hit.bars.length) {
-      // 마지막 두 구간은 다시 만든다: 마지막 봉은 진행 중이었고, 그 앞 봉도 받는 순간 아직 덜 찼을 수 있다.
-      // 그 앞 봉(뒤에서 셋째 — 지난번에 이미 끝나 있던 봉)까지 받아 받아 둔 것과 견준다: 다르면 지난 봉이 고쳐진 것이다
-      // (액면분할·무상증자 뒤의 수정주가 — 분할 전 봉에 분할 뒤 봉을 이어 붙이면 가격이 끊기고 거래량 급증이 몇 배로 잘못 나온다) → 처음부터 다시
+      // 마지막 세 구간을 다시 만든다: 마지막 봉은 진행 중이었고, 그 앞 봉도 받는 순간 아직 덜 찼을 수 있다.
+      // 뒤에서 셋째 봉은 지난번에 이미 끝나 있던 봉이라, 다시 받은 것과 가격이 눈에 띄게 다르면 지난 봉이 고쳐진 것이다
+      // (액면분할·무상증자 뒤의 수정주가 — 분할 전 봉에 분할 뒤 봉을 이어 붙이면 가격이 끊기고 거래량 급증이 몇 배로 잘못 나온다) → 처음부터 다시.
+      // 늦게 들어온 체결로 거래량이 조금 달라진 정도는 그 봉만 새 값으로 바꾼다 (그때마다 수십 쪽을 다시 받지 않게)
       const check = hit.bars.length >= 3 ? hit.bars.at(-3)! : null;
-      const redoFrom = Date.parse((hit.bars.at(-2) ?? hit.bars.at(-1)!).time!) - HALF_HOUR_MS;
-      const since = check ? Date.parse(check.time!) - HALF_HOUR_MS : redoFrom;
+      const since = Date.parse((check ?? hit.bars.at(-2) ?? hit.bars.at(-1)!).time!) - HALF_HOUR_MS;
       const tail = await this.minutePages(code, { maxPages: HALF_HOUR_TAIL_PAGES, sinceMs: since });
       if (tail.reached) {
         const fresh = aggregateHalfHours(tail.candles.filter((c) => Date.parse(c.time!) > since), kr);
         const again = check ? fresh.find((b) => b.time === check.time) : null;
-        const same = !check || (!!again && again.open === check.open && again.high === check.high && again.low === check.low && again.close === check.close && again.volume === check.volume);
-        if (same) {
-          const kept = hit.bars.filter((b) => Date.parse(b.time!) <= redoFrom);
-          bars = [...kept, ...fresh.filter((b) => Date.parse(b.time!) > redoFrom)].slice(-HALF_HOUR_KEEP);
+        if (!check || (again && !priceRevised(check, again))) {
+          const kept = hit.bars.filter((b) => Date.parse(b.time!) <= since);
+          bars = [...kept, ...fresh].slice(-HALF_HOUR_KEEP);
           // 쓸 때마다 맨 뒤로 (오래 안 쓴 종목부터 버리게)
           this.halfHourBook.delete(code);
           this.halfHourBook.set(code, { bars, pages: hit.pages, fromStart: hit.fromStart });
