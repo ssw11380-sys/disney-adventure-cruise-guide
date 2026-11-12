@@ -409,7 +409,7 @@ function allTexts(): string[] {
     text.pickedLine("9월 28일 (월)", "+742만 주", "-598만 주", "-363만 주", "270,000"), ...text.pickedParts("9월 28일 (월)", "+742만 주", "-598만 주", "-363만 주", null),
     text.ratioDateLine("9월 28일 (월)"), text.agoLine(20, "8월 27일", "46.75%", "-0.23%p"), text.agoMissing(60),
     text.agoSpeech(5, "9월 17일", "46.48%", "0.04", 1), text.agoSpeech(20, "8월 27일", "46.75%", "0.23", -1), text.agoSpeech(60, "6월 30일", "49.00%", "0.00", 0),
-    text.highLow("46.96%", "46.46%"), text.pctPointNote("46.75%", "46.52%", "-0.23%p"), text.limitNote("49.0%", "100.0%"), text.sourceToss("9월 28일 (월) 20:15"),
+    text.highLow("46.96%", "46.46%"), text.pctPointNote("46.75%", "46.52%", "-0.23%p"), text.limitNote("49.0%", "100.0%"), text.sourceToss("9월 28일 (월) 20:15"), text.sourceTossApi("9월 28일 (월) 20:15"),
     text.sourceNaver("9월 28일 (월)", "9월 29일 (화) 02:40"), text.sourceNaver(null, "9월 29일 (화) 02:40"), text.checkLine(20, 20, "9월 29일 (화) 21:05"), text.checkLine(20, 19, "9월 29일 (화) 21:05"), text.staleLine("9월 29일 (화) 10:00"),
     text.sumSpeech("개인", 20, "3,348만 주", -1), text.sumSpeech("기관", 20, "839만 주", 1), text.sumSpeech("외국인", 5, "0주", 0), text.sumSpeech("기관", 5, null, 0),
     text.barsSpeechHead("8월 28일", "9월 28일", 20), text.barsSpeechRow("개인", 9, 11), text.ratioSpeech(60, "6월 30일", "46.96%", "9월 28일", "46.52%", "46.96%", "46.46%"),

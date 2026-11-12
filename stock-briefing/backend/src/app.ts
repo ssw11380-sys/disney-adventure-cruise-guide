@@ -26,6 +26,8 @@ import { discoverRoutes } from "./routes/discover.js";
 import { NaverDiscover } from "./providers/market/naverDiscover.js";
 import { DiscoverService } from "./services/discoverService.js";
 import { UsThemeBook } from "./services/usThemes.js";
+import { switchTics } from "./providers/market/tossSectors.js";
+import type { TicsSource } from "./providers/market/tossTics.js";
 import cron from "node-cron";
 import { stockRoutes } from "./routes/stocks.js";
 import { BriefingScheduler } from "./scheduler.js";
@@ -69,7 +71,7 @@ import { WatchlistService } from "./services/watchlistService.js";
 import { InvestorFlowService } from "./services/investorFlowService.js";
 import { investorFlowAdminRoutes, investorFlowRoutes } from "./routes/investorFlow.js";
 import { HoldingThemesService } from "./services/holdingThemesService.js";
-import { HoldingThemeMaps } from "./services/holdingThemeMaps.js";
+import { HoldingThemeMaps, withSectorTics } from "./services/holdingThemeMaps.js";
 import { KrThemeIndex } from "./services/krThemeIndex.js";
 import { ThemeTvHistory } from "./services/themeTvHistory.js";
 import { underlyingOfKind } from "./services/holdingThemesCalc.js";
@@ -547,7 +549,7 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
     quotes: stockService.quoteStatus(),
     // 한국 종목 기준가 출처 상태 (받아 둔 종목 수·마지막 성공·실패) — 기준가를 못 받으면 quotes.baseFallbacks 가 늘어난다
     ...(opts.providers.krBase ? { krBase: opts.providers.krBase.status() } : {}),
-    // 토스 웹(비공식) 주소가 요청을 막아 쉬는 중인지 — 막혀 있어도 시세는 공식 API·네이버로 돈다 (상품 정보·배당 요약 등 부가 자료만 대체 경로)
+    // 토스 웹(비공식) 주소가 요청을 막아 쉬는 중인지 — 막혀 있어도 시세는 공식 API·네이버로 돈다 (배당 요약·실적 달력·검색 같은 부가 자료만 대체 경로 — 상품 정보·수급·미국 테마·30분봉은 공식 API 로 옮겼다)
     ...(opts.providers.tossWeb ? { tossWeb: opts.providers.tossWeb.blockStatus() } : {}),
     candles: stockService.candleStatus(),
     fundamentalsCache: opts.providers.fundamentals?.cacheStats() ?? null,
@@ -570,7 +572,11 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
   await app.register(marketRoutes, { prefix: "/api/market", calendar: opts.providers.calendar, indices: marketIndices });
   // 발견 탭: 순위·테마·업종 (네이버 공개 JSON). 미국 테마는 토스 테마 분류 + 네이버 정규장 시세. 미국 원화 환산은 토스 표시 환율
   const discoverNaver = opts.providers.discover ?? new NaverDiscover();
-  const tics = opts.providers.tics ?? null;
+  // 테마 분류 출처: 플래그 themeOpenApi 가 켜져 있으면 토스 공식 Open API 섹터(같은 분류·같은 번호), 아니면 토스 웹 테마 분류(2026-11 부터 막힘).
+  // 부를 때마다 플래그를 본다 — 끄면 그 순간부터 예전 출처 그대로
+  const sectorTics = opts.providers.sectorTics ?? null;
+  const themeOpenApi = () => features.enabled("themeOpenApi");
+  const tics: TicsSource | null = sectorTics ? switchTics(sectorTics, opts.providers.tics ?? null, themeOpenApi) : (opts.providers.tics ?? null);
   const usThemes = tics ? new UsThemeBook({ tics, naver: discoverNaver, store: metaStore(opts.db), now, log }) : null;
   const discoverService = new DiscoverService({
     naver: discoverNaver,
@@ -610,7 +616,8 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
       discover: discoverService,
       naver: discoverNaver,
       krIndex: new KrThemeIndex({ naver: discoverNaver, store, now, log }),
-      maps: new HoldingThemeMaps({ sources: opts.providers.holdingThemes, store, now, log }),
+      // 미국 종목의 주요 사업 테마: 플래그 themeOpenApi 가 켜져 있으면 공식 섹터 구성 종목을 거꾸로 찾고(토스 웹 '회사 → 테마' 주소는 막힘), 아니면 예전 그대로
+      maps: new HoldingThemeMaps({ sources: withSectorTics(opts.providers.holdingThemes, sectorTics, themeOpenApi), store, now, log }),
       tv: new ThemeTvHistory({ store }),
       // 잔고 탭 '보유'와 같은 판정 (수량 > 0 · 평단 있음), 평가금액은 계좌 브리핑과 같은 원화 환산
       holdings: async () => positionsOf(await stockService.listWithQuotes(), { afterCost: true }).map((p) => ({ code: p.code, name: p.name, value: p.value })),

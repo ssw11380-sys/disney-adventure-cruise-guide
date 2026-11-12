@@ -6,8 +6,10 @@ import { seoulIso } from "../../lib/time.js";
 import { truncPct } from "../../lib/pct.js";
 import { truncUsdPrice } from "../../lib/usdPrice.js";
 import { parseTossAccountTotals, type TossAccountTotals } from "../../services/tossAccountSnapshot.js";
+import type { ProductFacts } from "../../analysis/leveraged.js";
 import type { InvestorFlowDay, InvestorFlowProvider } from "./investorFlow.js";
 import type { LiveTick, QuickPriceSource, StockSessionFacts } from "./tossRealtime.js";
+import { rateGroupOf, RequestPacer, type PacerOptions, type PaceStat, type RateGroup } from "./tossRateLimit.js";
 import type { FetchFn, MasterProvider, QuoteProvider } from "./types.js";
 
 /**
@@ -15,10 +17,12 @@ import type { FetchFn, MasterProvider, QuoteProvider } from "./types.js";
  *  - 인증: OAuth 2.0 Client Credentials. 클라이언트당 유효 토큰 1개(재발급 시 이전 토큰 즉시 무효) → 토큰은 이 프로세스가 하나만 들고 쓴다.
  *  - 허용 IP: WTS 설정 > Open API > 허용 IP 관리에 서버의 공인 IP 를 등록해야 한다. 미등록이면 403 edge-blocked.
  *  - 시세: 한국은 KRX+NXT 통합, 미국은 최근 체결(시간외 포함). 현재가 API 는 가격·시각만 주므로 전일 대비는 일봉으로 계산한다.
- *  - 캔들: 1m·1d 만 제공(최대 200개/페이지, before 로 페이지네이션) → 주봉·월봉은 일봉을 묶어 만든다.
+ *  - 캔들: 1m·1d 만 제공(최대 200개/페이지, before 로 페이지네이션) → 주봉·월봉은 일봉을, 5분봉·30분봉은 1분봉을 묶어 만든다 (30분봉은 종목마다 받아 두고 이어 붙인다).
+ *  - 종목 정보: 종목 유형·레버리지 배수·우선주·정리매매·NXT 대상·거래정지 → 상품 정보(productFacts)·세션 자격.
  *  - 종목 마스터: 마켓별 전체 종목(한글명 포함) → 로컬 검색에 한국·미국 종목을 모두 넣을 수 있다.
- *  - 수급: 국내 종목 투자자별 매매동향.
- *  - Rate limit 은 그룹별 초당 N회. 429 는 Retry-After 만큼 한 번 기다렸다 재시도.
+ *  - 수급: 국내 종목 투자자별 매매동향 (브리핑 수집기 getInvestorFlow · 수급 탭은 tossOpenApiTrend.ts).
+ *  - 섹터(토스 테마 분류): tossSectors.ts.
+ *  - Rate limit 은 그룹별 초당 N회 — 보내기 전에 그룹마다 줄을 세운다(tossRateLimit.ts). 그래도 429 를 받으면 Retry-After 만큼 한 번 기다렸다 재시도.
  * 데이터 이용 정책: 본인 매매 목적에 한함(제3자 배포 금지). 이 앱은 단일 사용자용.
  */
 
@@ -41,6 +45,11 @@ export interface TossOpenApiClientOptions {
   maxRetryWaitMs?: number;
   /** 요청 하나(응답 본문 읽기까지)의 제한 시간(ms). 기본 REQUEST_TIMEOUT_MS */
   timeoutMs?: number;
+  /**
+   * 요청 한도 지키기 (그룹별 속도 조절 — tossRateLimit.ts). 기본 켜짐. false 면 줄 세우지 않고 바로 보낸다,
+   * 객체를 주면 가짜 시계·기다리기를 쓴다 (테스트)
+   */
+  pace?: false | PacerOptions;
 }
 
 /**
@@ -66,6 +75,8 @@ export interface TossOpenApiStatus {
   lastRateLimitedAt?: string | null;
   /** 경로별 429 횟수 (서버가 켜진 뒤 — 어느 조회가 한도에 걸리는지 운영에서 본다) */
   rateLimited?: Record<string, number>;
+  /** 한도 그룹별로 줄을 서서 기다린 요청 수 · 가장 오래 기다린 시간(ms) · 너무 오래 걸려 보내지 않은 수 (속도 조절을 켰을 때만) */
+  paced?: Record<string, PaceStat>;
 }
 
 type Json = Record<string, unknown>;
@@ -102,6 +113,10 @@ export class TossOpenApiClient {
   private token: { value: string; expiresAt: number } | null = null;
   private tokenPromise: Promise<string> | null = null;
   readonly status: TossOpenApiStatus;
+  /** 요청 한도 지키기 (그룹별 줄 세우기). 끄면 null */
+  private readonly pacer: RequestPacer | null;
+  /** 토스가 응답 머리글로 알려 준 그룹별 초당 한도 (문서 값보다 낮으면 그것을 따른다 — 일부 IP 대역은 초당 1회) */
+  private readonly groupLimits = new Map<string, number>();
 
   constructor(private readonly opts: TossOpenApiClientOptions) {
     this.fetchFn = opts.fetchFn ?? fetch;
@@ -110,13 +125,22 @@ export class TossOpenApiClient {
     this.baseUrl = opts.baseUrl ?? TOSS_OPENAPI_BASE;
     this.maxRetryWaitMs = opts.maxRetryWaitMs ?? 3000;
     this.timeoutMs = opts.timeoutMs ?? REQUEST_TIMEOUT_MS;
+    this.pacer = opts.pace === false ? null : new RequestPacer(opts.pace ?? {});
     this.status = { configured: Boolean(opts.clientId && opts.clientSecret), tokenIssuedAt: null, lastOkAt: null, lastError: null, ipBlocked: false, rateLimits: {}, lastRateLimitedAt: null, rateLimited: {} };
+    if (this.pacer) this.status.paced = this.pacer.stats;
   }
 
-  /** 응답 머리글의 초당 허용 요청 수를 경로별로 적어 둔다 (없으면 그대로) */
-  private noteRateLimit(path: string, res: Response): void {
+  /** 응답 머리글의 초당 허용 요청 수를 경로별·그룹별로 적어 둔다 (없으면 그대로) */
+  private noteRateLimit(path: string, res: Response, group: RateGroup | null): void {
     const limit = num(res.headers?.get?.("x-ratelimit-limit"));
-    if (limit !== null && this.status.rateLimits) this.status.rateLimits[path] = limit;
+    if (limit === null) return;
+    if (this.status.rateLimits) this.status.rateLimits[path] = limit;
+    if (group && limit > 0) this.groupLimits.set(group.group, limit);
+  }
+
+  /** 그 그룹에 지금 쓸 초당 한도: 문서 값과 토스가 알려 준 값 중 낮은 쪽 */
+  private limitOf(g: RateGroup): number {
+    return Math.min(g.limit, this.groupLimits.get(g.group) ?? Infinity);
   }
 
   /**
@@ -199,7 +223,10 @@ export class TossOpenApiClient {
     return e;
   }
 
-  /** GET /api/v1/... 공통. 401 이면 토큰 재발급 후 1회, 429 면 Retry-After 만큼 기다린 뒤 1회 재시도. 요청마다 제한 시간(opts.timeoutMs) */
+  /**
+   * GET /api/v1/... 공통. 401 이면 토큰 재발급 후 1회, 429 면 Retry-After 만큼 기다린 뒤 1회 재시도. 요청마다 제한 시간(opts.timeoutMs).
+   * 보내기 전에 그 경로의 한도 그룹 줄에 선다 (tossRateLimit — 초당 한도를 넘겨 429 를 받지 않게). 줄에서 너무 오래 기다리게 되면 보내지 않고 던진다
+   */
   async get<T = unknown>(
     path: string,
     params: Record<string, string | number | boolean | undefined> = {},
@@ -209,6 +236,7 @@ export class TossOpenApiClient {
     const qs = new URLSearchParams();
     for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== "") qs.set(k, String(v));
     const url = `${this.baseUrl}${path}${qs.size ? `?${qs.toString()}` : ""}`;
+    const group = rateGroupOf(path);
     let refreshed = false;
     let waited = false;
     /** 방금 401 을 받은 토큰 (다음 시도에서 한 번만 새 토큰을 청한다) */
@@ -216,13 +244,20 @@ export class TossOpenApiClient {
     for (let attempt = 0; attempt < 3; attempt++) {
       const token: string = await this.getToken(rejected ?? undefined);
       rejected = null;
+      if (this.pacer && group) {
+        try {
+          await this.pacer.take(group.group, this.limitOf(group));
+        } catch (e) {
+          throw this.fail(e instanceof ProviderError ? new ProviderError(this.name, `${e.message}: ${path}`) : new ProviderError(this.name, `요청 한도 대기 실패: ${path}`, e));
+        }
+      }
       const { res, body } = await this.send(
         url,
         { headers: { authorization: `Bearer ${token}`, accept: "application/json", ...extraHeaders } },
         { network: `네트워크 오류: ${path}`, timeout: `응답 시간 초과: ${path}` },
         opts.timeoutMs ?? this.timeoutMs,
       );
-      this.noteRateLimit(path, res);
+      this.noteRateLimit(path, res, group);
       if (res.status === 429) {
         this.status.lastRateLimitedAt = seoulIso(this.now());
         if (this.status.rateLimited) this.status.rateLimited[path] = (this.status.rateLimited[path] ?? 0) + 1;
@@ -242,11 +277,16 @@ export class TossOpenApiClient {
         rejected = token;
         continue;
       }
-      if (res.status === 429 && !waited) {
-        waited = true;
+      if (res.status === 429) {
         const retryAfter = num(res.headers.get("retry-after")) ?? 1;
-        await sleep(Math.min(retryAfter * 1000, this.maxRetryWaitMs));
-        continue;
+        const restMs = Math.min(retryAfter * 1000, this.maxRetryWaitMs);
+        // 같은 그룹의 줄에 선 다른 요청도 그동안 보내지 않는다 (이어서 두드려 또 429 를 받지 않게)
+        if (group) this.pacer?.pause(group.group, restMs);
+        if (!waited) {
+          waited = true;
+          await sleep(restMs);
+          continue;
+        }
       }
       if (res.status === 403) this.status.ipBlocked = true;
       throw this.fail(
@@ -272,18 +312,54 @@ interface TossCandle {
   volume?: string;
 }
 
-interface TossStockInfo {
+export interface TossStockInfo {
   symbol?: string;
   name?: string;
   englishName?: string;
   isinCode?: string;
   market?: string;
   securityType?: string;
+  /** 보통주 여부 (우선주면 false) */
+  isCommonShare?: boolean;
   status?: string;
   currency?: string;
   sharesOutstanding?: string;
+  /** 레버리지 배수 — ETF·ETN 만 (1 · 2 · 3 · -1 · -2 …), 일반 주식은 null */
+  leverageFactor?: string | number | null;
   /** 국내 종목만: NXT 거래 대상·거래정지 (해외 종목은 null) */
   koreanMarketDetail?: { liquidationTrading?: boolean; nxtSupported?: boolean; krxTradingSuspended?: boolean; nxtTradingSuspended?: boolean } | null;
+}
+
+/** 종목 유형(securityType) → 상품 구분 코드 (토스 웹 group.code 와 같은 한국거래소 구분: ST 주권 · EF ETF · EN ETN …) */
+const PRODUCT_GROUP: Record<string, string> = { STOCK: "ST", FOREIGN_STOCK: "FS", DEPOSITARY_RECEIPT: "DR", INFRASTRUCTURE_FUND: "IF", REIT: "RT", ETF: "EF", FOREIGN_ETF: "EF", ETN: "EN", STOCK_WARRANTS: "SW" };
+/** 상장 시장 → 토스 웹 시세의 거래소 코드 (ProductFacts.exchange 가 쓰던 값) */
+const PRODUCT_EXCHANGE: Record<string, string> = { KOSPI: "KSP", KOSDAQ: "KSQ", NASDAQ: "NSQ", NYSE: "NYS", AMEX: "AMX" };
+
+/**
+ * 공식 종목 정보(/api/v1/stocks) 한 건 → 상품 정보 (지표 점수 3-44 · 계좌 비중 · 가치 지표 대상 판정이 쓰는 ProductFacts — 예전에는 토스 웹 v2/stock-infos).
+ * 실측(2026-11-12): SOXL ETF 3 · SOXS ETF -3 · NVDL·RGTX ETF 2 · QQQ ETF 1 · KODEX 레버리지 ETF 2 · KODEX 200선물인버스2X ETF -2 · 레버리지 원유 ETN 2,
+ * 일반 주식(애플·삼성전자)은 배수 null · 삼성전자우 isCommonShare false · SK리츠 REIT. 미국 주식도 STOCK, 미국 ETF 도 ETF 로 온다.
+ * 공식 API 에 없는 칸은 모름(null): 단일 종목형(singleStockEtp) · 파생형(derivativeEtf) · 스팩(spac) · 자세한 이름(detailName) —
+ * 가리는 쪽(analysis/leveraged)은 모르면 정적 표·이름 규칙으로, 스팩은 업종·SIC 로 본다
+ */
+export function officialProductFacts(r: TossStockInfo): ProductFacts {
+  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const type = str(r.securityType);
+  const market = str(r.market);
+  const liquidation = r.koreanMarketDetail?.liquidationTrading;
+  return {
+    name: str(r.name),
+    englishName: str(r.englishName),
+    detailName: null,
+    group: type ? (PRODUCT_GROUP[type] ?? null) : null,
+    exchange: market ? (PRODUCT_EXCHANGE[market] ?? null) : null,
+    leverageFactor: num(r.leverageFactor),
+    singleStockEtp: null,
+    derivativeEtf: null,
+    commonShare: typeof r.isCommonShare === "boolean" ? r.isCommonShare : null,
+    spac: null,
+    clearance: typeof liquidation === "boolean" ? liquidation : null,
+  };
 }
 
 /** 공식 장 운영 달력의 세션 하나 (한국 시간 ISO) */
@@ -380,6 +456,37 @@ export function aggregateIntraday(minutes: Candle[], stepMin: number): Candle[] 
   return out;
 }
 
+/** 30분 (ms) */
+const HALF_HOUR_MS = 30 * 60_000;
+
+/**
+ * 1분봉(오래된 순) → 30분봉. 공식 1분봉의 시각은 봉이 **끝나는** 시각이다 (문서: 그 봉은 [시각 − 1분, 시각) 의 체결 — 2026-11-12 실측: 19:04:47 에 받은
+ * 삼성전자 마지막 봉이 19:05). 그래서 1분봉 [T−1분, T) 는 구간 [B, B+30분) (B = T−1분을 30분 단위로 내린 시각)에 넣고,
+ * 30분봉의 time 은 그 구간이 **끝나는** 시각(B+30분)으로 적는다 — 예전 토스 웹 30분봉과 같은 뜻이라 3-29 거래량 급증(volumeBaseline 이 시각에서 30분을 빼 시작으로 읽음)이 그대로 맞는다.
+ * date 는 그 끝 시각의 현지 날짜 (1분봉과 같은 규칙)
+ */
+export function aggregateHalfHours(minutes: Candle[], kr: boolean): Candle[] {
+  const out: Candle[] = [];
+  let key = NaN;
+  for (const c of minutes) {
+    const end = c.time ? Date.parse(c.time) : NaN;
+    if (Number.isNaN(end)) continue;
+    const bucket = Math.floor((end - 60_000) / HALF_HOUR_MS) * HALF_HOUR_MS;
+    const last = out.at(-1);
+    if (bucket !== key || !last) {
+      key = bucket;
+      const iso = new Date(bucket + HALF_HOUR_MS).toISOString();
+      out.push({ date: localDate(iso, kr), time: localIso(iso, kr), open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume });
+    } else {
+      last.high = Math.max(last.high, c.high);
+      last.low = Math.min(last.low, c.low);
+      last.close = c.close;
+      last.volume += c.volume;
+    }
+  }
+  return out;
+}
+
 export function toCandle(c: TossCandle, kr: boolean, intraday = false): Candle | null {
   const ts = c.timestamp ?? "";
   const o = num(c.openPrice), h = num(c.highPrice), l = num(c.lowPrice), cl = num(c.closePrice);
@@ -452,6 +559,19 @@ const SESSION_INFO_TTL_MS = 60 * 60_000;
 /** 세션 자격 조회가 실패하면 이만큼 쉰다 */
 const SESSION_INFO_RETRY_MS = 5 * 60_000;
 const ETP_TYPES = new Set(["ETF", "FOREIGN_ETF", "ETN"]);
+/**
+ * 30분봉을 처음 만들 때 받는 1분봉 쪽 수 상한 (한 쪽 200개 — 60쪽 = 1분봉 12,000개: 한국 통합 세션(08:00~20:00) 16일쯤, 미국은 주간·프리·정규·애프터를 다 채우면 8일쯤).
+ * 쪽은 차례로 받는다(앞 쪽의 nextBefore 가 있어야 다음 쪽) — 종목 하나를 처음 볼 때만이고, 그 뒤에는 최신 구간만 한두 쪽
+ */
+const HALF_HOUR_COLD_PAGES = 60;
+/** 받아 둔 30분봉을 이어 붙일 때 최신 쪽에서 거슬러 받는 쪽 수 상한 (넘게 비었으면 처음부터 다시 받는다) */
+const HALF_HOUR_TAIL_PAGES = 12;
+/** 받아 두는 30분봉 수 (가격 알림의 거래량 급증이 450개를 청한다) */
+const HALF_HOUR_KEEP = 450;
+/** 30분봉을 받아 두는 종목 수 (오래 안 쓴 것부터 버림) */
+const HALF_HOUR_CODES = 60;
+/** 공식 API 가 모르는 종목의 종목 정보를 다시 묻지 않는 시간 */
+const INFO_MISS_MS = 60 * 60_000;
 
 export interface TossOpenApiProviderOptions {
   now?: () => Date;
@@ -517,19 +637,104 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
     return out;
   }
 
-  /** USD → KRW 매매기준율 (1분 캐시). 실패하면 null */
-  async usdKrw(): Promise<number | null> {
+  // ── 상품 정보 (종목 하나씩 묻는 쪽 — 한 번에 묶어 보낸다) ──────────────────
+
+  /** 함께 물을 종목 (다음 묶음) 과 그 묶음의 응답 */
+  private infoQueue: string[] = [];
+  private infoFlush: Promise<Map<string, TossStockInfo> | null> | null = null;
+  /** 종목별로 나가 있는 조회 */
+  private readonly infoWait = new Map<string, Promise<TossStockInfo | null>>();
+  /** 공식 API 가 모르는 종목을 물은 시각 — INFO_MISS_MS 동안 다시 묻지 않는다 */
+  private readonly infoMissAt = new Map<string, number>();
+
+  /**
+   * 종목 정보 한 건 (하루 캐시). 같은 순간에 여러 종목을 물으면 요청 하나(200개씩)로 묶는다 — 종목 정보 그룹은 초당 5회라,
+   * 보유 종목 20개의 상품 정보를 하나씩 물으면 그것만으로 한도를 넘는다. 공식 API 가 모르는 종목은 null (1시간 동안 다시 묻지 않음), 받지 못하면 던진다
+   */
+  private infoFor(symbol: string): Promise<TossStockInfo | null> {
     const t = this.now().getTime();
-    if (this.fxCache && t - this.fxCache.at < 60_000) return this.fxCache.rate;
+    const hit = this.infoCache.get(symbol);
+    if (hit && t - hit.at < 24 * 3_600_000) return Promise.resolve(hit.info);
+    if (t - (this.infoMissAt.get(symbol) ?? -Infinity) < INFO_MISS_MS) return Promise.resolve(null);
+    const running = this.infoWait.get(symbol);
+    if (running) return running;
+    this.infoQueue.push(symbol);
+    // 같은 틱에 부른 종목이 모두 줄에 선 뒤에 보낸다 (타이머를 쓰지 않는다 — 마이크로태스크 두 번 뒤)
+    this.infoFlush ??= Promise.resolve()
+      .then(() => undefined)
+      .then(() => this.flushInfos());
+    const p = this.infoFlush
+      .then((got) => {
+        if (got === null) throw new ProviderError(this.name, `${symbol} 종목 정보를 받지 못했습니다`);
+        const info = got.get(symbol) ?? null;
+        if (!info) this.infoMissAt.set(symbol, this.now().getTime());
+        return info;
+      })
+      .finally(() => this.infoWait.delete(symbol));
+    this.infoWait.set(symbol, p);
+    return p;
+  }
+
+  /** 줄에 선 종목을 한 번에 받는다. 받지 못하면 null (기다리던 쪽이 실패로) */
+  private async flushInfos(): Promise<Map<string, TossStockInfo> | null> {
+    const symbols = [...new Set(this.infoQueue)];
+    this.infoQueue = [];
+    this.infoFlush = null;
     try {
-      const r = await this.client.get<Json>("/api/v1/exchange-rate", { baseCurrency: "USD", quoteCurrency: "KRW" });
-      const rate = num(r?.["midRate"]) ?? num(r?.["rate"]);
-      if (rate === null) return null;
-      this.fxCache = { at: t, rate };
-      return rate;
+      return await this.fetchStockInfos(symbols);
     } catch {
       return null;
     }
+  }
+
+  /**
+   * 상품 정보 (ETF·ETN 구분 · 레버리지 배수 · 우선주 · 정리매매 · 거래소 — 지표 점수 3-44 · 계좌 비중 · 가치 지표 대상 판정).
+   * 예전에는 토스 웹 v2/stock-infos 였다(2026-11 부터 막힘). 모르는 종목·실패면 null (부르는 쪽은 종목 마스터 분류·이름 규칙으로)
+   */
+  async productFacts(code: string): Promise<ProductFacts | null> {
+    try {
+      const info = await this.infoFor(normalizeCode(code));
+      return info ? officialProductFacts(info) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** 상장 주식 수 (수급 탭 외국인 한도율 계산용 — 종목 정보 sharesOutstanding). 모르면 null, 던지지 않는다 */
+  async listedShares(code: string): Promise<number | null> {
+    try {
+      const shares = num((await this.infoFor(normalizeCode(code)))?.sharesOutstanding);
+      return shares !== null && shares > 0 ? shares : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** 나가 있는 환율 요청 (동시에 물으면 이것을 같이 기다린다) */
+  private fxInflight: Promise<number | null> | null = null;
+
+  /**
+   * USD → KRW 매매기준율 (1분 캐시). 실패하면 null.
+   * 캐시가 끝난 순간 여러 시세 조회가 함께 물어도 요청은 하나만 나간다 — 예전에는 조회마다 따로 보내(환율·장 달력 그룹은 초당 3회)
+   * 운영에서 1분마다 두세 번씩 429 를 받았고, 그 시세 조회가 1~3초 늦거나 환율 없이(원화 환산 없음·다른 출처 환율) 끝났다
+   */
+  usdKrw(): Promise<number | null> {
+    const t = this.now().getTime();
+    if (this.fxCache && t - this.fxCache.at < 60_000) return Promise.resolve(this.fxCache.rate);
+    this.fxInflight ??= (async () => {
+      try {
+        const r = await this.client.get<Json>("/api/v1/exchange-rate", { baseCurrency: "USD", quoteCurrency: "KRW" });
+        const rate = num(r?.["midRate"]) ?? num(r?.["rate"]);
+        if (rate === null) return null;
+        this.fxCache = { at: t, rate };
+        return rate;
+      } catch {
+        return null;
+      }
+    })().finally(() => {
+      this.fxInflight = null;
+    });
+    return this.fxInflight;
   }
 
   // ── 장 운영 달력 ─────────────────────────────────────────────────
@@ -743,11 +948,111 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
     return acc;
   }
 
+  /**
+   * 1분봉을 최신 쪽부터 거슬러 받는다 (오래된 순으로 돌려줌). sinceMs 를 주면 그 시각과 같거나 이전인 봉이 나올 때까지,
+   * 아니면 maxPages 쪽까지. reached = 바라던 데까지 받음 (sinceMs 에 닿았거나 기록의 처음)
+   */
+  private async minutePages(code: string, o: { maxPages: number; sinceMs?: number }): Promise<{ candles: Candle[]; reached: boolean }> {
+    const kr = isKrCode(code);
+    const acc: Candle[] = [];
+    const seen = new Set<string>();
+    let before: string | undefined;
+    let reached = false;
+    for (let page = 0; page < o.maxPages; page++) {
+      const r = await this.client.get<{ candles?: TossCandle[]; nextBefore?: string | null }>("/api/v1/candles", { symbol: code, interval: "1m", count: 200, before, adjusted: true });
+      const rows = r?.candles ?? [];
+      let oldest = Infinity;
+      for (const c of rows) {
+        const candle = toCandle(c, kr, true);
+        if (!candle?.time) continue;
+        oldest = Math.min(oldest, Date.parse(candle.time));
+        if (!seen.has(candle.time)) {
+          seen.add(candle.time);
+          acc.push(candle);
+        }
+      }
+      if (o.sinceMs !== undefined && oldest <= o.sinceMs) {
+        reached = true;
+        break;
+      }
+      if (!r?.nextBefore || rows.length === 0) {
+        reached = true; // 기록의 처음까지 받음
+        break;
+      }
+      before = r.nextBefore;
+    }
+    acc.sort((a, b) => Date.parse(a.time!) - Date.parse(b.time!));
+    return { candles: acc, reached };
+  }
+
+  /** 종목별로 받아 둔 30분봉 (오래된 순 · time 은 끝나는 시각). pages = 처음 받을 때 쓴 쪽 수, fromStart = 기록의 처음까지 받음 */
+  private readonly halfHourBook = new Map<string, { bars: Candle[]; pages: number; fromStart: boolean }>();
+  private readonly halfHourInflight = new Map<string, Promise<Candle[]>>();
+
+  /**
+   * 30분봉 (공식 API 에는 1분봉·일봉만 있어 1분봉을 묶어 만든다 — 예전에는 토스 웹 차트 min:30 한 번이었는데 그 주소가 막혔고, 네이버·Yahoo 는 분봉을 주지 않는다).
+   * 처음에는 청한 개수만큼의 1분봉(count × 30개, 60쪽까지)을 차례로 받고, 그 뒤에는 받아 둔 봉의 마지막 두 구간부터만 다시 받아 이어 붙인다(보통 한 쪽).
+   * 처음 받은 묶음의 맨 앞 날은 앞부분이 잘렸을 수 있어 뺀다 (하루 치가 다 있는 날만 — 거래량 급증이 날마다 같은 시각까지의 거래량을 견준다)
+   */
+  private halfHours(code: string, count: number): Promise<Candle[]> {
+    const running = this.halfHourInflight.get(code);
+    if (running) return running;
+    const p = this.loadHalfHours(code, count).finally(() => this.halfHourInflight.delete(code));
+    this.halfHourInflight.set(code, p);
+    return p;
+  }
+
+  private async loadHalfHours(code: string, count: number): Promise<Candle[]> {
+    const kr = isKrCode(code);
+    const want = Math.min(HALF_HOUR_COLD_PAGES, Math.ceil((Math.min(count, HALF_HOUR_KEEP) * 30) / 200) + 1);
+    let hit = this.halfHourBook.get(code);
+    // 전보다 긴 기간을 청하면(차트 300개 뒤에 거래량 급증 450개) 처음부터 다시 받는다 — 종목마다 많아야 한 번
+    if (hit && !hit.fromStart && hit.pages < want) hit = undefined;
+    let bars: Candle[] | null = null;
+    if (hit && hit.bars.length) {
+      // 마지막 두 구간은 다시 만든다: 마지막 봉은 진행 중이었고, 그 앞 봉도 받는 순간 아직 덜 찼을 수 있다
+      const redoFrom = Date.parse((hit.bars.at(-2) ?? hit.bars.at(-1)!).time!) - HALF_HOUR_MS;
+      const tail = await this.minutePages(code, { maxPages: HALF_HOUR_TAIL_PAGES, sinceMs: redoFrom });
+      if (tail.reached) {
+        const kept = hit.bars.filter((b) => Date.parse(b.time!) <= redoFrom);
+        bars = [...kept, ...aggregateHalfHours(tail.candles.filter((c) => Date.parse(c.time!) > redoFrom), kr)].slice(-HALF_HOUR_KEEP);
+        // 쓸 때마다 맨 뒤로 (오래 안 쓴 종목부터 버리게)
+        this.halfHourBook.delete(code);
+        this.halfHourBook.set(code, { bars, pages: hit.pages, fromStart: hit.fromStart });
+      }
+      // 닿지 못했으면(오래 비어 있었다) 사이가 빈 봉을 이어 붙이지 않고 처음부터 다시 받는다
+    }
+    if (!bars) {
+      const cold = await this.minutePages(code, { maxPages: want });
+      let made = aggregateHalfHours(cold.candles, kr);
+      if (!cold.reached && made.length) {
+        // 맨 앞 날(봉이 시작한 현지 날짜)은 앞부분이 잘렸을 수 있다 → 그날 봉을 모두 뺀다
+        const dayOf = (b: Candle) => localDate(new Date(Date.parse(b.time!) - HALF_HOUR_MS).toISOString(), kr);
+        const first = dayOf(made[0]!);
+        const rest = made.filter((b) => dayOf(b) !== first);
+        // 하루 치도 안 되면(쪽 수가 아주 적을 때) 맨 앞 구간만 뺀다
+        made = rest.length ? rest : made.slice(1);
+      }
+      bars = made.slice(-HALF_HOUR_KEEP);
+      this.halfHourBook.delete(code);
+      this.halfHourBook.set(code, { bars, pages: want, fromStart: cold.reached });
+      while (this.halfHourBook.size > HALF_HOUR_CODES) {
+        const oldest = this.halfHourBook.keys().next().value;
+        if (oldest === undefined) break;
+        this.halfHourBook.delete(oldest);
+      }
+    }
+    return bars;
+  }
+
   async getCandles(code: string, period: CandlePeriod, count: number): Promise<CandleSeries> {
     code = normalizeCode(code);
     if (isIntraday(period)) {
-      // 30분봉은 1분봉 9,000개(45페이지)가 필요해 여기서는 만들지 않는다 → 체인이 토스 웹(min:30, 요청 1개)으로 넘어간다
-      if (period === "30m") throw new ProviderError(this.name, "30분봉은 1분봉 집계 비용이 커서 웹 차트 소스로 넘깁니다");
+      if (period === "30m") {
+        const bars = await this.halfHours(code, count);
+        if (bars.length === 0) throw new ProviderError(this.name, `${code} 분봉 데이터 없음`);
+        return { code, period, candles: bars.slice(-count), source: this.name };
+      }
       const step = period === "1m" ? 1 : 5;
       const minutes = await this.minuteCandles(code, Math.min(count * step, 2000));
       if (minutes.length === 0) throw new ProviderError(this.name, `${code} 분봉 데이터 없음`);
@@ -800,14 +1105,16 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
   private async pricesMany(codes: string[]): Promise<Map<string, Json>> {
     const out = new Map<string, Json>();
     const t = this.now().getTime();
-    // 묶음을 거절하게 만든 종목은 한동안 묻지 않는다 (그 종목만 '시세 없음' → 체인이 다음 소스로)
-    const ask = codes.filter((c) => {
+    // 묶음을 거절하게 만든 종목은 한동안 묻지 않는다 (그 종목만 '시세 없음' → 체인이 다음 소스로).
+    // 쉬는 시간이 끝난 종목은 묶음에 다시 넣지 않고 따로 한 번 물어 본다(retry) — 묶음에 넣으면 아직 모르는 종목일 때 묶음 전체가 또 거절돼
+    // 10분마다 '종목 수만큼' 다시 묻게 된다 (운영에서 그때마다 현재가 한도에 걸려 1초 확인이 5초씩 쉬었다)
+    const ask: string[] = [];
+    const retry: string[] = [];
+    for (const c of codes) {
       const until = this.rejectedUntil.get(c);
-      if (until === undefined) return true;
-      if (until > t) return false;
-      this.rejectedUntil.delete(c);
-      return true;
-    });
+      if (until === undefined) ask.push(c);
+      else if (until <= t) retry.push(c);
+    }
     for (let i = 0; i < ask.length; i += PRICES_CHUNK) {
       const chunk = ask.slice(i, i + PRICES_CHUNK);
       let rows: Json[];
@@ -840,6 +1147,20 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
       }
       // 한 종목만 물었는데 심볼 표기가 다르게 오면(대소문자 등) 그 한 줄을 쓴다
       if (chunk.length === 1 && !out.has(chunk[0]!) && rows[0]) out.set(chunk[0]!, rows[0]);
+    }
+    // 쉬는 시간이 끝난 종목: 하나씩 (묶음 뒤에 — 이 확인이 늦어도 다른 종목 시세를 붙잡지 않게)
+    for (const c of retry) {
+      try {
+        const rows = (await this.client.get<Json[]>("/api/v1/prices", { symbols: c })) ?? [];
+        this.rejectedUntil.delete(c);
+        const r = rows.find((x) => String(x["symbol"] ?? "").toUpperCase() === c) ?? rows[0];
+        if (r) out.set(c, r);
+      } catch (e) {
+        // 다른 종목과 함께 물었는데 이 종목만 거절이면 그 종목 탓 → 길게. 혼자 물었거나(종목 탓이 아닐 수 있다) 거절이 아닌 실패(시간 초과 등)면 짧게 쉬고 다시
+        this.rejectedUntil.set(c, this.now().getTime() + (isRejected(e) && ask.length > 0 ? REJECTED_MS : REJECTED_ALL_MS));
+        // 혼자 물은 종목은 예전처럼 그 오류를 던진다 (체인이 다음 소스로 넘어가며 까닭을 남긴다)
+        if (codes.length === 1) throw e;
+      }
     }
     return out;
   }

@@ -150,9 +150,11 @@ export interface Candle {
   date: string; // YYYY-MM-DD (주/월봉은 해당 기간 시작일 또는 마지막 거래일, 소스에 따름)
   /**
    * 분봉만: 봉 시각 ISO(현지 오프셋 포함, 예 2026-09-23T10:25:00+09:00). **출처마다 뜻이 다르다**:
-   *  - 토스 웹 차트(toss.ts fetchChart — 30분봉은 늘 여기서 옴): 봉이 **끝나는** 시각 (2026-09-28 실측, 3-29 거래량 급증 volumeBaseline 이 이 뜻에 기댐)
-   *  - 토스 OpenAPI 1분봉·그 집계(tossOpenApi.ts aggregateIntraday — 1m/5m): 봉 **시작** 시각
-   * 30분봉을 다른 출처에서 받게 되거나 한쪽으로 맞추면 volumeBaseline 의 '시각 − 30분'도 같이 고쳐야 한다
+   *  - 토스 웹 차트(toss.ts fetchChart): 봉이 **끝나는** 시각 (2026-09-28 실측, 3-29 거래량 급증 volumeBaseline 이 이 뜻에 기댐)
+   *  - 토스 OpenAPI 30분봉(tossOpenApi.ts aggregateHalfHours — 1분봉을 묶어 만듦, 2026-11 부터 30분봉은 여기서 옴): 봉이 **끝나는** 시각 (토스 웹과 같은 뜻으로 맞춤)
+   *  - 토스 OpenAPI 1분봉: 받은 시각 그대로 — 공식 문서로는 봉이 끝나는 시각 ([시각 − 1분, 시각) 의 체결). 5분봉(aggregateIntraday)은 그 시각의 분을 5분 단위로
+   *    내려 적는다 (예전에 시작 시각이라고 보고 만든 것 — 구간 끝의 1분이 다음 봉에 들어간다. 고치려면 앱 차트의 실시간 봉 이어 그리기와 같이)
+   * 30분봉의 뜻을 바꾸면 volumeBaseline 의 '시각 − 30분'도 같이 고쳐야 한다
    */
   time?: string;
   open: number;

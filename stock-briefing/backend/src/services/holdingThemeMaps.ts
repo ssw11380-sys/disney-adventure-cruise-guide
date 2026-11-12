@@ -36,6 +36,23 @@ export interface MapSources {
   krIndustry?: ((code: string) => Promise<string | null>) | null;
 }
 
+/**
+ * 미국 종목의 주요 사업 테마를 토스 공식 Open API 섹터에서 받게 바꾼 출처 묶음 (플래그 themeOpenApi — use() 를 부를 때마다 물어본다).
+ * 켜져 있으면 섹터 구성 종목을 거꾸로 찾은 것(sector.majorFor), 꺼져 있으면 예전 출처(토스 웹 '회사 → 테마') 그대로. sector 가 없으면 묶음을 그대로 돌려준다
+ */
+export function withSectorTics(sources: MapSources, sector: { majorFor(code: string): Promise<CompanyTic[]> } | null, use: () => Promise<boolean>): MapSources {
+  if (!sector) return sources;
+  const web = sources.usTics ?? null;
+  return {
+    ...sources,
+    usTics: async (code) => {
+      if (await use()) return sector.majorFor(code);
+      if (!web) throw new Error("미국 테마 분류 출처가 꺼져 있습니다");
+      return web(code);
+    },
+  };
+}
+
 export interface MapLookup {
   item: MapItem | null;
   /** 아직 받는 중 (옛 값도 없음) */

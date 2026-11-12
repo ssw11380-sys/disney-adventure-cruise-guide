@@ -29,6 +29,7 @@ import {
   shortDataNaverCap,
   sourceNaver,
   sourceToss,
+  sourceTossApi,
   staleLine,
   sumSub1,
   sumSubWide,
@@ -341,7 +342,11 @@ function UsCard() {
 function SourceLines({ d }: { d: Supported }) {
   return (
     <View style={styles.source}>
-      <Muted>{d.source === "toss-web" ? sourceToss(stampKo(d.asOf)) : sourceNaver(d.days[0] ? dateKo(d.days[0].date) : null, stampKo(d.fetchedAt))}</Muted>
+      <Muted>
+        {d.source === "toss-web"
+          ? (d.via === "openapi" ? sourceTossApi : sourceToss)(stampKo(d.asOf))
+          : sourceNaver(d.days[0] ? dateKo(d.days[0].date) : null, stampKo(d.fetchedAt))}
+      </Muted>
       {d.check && d.check.days > 0 ? <Muted>{checkLine(d.check.days, d.check.same, stampKo(d.check.at))}</Muted> : null}
       {d.stale ? <Muted>{staleLine(stampKo(d.fetchedAt))}</Muted> : null}
     </View>

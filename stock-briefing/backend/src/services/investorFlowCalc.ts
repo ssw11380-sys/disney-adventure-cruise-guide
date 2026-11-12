@@ -10,9 +10,16 @@ import type { FlowTrendRow, InvestorFlowDay } from "../providers/market/investor
  *  - 외국인 한도(토스 웹만): 한도가 있는지는 그 줄의 보유율로만 판정(한도가 상장 주식 수의 99.5% 미만), 한도율은 상장 주식 수(토스 웹 종목 정보 —
  *    그 줄과 같은 날 값일 때만)로 다듬고, 모르면 보유율로 어림하고 오차가 크면 뺌
  *  - 대조: 토스 웹 확정 줄 최근 20일(오늘 빼고)과 토스 Open API 같은 날짜의 개인·외국인·기관 세 값 (Open API 값이 빈 날은 세지 않음)
+ *  - 공식 Open API 줄(플래그 flowOpenApi — providers/market/tossOpenApiTrend): 토스 웹 줄과 같은 기준(한국거래소+넥스트레이드)·같은 계산.
+ *    장중 여부 칸이 없어 오늘 줄 확정은 받은 시각·개인 값이 나왔는지·고친 시각으로만 본다
  */
 
+/** 응답에 싣는 출처 이름. 'toss-web' = 토스증권 자료(한국거래소+넥스트레이드 합산) — 토스 웹 공개 화면 또는 공식 Open API(이때 via 'openapi') */
 export type FlowSourceName = "toss-web" | "naver";
+/** 서버 안에서 구분하는 실제 출처 (공식 Open API · 토스 웹 공개 화면 · 네이버) */
+export type FlowOrigin = "toss-openapi" | FlowSourceName;
+/** 토스증권 기준(한국거래소+넥스트레이드) 출처인지 — 기타법인·외국인 한도·고친 시각이 있다 */
+export const isTossOrigin = (o: FlowOrigin): boolean => o !== "naver";
 export const FLOW_PERIODS = [5, 20, 60] as const;
 export type FlowPeriodKey = "5" | "20" | "60";
 
@@ -88,6 +95,11 @@ export interface InvestorFlowBody {
   code: string;
   supported: true;
   source: FlowSourceName;
+  /**
+   * 받은 길: 'openapi' = 토스증권 공식 Open API (플래그 flowOpenApi). 토스 웹 공개 화면·네이버면 칸이 없다.
+   * source 를 새 이름으로 바꾸지 않고 칸을 따로 둔다 — 옛 앱은 모르는 source 를 네이버 자료로 그려(기타법인·한도 줄이 사라지고 '네이버 증권' 글이 붙음) 틀리게 보인다
+   */
+  via?: "openapi";
   basis: "KRX+NXT" | "KRX";
   /** 가장 최근 확정 줄을 출처가 고친 시각 (네이버·시각 없음은 받은 시각) */
   asOf: string;
@@ -123,13 +135,15 @@ export function kst(d: Date): { date: string; minutes: number; weekday: number }
 }
 
 /** 줄이 확정 값인지 (설계서 4.2). at = 그 줄을 받은 때 (받은 뒤에는 값이 바뀌지 않으므로 받은 때 기준으로 본다) */
-export function isFinalRow(row: FlowTrendRow, source: FlowSourceName, at: Date): boolean {
+export function isFinalRow(row: FlowTrendRow, source: FlowOrigin, at: Date): boolean {
   const k = kst(at);
   if (row.date < k.date) return true;
   if (row.date > k.date) return false; // 시계 어긋남 — 잠정으로
   if (k.minutes < FLOW_FINAL_MIN) return false;
   if (source === "naver") return true;
-  if (row.inMarketTime !== false || row.hasAll !== true || !row.updatedAt) return false;
+  // 장중 여부는 토스 웹만 준다 (공식 Open API 에는 칸이 없다 — 개인 값이 나왔는지와 고친 시각으로만)
+  if (source === "toss-web" && row.inMarketTime !== false) return false;
+  if (row.hasAll !== true || !row.updatedAt) return false;
   const u = Date.parse(row.updatedAt);
   if (!Number.isFinite(u)) return false;
   const uk = kst(new Date(u));
@@ -141,7 +155,7 @@ export function isFinalRow(row: FlowTrendRow, source: FlowSourceName, at: Date):
  * 확정은 받은 때(fetchedAt) 기준. 잠정 줄은 그 날짜가 지금(now) 한국 날짜와 같을 때만 today 로 준다 —
  * 전에 받은 값을 다음 날 다시 줄 때 어제의 잠정 줄은 합계에도 '오늘' 줄에도 넣지 않는다
  */
-export function splitFlowRows(rows: readonly FlowTrendRow[], source: FlowSourceName, fetchedAt: Date, now: Date = fetchedAt): { final: FlowTrendRow[]; today: FlowTrendRow | null } {
+export function splitFlowRows(rows: readonly FlowTrendRow[], source: FlowOrigin, fetchedAt: Date, now: Date = fetchedAt): { final: FlowTrendRow[]; today: FlowTrendRow | null } {
   const seen = new Set<string>();
   const uniq: FlowTrendRow[] = [];
   for (const r of rows) {
@@ -163,7 +177,7 @@ export function splitFlowRows(rows: readonly FlowTrendRow[], source: FlowSourceN
 const SUM_KEYS = ["individual", "foreign", "institution", "otherCorp"] as const;
 
 /** 확정 줄 앞에서 5·20·60개 합계 */
-export function flowSums(final: readonly FlowTrendRow[], source: FlowSourceName): Record<FlowPeriodKey, FlowSum> {
+export function flowSums(final: readonly FlowTrendRow[], source: FlowOrigin): Record<FlowPeriodKey, FlowSum> {
   // 값이 빠졌는지 보는 칸: 네이버는 기타법인이 늘 없어 세 칸만
   const checked = source === "naver" ? SUM_KEYS.slice(0, 3) : SUM_KEYS;
   const one = (n: number): FlowSum => {
@@ -304,31 +318,34 @@ function isoOrNull(s: string | null): string | null {
 /** 받은 줄 → 응답 본문 */
 export function buildFlowBody(o: {
   code: string;
-  source: FlowSourceName;
+  source: FlowOrigin;
   rows: readonly FlowTrendRow[];
   fetchedAt: Date;
   stale: boolean;
   check: FlowCheck | null;
   now: Date;
-  /** 상장 주식 수 (토스 웹 종목 정보 — 한도율 계산, 모르면 null) */
+  /** 상장 주식 수 (토스 종목 정보 — 한도율 계산, 모르면 null) */
   listedShares?: number | null;
 }): InvestorFlowBody {
   const { final, today } = splitFlowRows(o.rows, o.source, o.fetchedAt, o.now);
   const fetchedAt = seoulIso(o.fetchedAt);
   const first = final[0];
+  const toss = isTossOrigin(o.source);
   return {
     code: o.code,
     supported: true,
-    source: o.source,
-    basis: o.source === "toss-web" ? "KRX+NXT" : "KRX",
-    asOf: (o.source === "toss-web" && first ? isoOrNull(first.updatedAt) : null) ?? fetchedAt,
+    source: toss ? "toss-web" : "naver",
+    ...(o.source === "toss-openapi" ? { via: "openapi" as const } : {}),
+    basis: toss ? "KRX+NXT" : "KRX",
+    asOf: (toss && first ? isoOrNull(first.updatedAt) : null) ?? fetchedAt,
     fetchedAt,
     stale: o.stale,
     today: today ? { date: today.date, updatedAt: isoOrNull(today.updatedAt), individual: today.individual, foreign: today.foreign, institution: today.institution } : null,
     days: final.slice(0, FLOW_DAYS_MAX).map((r) => ({ date: r.date, individual: r.individual, foreign: r.foreign, institution: r.institution, otherCorp: r.otherCorp, foreignRatio: r.foreignRatio, close: r.close })),
     sums: flowSums(final, o.source),
     ratio: flowRatio(final),
-    limit: o.source === "toss-web" && first ? flowLimit(first, o.listedShares ?? null) : null,
+    limit: toss && first ? flowLimit(first, o.listedShares ?? null) : null,
+    // 대조는 토스 웹 자료를 공식 Open API 와 견준 것 — 화면 자료가 공식 Open API 면 견줄 것이 없다
     check: o.source === "toss-web" ? o.check : null,
   };
 }
